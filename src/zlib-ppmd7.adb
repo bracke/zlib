@@ -436,9 +436,125 @@ package body Zlib.PPMd7 is
    end Init;
 
    --  Placeholder for the OOM glue path (only hit by large inputs).
+   --  Coalesce adjacent free blocks back into larger units, then re-split
+   --  them across the indexed free lists (faithful to Ppmd7 GlueFreeBlocks).
+   --  Free nodes are tagged Stamp=0; allocated contexts/state blocks always
+   --  have a non-zero first u16, and the Head/Lo_Unit sentinels are tagged 1,
+   --  so the merge knows where to stop. PPMd output is address-independent,
+   --  so what matters is reclaiming the same memory stock does (hence the same
+   --  model-restart timing), not byte-matching its internal free lists.
    procedure Glue_Free_Blocks (P : in out CPpmd7) is
+      Head : constant Natural := P.Align_Off + Natural (P.Size);
+      N    : Natural := Head;
+
+      function Nd_Stamp (R : Natural) return Natural is
+        (Natural (Get_U16 (P, R)));
+      procedure Set_Stamp (R, V : Natural) is
+      begin
+         Set_U16 (P, R, U32 (V));
+      end Set_Stamp;
+      function Nd_NU (R : Natural) return Natural is
+        (Natural (Get_U16 (P, R + 2)));
+      procedure Set_NU (R, V : Natural) is
+      begin
+         Set_U16 (P, R + 2, U32 (V));
+      end Set_NU;
+      function Nd_Next (R : Natural) return Natural is
+        (Natural (Get_U32 (P, R + 4)));
+      procedure Set_Next (R, V : Natural) is
+      begin
+         Set_U32 (P, R + 4, U32 (V));
+      end Set_Next;
+      function Nd_Prev (R : Natural) return Natural is
+        (Natural (Get_U32 (P, R + 8)));
+      procedure Set_Prev (R, V : Natural) is
+      begin
+         Set_U32 (P, R + 8, U32 (V));
+      end Set_Prev;
    begin
       P.Glue_Count := 255;
+
+      --  Build a doubly-linked list of every free block (Stamp = 0).
+      for I in 0 .. Num_Indexes - 1 loop
+         declare
+            NU  : constant Natural := I2U (P, I);
+            Nxt : Natural := P.Free_List (I);
+         begin
+            P.Free_List (I) := 0;
+            while Nxt /= 0 loop
+               declare
+                  Node : constant Natural := Nxt;
+               begin
+                  Nxt := Natural (Get_U32 (P, Node));  -- old singly-linked next
+                  Set_Next (Node, N);
+                  Set_Prev (N, Node);
+                  N := Node;
+                  Set_Stamp (Node, 0);
+                  Set_NU (Node, NU);
+               end;
+            end loop;
+         end;
+      end loop;
+
+      Set_Stamp (Head, 1);
+      Set_Next (Head, N);
+      Set_Prev (N, Head);
+      if P.Lo_Unit /= P.Hi_Unit then
+         Set_Stamp (P.Lo_Unit, 1);
+      end if;
+
+      --  Coalesce each free block with adjacent free blocks.
+      N := Nd_Next (Head);
+      while N /= Head loop
+         declare
+            Node : constant Natural := N;
+            NU   : Natural := Nd_NU (Node);
+         begin
+            loop
+               declare
+                  Node2 : constant Natural := Node + U2B (NU);
+               begin
+                  exit when Nd_Stamp (Node2) /= 0;
+                  NU := NU + Nd_NU (Node2);
+                  Set_NU (Node, NU);
+                  Set_Next (Nd_Prev (Node2), Nd_Next (Node2));
+                  Set_Prev (Nd_Next (Node2), Nd_Prev (Node2));
+               end;
+            end loop;
+            N := Nd_Next (Node);
+         end;
+      end loop;
+
+      --  Re-split coalesced blocks back into the indexed free lists.
+      N := Nd_Next (Head);
+      while N /= Head loop
+         declare
+            Node : Natural := N;
+            NU   : Natural := Nd_NU (Node);
+         begin
+            N := Nd_Next (Node);
+            while NU > 128 loop
+               Insert_Node (P, Node, Num_Indexes - 1);
+               NU := NU - 128;
+               Node := Node + U2B (128);
+            end loop;
+            if NU > 0 then
+               declare
+                  Idx : Natural := U2I (P, NU);
+               begin
+                  if I2U (P, Idx) /= NU then
+                     Idx := Idx - 1;
+                     declare
+                        K : constant Natural := I2U (P, Idx);
+                     begin
+                        Insert_Node (P, Node + U2B (K), NU - K - 1);
+                     end;
+                  end if;
+                  Insert_Node (P, Node, Idx);
+               end;
+            end if;
+         end;
+      end loop;
    end Glue_Free_Blocks;
 
    Max_Order_Limit : constant := 64;
