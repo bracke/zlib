@@ -169,21 +169,24 @@ Fix (touches encoder + decoders; **changes emitted bytes**):
 
 This is a prerequisite for any real LZMA interop and should land before M4.
 
-### M4 — Competitive LZMA / LZMA2 encoder — DONE (competitive)
+### M4 — Competitive LZMA / LZMA2 encoder — DONE (matches stock)
 
-`LZMA_Encode_Bounded` now uses an **HC3 hash-chain** match finder (matches
-extend to the LZMA maximum of 273, not the old cap of 17), **lazy matching**
-(one-byte look-ahead), full **rep0–3** repeated-distance matches with correct
-reordering, and a short-match heuristic. Output stays standard — stock `7z`
-reads it and our decoder reads it; LZMA2 shares the encoder.
+`LZMA_Encode_Bounded` uses an **HC3 hash-chain** match finder (matches extend to
+the LZMA maximum of 273) feeding a **price-based optimal parser** (M4+): a
+forward shortest-path DP over 2 KB segments that carries `State` + the four
+repeat distances per offset and prices every literal/match/rep against an
+integer LZMA-SDK bit-price table. Long matches (≥ nice-len) are taken whole for
+speed. Emission reuses the proven range-coder routines, so a misprice only costs
+ratio, never correctness. Output stays standard — stock `7z` reads it and our
+decoder reads it; LZMA2 shares the encoder.
 
-Result vs stock `7z` LZMA: was +11..20% larger, now **+3.4..5%** on binaries,
-**+11.6%** on text, and it **beats** stock on highly-repetitive data (−17.6%).
+Result vs stock `7z` LZMA: **within +1.9% everywhere** (most under +1%), and it
+**beats** stock on text (−1%) and highly-repetitive data (−16%). Throughput
+≈0.6 s per 300 KB. (The pre-optimal greedy+lazy+rep encoder was +3.4..11%.)
 
-Remaining gap (mostly text) needs **price-based optimal parsing** (M4+, a
-shortest-path DP over a window using live bit-price tables) — a large, intricate
-effort with diminishing returns; the current encoder is already competitive.
-Tunable `lc`/`lp`/`pb` per input is also still future work (defaults 3/0/2).
+Still future work: 7z-style flush-at-long-match segmentation (removes the small
+residual match split at segment boundaries on pathological inputs) and per-input
+`lc`/`lp`/`pb` tuning (defaults 3/0/2).
 
 ### M5 — Solid compression
 
