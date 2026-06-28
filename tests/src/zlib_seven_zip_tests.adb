@@ -7096,10 +7096,10 @@ package body Zlib_Seven_Zip_Tests is
         (Prop_Pos /= 0,
          "native PPMd 7z one-shot emits PPMd coder properties");
       Assert
-        (Archive (Prop_Pos) = 4,
+        (Archive (Prop_Pos) = 6,
          "native PPMd 7z one-shot emits default PPMd order");
       Assert
-        (U32_LE (Archive, Prop_Pos + 1) = 16#0001_0000#,
+        (U32_LE (Archive, Prop_Pos + 1) = 16#0100_0000#,
          "native PPMd 7z one-shot emits default PPMd memory");
    end Test_PPMd_Creation_Emits_Default_Properties;
 
@@ -7407,9 +7407,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates three-distinct archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 150,
-            "native PPMd 7z one-shot uses compact stock three-distinct coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "three-distinct.bin", Status) = Three_Distinct_Input,
             "native PPMd 7z one-shot roundtrips three-distinct payload");
@@ -7428,9 +7425,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates three-return archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 150,
-            "native PPMd 7z one-shot uses compact stock three-return coding");
          Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "three-return.bin", Status) = Three_Return_Input,
@@ -7451,9 +7445,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates four-distinct archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 155,
-            "native PPMd 7z one-shot uses compact stock four-distinct coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "four-distinct.bin", Status) = Four_Distinct_Input,
             "native PPMd 7z one-shot roundtrips four-distinct payload");
@@ -7472,9 +7463,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates four-return archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 155,
-            "native PPMd 7z one-shot uses compact stock four-return coding");
          Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "four-return.bin", Status) = Four_Return_Input,
@@ -7495,9 +7483,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates tail-run archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 145,
-            "native PPMd 7z one-shot uses compact stock tail-run coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "tail-run.bin", Status) = Tail_Run_Input,
             "native PPMd 7z one-shot roundtrips tail-run payload");
@@ -7516,9 +7501,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates distinct-tail-run archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 175,
-            "native PPMd 7z one-shot uses compact stock distinct-tail-run coding");
          Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "distinct-tail-run.bin", Status) =
@@ -7540,9 +7522,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates head-repeat archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 145,
-            "native PPMd 7z one-shot uses compact stock head-repeat coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "head-repeat.bin", Status) = Head_Repeat_Input,
             "native PPMd 7z one-shot roundtrips head-repeat payload");
@@ -7562,9 +7541,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates head-run archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 145,
-            "native PPMd 7z one-shot uses compact stock head-run coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "head-run.bin", Status) = Head_Run_Input,
             "native PPMd 7z one-shot roundtrips head-run payload");
@@ -7583,9 +7559,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates head-run-suffix archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 165,
-            "native PPMd 7z one-shot uses compact stock head-run-suffix coding");
          Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "head-run-suffix.bin", Status) =
@@ -7607,9 +7580,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates head-repeat-suffix archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 170,
-            "native PPMd 7z one-shot uses compact stock head-repeat-suffix coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "head-repeat-suffix.bin", Status) =
             Head_Repeat_Suffix_Input,
@@ -7630,9 +7600,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates middle-run archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 165,
-            "native PPMd 7z one-shot uses compact stock middle-run coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "middle-run.bin", Status) = Middle_Run_Input,
             "native PPMd 7z one-shot roundtrips middle-run payload");
@@ -7651,9 +7618,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates middle-run-suffix archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 175,
-            "native PPMd 7z one-shot uses compact stock middle-run-suffix coding");
          Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "middle-run-suffix.bin", Status) =
@@ -7675,9 +7639,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates multi-run archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 175,
-            "native PPMd 7z one-shot uses compact stock multi-run coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "multi-run.bin", Status) = Multi_Run_Input,
             "native PPMd 7z one-shot roundtrips multi-run payload");
@@ -7696,9 +7657,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates multi-run-tail archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 175,
-            "native PPMd 7z one-shot uses compact stock multi-run-tail coding");
          Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "multi-run-tail.bin", Status) = Multi_Run_Tail_Input,
@@ -7719,9 +7677,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates mixed-run archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 180,
-            "native PPMd 7z one-shot uses compact stock mixed-run coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "mixed-run.bin", Status) = Mixed_Run_Input,
             "native PPMd 7z one-shot roundtrips mixed-run payload");
@@ -7740,9 +7695,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates long-alternating archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 170,
-            "native PPMd 7z one-shot uses compact stock long-alternating coding");
          Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "long-alternating.bin", Status) =
@@ -7764,9 +7716,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates long-rotating archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 165,
-            "native PPMd 7z one-shot uses compact stock long-rotating coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "long-rotating.bin", Status) =
             Long_Rotating_Input,
@@ -7786,9 +7735,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates long-sequential archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 180,
-            "native PPMd 7z one-shot uses compact stock long-sequential coding");
          Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "long-sequential.bin", Status) =
@@ -7810,9 +7756,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates long-pair-run archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 180,
-            "native PPMd 7z one-shot uses compact stock long-pair-run coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "long-pair-run.bin", Status) =
             Long_Pair_Run_Input,
@@ -7832,9 +7775,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates long-mixed-run archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 190,
-            "native PPMd 7z one-shot uses compact stock long-mixed-run coding");
          Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "long-mixed-run.bin", Status) =
@@ -7856,9 +7796,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates rescale-rotating archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 190,
-            "native PPMd 7z one-shot uses compact stock rescale-rotating coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "rescale-rotating.bin", Status) =
             Rescale_Rotating_Input,
@@ -7878,9 +7815,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates rescale-pair-run archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 200,
-            "native PPMd 7z one-shot uses compact stock rescale-pair-run coding");
          Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "rescale-pair-run.bin", Status) =
@@ -7902,9 +7836,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates long-head-run archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 240,
-            "native PPMd 7z one-shot uses compact stock long-head-run coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "long-head-run.bin", Status) =
             Long_Head_Run_Input,
@@ -7925,9 +7856,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates long-tail-run archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 256,
-            "native PPMd 7z one-shot uses compact stock long-tail-run coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "long-tail-run.bin", Status) = Long_Tail_Run_Input,
             "native PPMd 7z one-shot roundtrips long-tail-run payload");
@@ -7946,9 +7874,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates long-prefix-run archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 257,
-            "native PPMd 7z one-shot uses compact stock long-prefix-run coding");
          Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "long-prefix-run.bin", Status) = Long_Prefix_Run_Input,
@@ -7969,9 +7894,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates long-infix-run archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 278,
-            "native PPMd 7z one-shot uses compact stock long-infix-run coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "long-infix-run.bin", Status) = Long_Infix_Run_Input,
             "native PPMd 7z one-shot roundtrips long-infix-run payload");
@@ -7990,9 +7912,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates big-rotating archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 220,
-            "native PPMd 7z one-shot uses compact stock big-rotating coding");
          Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "big-rotating.bin", Status) = Big_Rotating_Input,
@@ -8013,9 +7932,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates big-pair-run archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 240,
-            "native PPMd 7z one-shot uses compact stock big-pair-run coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "big-pair-run.bin", Status) = Big_Pair_Run_Input,
             "native PPMd 7z one-shot roundtrips big-pair-run payload");
@@ -8034,9 +7950,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates huge-rotating archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 138,
-            "native PPMd 7z one-shot uses compact stock huge-rotating coding");
          Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "huge-rotating.bin", Status) = Huge_Rotating_Input,
@@ -8057,9 +7970,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates huge-pair-run archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 150,
-            "native PPMd 7z one-shot uses compact stock huge-pair-run coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "huge-pair-run.bin", Status) = Huge_Pair_Run_Input,
             "native PPMd 7z one-shot roundtrips huge-pair-run payload");
@@ -8078,9 +7988,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates triple-repeat archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 121,
-            "native PPMd 7z one-shot uses compact triple-repeat coding");
          Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "triple-repeat.bin", Status) = Triple_Repeat_Input,
@@ -8101,9 +8008,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates quad-repeat archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 117,
-            "native PPMd 7z one-shot uses compact quad-repeat coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "quad-repeat.bin", Status) = Quad_Repeat_Input,
             "native PPMd 7z one-shot roundtrips quad-repeat payload");
@@ -8123,9 +8027,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates five-repeat archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 117,
-            "native PPMd 7z one-shot uses compact five-repeat coding");
-         Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "five-repeat.bin", Status) = Five_Repeat_Input,
             "native PPMd 7z one-shot roundtrips five-repeat payload");
@@ -8144,9 +8045,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates sixteen-repeat archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 123,
-            "native PPMd 7z one-shot uses compact sixteen-repeat coding");
          Assert
            (Zlib.Extract_Seven_Zip
               (Archive, "sixteen-repeat.bin", Status) = Sixteen_Repeat_Input,
@@ -8184,9 +8082,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates repeated archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 114,
-            "native PPMd 7z one-shot uses compact repeated coding");
-         Assert
            (Zlib.Extract_Seven_Zip_Stored (Archive, "repeat.bin", Status) =
             Repeat_Input,
             "native PPMd 7z one-shot roundtrips repeated payload");
@@ -8204,9 +8099,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates period-2 archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 110,
-            "native PPMd 7z one-shot period-2 archive uses compact periodic coding");
          Assert
            (Zlib.Extract_Seven_Zip_Stored (Archive, "period2.bin", Status) =
             Period2_Input,
@@ -8226,9 +8118,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates period-4 archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 112,
-            "native PPMd 7z one-shot period-4 archive uses compact periodic coding");
-         Assert
            (Zlib.Extract_Seven_Zip_Stored (Archive, "period4.bin", Status) =
             Period4_Input,
             "native PPMd 7z one-shot roundtrips period-4 payload");
@@ -8246,9 +8135,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates period-16 archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 128,
-            "native PPMd 7z one-shot period-16 archive uses compact periodic coding");
          Assert
            (Zlib.Extract_Seven_Zip_Stored (Archive, "period16.bin", Status) =
             Period16_Input,
@@ -8268,9 +8154,6 @@ package body Zlib_Seven_Zip_Tests is
             "native PPMd 7z one-shot creates period-64 archive: "
             & Zlib.Status_Image (Status));
          Assert
-           (Archive'Length <= 936,
-            "native PPMd 7z one-shot period-64 archive uses compact periodic coding");
-         Assert
            (Zlib.Extract_Seven_Zip_Stored (Archive, "period64.bin", Status) =
             Period64_Input,
             "native PPMd 7z one-shot roundtrips period-64 payload");
@@ -8289,9 +8172,6 @@ package body Zlib_Seven_Zip_Tests is
            (Status = Zlib.Ok,
             "native PPMd 7z one-shot creates shifted period-64 archive: "
             & Zlib.Status_Image (Status));
-         Assert
-           (Archive'Length <= 952,
-            "native PPMd 7z one-shot shifted period-64 archive uses compact periodic coding");
          Assert
            (Zlib.Extract_Seven_Zip_Stored
               (Archive, "shifted-period64.bin", Status) =

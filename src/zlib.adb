@@ -22,6 +22,7 @@ with Zlib.Stream_Bits;
 with Zlib.Stream_Inflate;
 with Zlib.Sliding_Window;
 with Zlib.Seven_Zip_Filters;
+with Zlib.PPMd7;
 
 package body Zlib is
    use type Interfaces.Unsigned_16;
@@ -6877,8 +6878,8 @@ package body Zlib is
         and then Memory <= Interfaces.Unsigned_32'Last - 36;
    end Seven_Zip_Valid_PPMd_Props;
 
-   PPMd_Default_Order  : constant Natural := 4;
-   PPMd_Default_Memory : constant Interfaces.Unsigned_32 := 16#0001_0000#;
+   PPMd_Default_Order  : constant Natural := 6;
+   PPMd_Default_Memory : constant Interfaces.Unsigned_32 := 16#0100_0000#;
 
    function Seven_Zip_Bit_Is_Set
      (Data  : Byte_Array;
@@ -17872,7 +17873,6 @@ package body Zlib is
       Metadata   : Seven_Zip_Entry_Metadata;
       Status     : out Status_Code) return Byte_Array
    is
-      Compress_Status : Status_Code := Ok;
    begin
       Status := Unsupported_Method;
       if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
@@ -17885,39 +17885,17 @@ package body Zlib is
 
       declare
          Packed_Data : constant Byte_Array :=
-           Seven_Zip_PPMd_Encode (Input, Compress_Status);
+           Zlib.PPMd7.Compress
+             (Input, PPMd_Default_Order, PPMd_Default_Memory);
+         Archive : constant Byte_Array :=
+           Seven_Zip_Single_File
+             (Packed_Data, Input, Entry_Name, Seven_Zip_PPMd_Method,
+              Metadata, Status);
       begin
-         if Compress_Status /= Ok then
-            Status := Compress_Status;
+         if Status /= Ok then
             return [1 .. 0 => 0];
          end if;
-
-         declare
-            Check_Status : Status_Code := Ok;
-            Decoded      : constant Byte_Array :=
-              Seven_Zip_PPMd_Decode_Verified
-                (Packed_Data, Input'Length, PPMd_Default_Order,
-                 PPMd_Default_Memory, True, CRC32 (Input), Check_Status);
-         begin
-            if Check_Status /= Ok
-              or else Decoded /= Input
-            then
-               Status := Unsupported_Method;
-               return [1 .. 0 => 0];
-            end if;
-         end;
-
-         declare
-            Archive : constant Byte_Array :=
-              Seven_Zip_Single_File
-                (Packed_Data, Input, Entry_Name, Seven_Zip_PPMd_Method,
-                 Metadata, Status);
-         begin
-            if Status /= Ok then
-               return [1 .. 0 => 0];
-            end if;
-            return Archive;
-         end;
+         return Archive;
       end;
    exception
       when others =>
@@ -18625,26 +18603,9 @@ package body Zlib is
                return LZMA2_Encode (Input_Data);
 
             when Seven_Zip_PPMd_Method =>
-               declare
-                  Packed_Data  : constant Byte_Array :=
-                    Seven_Zip_PPMd_Encode (Input_Data, Pack_Status);
-                  Check_Status : Status_Code := Ok;
-                  Decoded      : constant Byte_Array :=
-                    Seven_Zip_PPMd_Decode_Verified
-                      (Packed_Data, Input_Data'Length, PPMd_Default_Order,
-                       PPMd_Default_Memory, True, CRC32 (Input_Data),
-                       Check_Status);
-               begin
-                  if Pack_Status /= Ok
-                    or else Check_Status /= Ok
-                    or else Decoded /= Input_Data
-                  then
-                     Pack_Status := Unsupported_Method;
-                     return Empty;
-                  end if;
-
-                  return Packed_Data;
-               end;
+               Pack_Status := Ok;
+               return Zlib.PPMd7.Compress
+                 (Input_Data, PPMd_Default_Order, PPMd_Default_Memory);
 
             when others =>
                Pack_Status := Unsupported_Method;
@@ -19389,11 +19350,23 @@ package body Zlib is
                                        return Empty;
 
                                     when Seven_Zip_PPMd_Method =>
-                                       return Seven_Zip_PPMd_Decode_Verified
-                                         (Encoded, Natural (Unpack_Size),
-                                          Natural (Enc_B), PPMd_Memory,
-                                          Unpack_CRC_OK, Unpack_CRC,
-                                          Local_Status);
+                                       declare
+                                          Out_B : constant Byte_Array :=
+                                            Zlib.PPMd7.Decompress
+                                              (Encoded,
+                                               Natural (Unpack_Size),
+                                               Natural (Enc_B), PPMd_Memory,
+                                               Local_Status);
+                                       begin
+                                          if Local_Status = Ok
+                                            and then Unpack_CRC_OK
+                                            and then CRC32 (Out_B) /= Unpack_CRC
+                                          then
+                                             Local_Status := Invalid_Checksum;
+                                             return Empty;
+                                          end if;
+                                          return Out_B;
+                                       end;
                                  end case;
                               end Decode_Payload;
 
@@ -21524,13 +21497,12 @@ package body Zlib is
                                               (Target_Folder_Index)));
                                     PPMd_Status : Status_Code := Ok;
                                     Plain       : constant Byte_Array :=
-                                      Seven_Zip_PPMd_Decode
+                                      Zlib.PPMd7.Decompress
                                         (Payload,
                                          PPMd_Output_Size,
                                          PPMd_Orders (Target_Folder_Index),
                                          PPMd_Memories (Target_Folder_Index),
-                                         False, True, True, PPMd_Status,
-                                         Use_State_Blocks => True);
+                                         PPMd_Status);
                                  begin
                                     if Folder_Next_Coder
                                       (Target_Folder_Index,
@@ -22133,109 +22105,28 @@ package body Zlib is
 
                                           when Seven_Zip_PPMd_Method =>
                                              declare
-                                                function Try_Decoded_PPMd
-                                                  (Decoded : Byte_Array)
-                                                   return Byte_Array
-                                                is
-                                                begin
-                                                   if Decoded'Length /=
-                                                     Expected_Size
-                                                   then
-                                                      return Empty;
-                                                   end if;
-
-                                                   return
-                                                     Decode_BCJ2_Main_Chain
-                                                       (Current_Coder + 1,
-                                                        Decoded);
-                                                end Try_Decoded_PPMd;
-
-                                                function Try_PPMd_Mode
-                                                  (Mode : Positive)
-                                                   return Byte_Array
-                                                is
-                                                   Decode_Status : Status_Code := Ok;
-                                                begin
-                                                   declare
-                                                      Decoded : constant Byte_Array :=
-                                                        Seven_Zip_PPMd_Decode_Mode
-                                                          (Current_Input,
-                                                           Expected_Size,
-                                                           Folder_PPMd_Orders
-                                                             (Target_Folder_Index,
-                                                              Current_Coder),
-                                                           Folder_PPMd_Memories
-                                                             (Target_Folder_Index,
-                                                              Current_Coder),
-                                                           Mode, Decode_Status);
-                                                   begin
-                                                      if Decode_Status /= Ok then
-                                                         return Empty;
-                                                      end if;
-
-                                                      return Try_Decoded_PPMd
-                                                        (Decoded);
-                                                   end;
-                                                end Try_PPMd_Mode;
+                                                Decode_Status : Status_Code := Ok;
+                                                Decoded : constant Byte_Array :=
+                                                  Zlib.PPMd7.Decompress
+                                                    (Current_Input,
+                                                     Expected_Size,
+                                                     Folder_PPMd_Orders
+                                                       (Target_Folder_Index,
+                                                        Current_Coder),
+                                                     Folder_PPMd_Memories
+                                                       (Target_Folder_Index,
+                                                        Current_Coder),
+                                                     Decode_Status);
                                              begin
-                                                declare
-                                                   Saved_Status : constant
-                                                     Status_Code := Status;
-                                                   Verified_Status : Status_Code := Ok;
-                                                   Verified : constant Byte_Array :=
-                                                     Seven_Zip_PPMd_Decode_Verified
-                                                       (Current_Input,
-                                                        Expected_Size,
-                                                        Folder_PPMd_Orders
-                                                          (Target_Folder_Index,
-                                                           Current_Coder),
-                                                        Folder_PPMd_Memories
-                                                          (Target_Folder_Index,
-                                                           Current_Coder),
-                                                        False, 0,
-                                                        Verified_Status);
-                                                begin
-                                                   Status := Ok;
-                                                   if Verified_Status = Ok then
-                                                      declare
-                                                         Result : constant Byte_Array :=
-                                                           Try_Decoded_PPMd
-                                                             (Verified);
-                                                      begin
-                                                         if Status = Ok
-                                                           and then
-                                                             Result'Length > 0
-                                                         then
-                                                            return Result;
-                                                         end if;
-                                                      end;
-                                                   end if;
-                                                   Status := Saved_Status;
-                                                end;
-
-                                                for Mode in 1 .. Seven_Zip_PPMd_Decode_Mode_Count loop
-                                                   declare
-                                                      Saved_Status : constant
-                                                        Status_Code := Status;
-                                                   begin
-                                                      Status := Ok;
-                                                      declare
-                                                         Result : constant Byte_Array :=
-                                                           Try_PPMd_Mode (Mode);
-                                                      begin
-                                                         if Status = Ok
-                                                           and then Result'Length > 0
-                                                         then
-                                                            return Result;
-                                                         end if;
-                                                      end;
-
-                                                      Status := Saved_Status;
-                                                   end;
-                                                end loop;
-
-                                                Status := Unsupported_Method;
-                                                return Empty;
+                                                if Decode_Status /= Ok
+                                                  or else Decoded'Length /=
+                                                    Expected_Size
+                                                then
+                                                   Status := Decode_Status;
+                                                   return Empty;
+                                                end if;
+                                                return Decode_BCJ2_Main_Chain
+                                                  (Current_Coder + 1, Decoded);
                                              end;
 
                                           when others =>

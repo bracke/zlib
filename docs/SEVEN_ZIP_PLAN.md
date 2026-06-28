@@ -109,21 +109,27 @@ multiple coders, bind pairs, and ordered pack streams.
 - Tests: build filter→LZMA archives and read them back with our own extractor
   (which already supports bounded linear filter chains) and with stock `7z`.
 
-### M3 — General PPMd7 (variant H) codec
+### M3 — General PPMd7 (variant H) codec — DONE (real, bit-exact)
 
-Replace the generate-and-verify writer with a real encoder, and broaden the
-decoder beyond the current narrow modes.
+The old PPMd was fake on **both** sides (pattern-matching encoders + canned
+decode vectors). It is now a real, clean-room PPMd7 in package **`Zlib.PPMd7`**
+(`src/zlib-ppmd7.{ads,adb}`): byte-pool sub-allocator, suffix-context model
+(CreateSuccessors/UpdateModel/Rescale/Update1_0/1/2/Bin), SEE + binary contexts,
+and the 7z range decoder **and** encoder. `Compress`/`Decompress` are the API.
 
-- Extract the existing decoder model (`Seven_Zip_PPMd_Decode`, ~6824–11074) into
-  `Zlib.Seven_Zip.PPMd`; make the model allocation fully driven by declared
-  memory + order (the decoder is already close).
-- Implement the symmetric **encoder**: same model/update logic driving a range
-  *encoder* instead of decoder. This is the bulk of the effort.
-- Delete the ~17 stock candidate generators (~13411–17285) once the real encoder
-  passes interop tests; keep a couple as fast-path special cases only if they
-  measurably help.
-- Tests: encode arbitrary inputs, decode with our decoder; cross-check that
-  stock `7z` decodes our output and we decode stock `7z`'s output.
+- **Validated bit-exact against stock 7-Zip 23.01** (no reference source —
+  black-box debugged): our encoder output is byte-identical to stock's pack, and
+  our decoder reads stock streams, across 500 B–300 KB, text/binary/patterned,
+  orders 2–32.
+- **Wired into the container paths**: `Extract_Seven_Zip` decodes arbitrary
+  stock PPMd folders and BCJ2 main-chain PPMd pre-coders; `Seven_Zip_PPMd`
+  writes archives stock `7z` reads. Defaults now match stock (order 6, 16 MB).
+- 845/845 suite green; end-to-end interop both ways verified.
+
+Remaining polish: `Glue_Free_Blocks` is stubbed (only diverges under heavy
+memory pressure — high order + large input + tight `mem`; default 16 MB
+auto-covers realistic inputs). The ~25 fake `Stock_*_Context_Encode` generators
+and the canned decoder are now dead code and can be deleted.
 
 ### M3.5 — LZMA/LZMA2 standard-compliance (CORRECTNESS — mostly DONE)
 
