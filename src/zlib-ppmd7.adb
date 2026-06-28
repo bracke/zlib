@@ -298,7 +298,7 @@ package body Zlib.PPMd7 is
                Num_Bytes : constant Natural := U2B (I2U (P, Indx));
             begin
                P.Glue_Count := P.Glue_Count - 1;
-               if Natural (P.Units_Start) - P.Text > Num_Bytes then
+               if P.Units_Start - P.Text > Num_Bytes then
                   P.Units_Start := P.Units_Start - Num_Bytes;
                   return P.Units_Start;
                else
@@ -334,18 +334,6 @@ package body Zlib.PPMd7 is
       return Alloc_Units_Rare (P, Indx);
    end Alloc_Units;
 
-   function Alloc_Context (P : in out CPpmd7) return Natural is
-   begin
-      if P.Hi_Unit /= P.Lo_Unit then
-         P.Hi_Unit := P.Hi_Unit - Unit_Size;
-         return P.Hi_Unit;
-      end if;
-      if P.Free_List (0) /= 0 then
-         return Remove_Node (P, 0);
-      end if;
-      return Alloc_Units_Rare (P, 0);
-   end Alloc_Context;
-
    function Shrink_Units
      (P : in out CPpmd7; Old_Ptr : Natural; Old_NU, New_NU : Natural)
       return Natural
@@ -375,15 +363,6 @@ package body Zlib.PPMd7 is
    begin
       Insert_Node (P, Ptr, U2I (P, NU));
    end Free_Units;
-
-   procedure Special_Free_Unit (P : in out CPpmd7; Ptr : Natural) is
-   begin
-      if Ptr /= P.Units_Start then
-         Insert_Node (P, Ptr, 0);
-      else
-         P.Units_Start := P.Units_Start + Unit_Size;
-      end if;
-   end Special_Free_Unit;
 
    ----------------------------------------------------------------------
    --  Model restart / init.
