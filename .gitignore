@@ -1,0 +1,24 @@
+/obj/
+/lib/
+/alire/
+/config/
+/docs/html/
+/check_zlib/alire/
+/check_zlib/config/
+/check_zlib/obj/
+/check_zlib/bin/
+/tests/alire/
+/tests/config/
+/tests/obj/
+/tests/lib/
+/tests/bin/
+/examples/obj/
+/tools/obj/
+/tools/bin/
+*.kate-swp
+
+# Stray root-level Ada build artifacts (from building in the project root)
+/*.o
+/*.ali
+/debug_bcj2_*
+/dump_7z_*

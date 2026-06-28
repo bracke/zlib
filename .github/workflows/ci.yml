@@ -1,0 +1,34 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux-release-check:
+    name: Linux release checklist
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out zlib
+        uses: actions/checkout@v4
+        with:
+          path: zlib
+      - name: Check out project_tools sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/project_tools
+          path: project_tools
+      - name: Set up Alire
+        uses: alire-project/setup-alire@v5
+      - name: Install Ada toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnat gprbuild gnatprove || sudo apt-get install -y gnat gprbuild
+          sudo apt-get install -y libaunit-dev || sudo apt-get install -y libaunit22-dev || sudo apt-get install -y libaunit24-dev
+      - name: Build aggregate release checker
+        working-directory: zlib
+        run: alr exec -- gprbuild -P tools/tools.gpr
+      - name: Run aggregate release checker
+        working-directory: zlib
+        run: tools/bin/check_all

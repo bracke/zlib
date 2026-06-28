@@ -1,0 +1,4 @@
+project Public_Docs is
+   for Source_Dirs use ("../src");
+   for Source_Files use ("zlib.ads");
+end Public_Docs;

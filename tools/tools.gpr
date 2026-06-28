@@ -1,0 +1,42 @@
+with "../zlib.gpr";
+with "../../project_tools/project_tools.gpr";
+project Tools is
+   for Source_Dirs use (".", "fuzz");
+   for Object_Dir use "obj";
+   for Exec_Dir use "bin";
+   for Create_Missing_Dirs use "True";
+   for Main use
+     ("zlib_inflate_file.adb",
+      "zlib_deflate_stored_file.adb",
+      "zlib_deflate_fixed_file.adb",
+      "zlib_deflate_dynamic_file.adb",
+      "zlib_compress_file.adb",
+      "gzip_file.adb",
+      "gzip_metadata_file.adb",
+      "zlib_streaming_roundtrip.adb",
+      "gzip_streaming_roundtrip.adb",
+      "raw_deflate_file.adb",
+      "raw_inflate_file.adb",
+      "raw_roundtrip.adb",
+      "raw_vs_zlib_vs_gzip.adb",
+      "zlib_bench_inflate.adb",
+      "zlib_bench_deflate.adb",
+      "zlib_bench_gzip.adb",
+      "zlib_bench_raw.adb",
+      "smoke_test.adb",
+      "check_all.adb",
+      "fuzz_inflate.adb",
+      "fuzz_streaming_inflate.adb",
+      "fuzz_compress_roundtrip.adb",
+      "fuzz_compress_levels.adb",
+      "fuzz_wrapper_mix.adb",
+      "fuzz_dictionary.adb",
+      "fuzz_gzip_metadata.adb",
+      "fuzz_mutation.adb",
+      "fuzz_lifecycle.adb",
+      "fuzz_tiny_buffers.adb");
+
+   package Compiler is
+      for Default_Switches ("Ada") use ("-gnat2022", "-gnatyM120", "-gnatX", "-gnata");
+   end Compiler;
+end Tools;

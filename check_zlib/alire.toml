@@ -1,0 +1,20 @@
+name = "check_zlib"
+description = "Ada release and documentation contract check for zlib"
+version = "0.1.0-dev"
+
+authors = ["Bent Bracke"]
+maintainers = ["Bent Bracke <bent@bracke.dk>"]
+maintainers-logins = ["bracke"]
+licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
+long-description = "Small Ada utility that verifies zlib release documentation, checked examples, support-level comments, and release checklist wiring remain aligned."
+
+website = ""
+tags = ["docs", "check", "public-api", "release"]
+
+executables = ["check_zlib"]
+
+[[depends-on]]
+project_tools = "*"
+
+[[pins]]
+project_tools = { path = "../../project_tools" }

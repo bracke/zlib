@@ -1,0 +1,45 @@
+with "../zlib.gpr";
+project Examples is
+   for Source_Dirs use (".");
+   for Object_Dir use "obj";
+   for Exec_Dir use "obj";
+   for Create_Missing_Dirs use "True";
+   for Main use
+     ("quickstart.adb",
+      "inflate_file.adb",
+      "inflate_with_header.adb",
+      "inflate_raw.adb",
+      "deflate_stored_file.adb",
+      "deflate_fixed_file.adb",
+      "deflate_dynamic_file.adb",
+      "deflate_raw_file.adb",
+      "deflate_raw_file_to_stream.adb",
+      "inflate_raw_file.adb",
+      "gzip_file.adb",
+      "deflate_file_streaming.adb",
+      "inflate_file_streaming.adb",
+      "gzip_file_streaming.adb",
+      "deflate_raw_file_streaming.adb",
+      "inflate_raw_file_streaming.adb",
+      "streaming_inflate_zlib.adb",
+      "streaming_inflate_gzip.adb",
+      "streaming_deflate_zlib.adb",
+      "streaming_deflate_gzip.adb",
+      "streaming_roundtrip_zlib.adb",
+      "streaming_roundtrip_gzip.adb",
+      "streaming_deflate_raw.adb",
+      "raw_roundtrip.adb",
+      "raw_vs_zlib_vs_gzip.adb",
+      "roundtrip_stored.adb",
+      "roundtrip_fixed.adb",
+      "roundtrip_dynamic.adb",
+      "gzip_with_metadata.adb",
+      "gzip_multimember_inflate.adb",
+      "compress_with_level.adb",
+      "dictionary_roundtrip.adb",
+      "checksums.adb");
+
+   package Compiler is
+      for Default_Switches ("Ada") use ("-gnat2022", "-gnatyM120", "-gnatX", "-gnata");
+   end Compiler;
+end Examples;

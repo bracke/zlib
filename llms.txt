@@ -1,0 +1,114 @@
+# Zlib
+
+Version: 0.1.0-dev
+
+Pure Ada zlib/gzip/raw Deflate crate. Public consumers should import only the
+root package:
+
+```ada
+with Zlib;
+```
+
+Child packages are internal implementation details. `src/zlib.ads` is the
+public API source of truth.
+
+## Project goal and current status
+
+The headline goal is **full, pure-Ada 7z encode and decode** — read any standard
+`.7z` archive `7z`/p7zip produces, and produce archives they can read, with no
+external codec libraries. What is listed under "Public API families" below is
+*current progress*, not the final boundary. Important honest caveats for agents:
+
+- 7z **decode** is complete for Copy / Deflate / BZip2 / LZMA / LZMA2 and a
+  narrow, growing subset of PPMd and filter-chain layouts; anything else fails
+  closed with `Unsupported_Method`.
+- 7z **PPMd write** is currently *generate-and-verify*: it emits only payloads
+  it can model (empty, repeated, periodic, root-context) and verify by decoding,
+  **not** a general PPMd encoder. A real PPMd7 encoder is planned.
+- Branch filters (x86 BCJ, Delta) are **decode-only** today; the rest of the
+  family and encode-side filters are planned.
+- AES encryption, solid compression, and multi-volume archives are **not yet
+  implemented**.
+
+See `docs/SEVEN_ZIP_PLAN.md` for the ordered implementation plan and
+`docs/CONSTRAINTS.md` for the precise done-versus-planned breakdown.
+
+## Read first
+
+- README.md: capability summary, release contract, docs/tools/examples index
+- docs/QUICKSTART.md: shortest build and usage path
+- docs/API_CHEATSHEET.md: task-to-API mapping
+- docs/AI_GUIDE.md: instructions for AI assistants and automated consumers
+- src/zlib.ads: exact public declarations and GNATdoc comments
+- examples/README.md: complete runnable example index
+- docs/TESTING.md: validation checklist
+
+## Public API families
+
+- `Inflate`: one-shot zlib input only
+- `Inflate_With_Header`: explicit one-shot zlib/gzip/raw input
+- `Inflate_Raw`: one-shot raw Deflate input
+- `Deflate`, `Deflate_Stored`, `Deflate_Fixed`, `Deflate_Dynamic`: zlib output
+- `GZip`: gzip output
+- `Deflate_Raw`: raw Deflate output
+- `Seven_Zip_Stored`, `Seven_Zip_Deflate`, `Seven_Zip_BZip2`,
+  `Seven_Zip_LZMA`, `Seven_Zip_LZMA2`, `Seven_Zip_PPMd`: native 7z output;
+  PPMd emits verified PPMd streams without calling local `7z`, selecting among
+  modeled stock-compatible candidates, repeated/periodic forms, a native
+  root-context fallback, and complete generated-archive self-checks
+- `Seven_Zip_Stored`/`Seven_Zip_Deflate`/`Seven_Zip_BZip2`/`Seven_Zip_LZMA`/
+  `Seven_Zip_LZMA2`/`Seven_Zip_PPMd` metadata overloads: native single-entry
+  7z output with supported per-entry modification FILETIME and Windows
+  attributes; the stored metadata overload can emit header-only directories
+- 7z file and file-list helpers preserve supported source modification time and
+  read-only metadata when the platform exposes them; `Seven_Zip_*_File`
+  helpers accept ordinary-file inputs or directory inputs, `Seven_Zip_PPMd_File`
+  accepts basename and explicit-entry-name forms, stored file-list creation
+  emits one solid Copy folder with ordinary-file substreams and no-stream
+  directory entries, and
+  `Seven_Zip_PPMd_Files` emits independently packed native PPMd
+  entries with generated-payload self-checks
+- `Extract_Seven_Zip`, `Extract_Seven_Zip_Stored`: supported native 7z
+  extraction, including supported PPMd mode-ladder streams, no-stream empty files, and
+  BCJ+PPMd filter chains plus standard, reverse-linear, and reordered
+  zero-based and legacy one-based bind-pair chains, and BCJ2 graphs with Copy,
+  PPMd, or supported main pre-coders; PPMd model allocation is sized from declared memory and requested
+  output size; file helpers create needed parent directories and restore
+  supported directories, modification times, and read-only attributes; neutral
+  extraction fails closed for broader unsupported
+  methods
+- `Extract_Seven_Zip_Metadata`: metadata query for a supported verified 7z
+  entry, returning entry kind, modification FILETIME, and Windows attributes
+- `Inflate_File`, `Deflate_File`, `GZip_File`, `Deflate_Raw_File`: file helpers
+- `Inflate_Init`, `Translate`, `Flush`, `Stream_End`, `Close`: streaming inflate
+- `Deflate_Init`, `Compress`, `Compress_Flush`, `Compress_Stream_End`,
+  `Compress_Close`: streaming compression
+- `Adler32`, `CRC32`: checksum helpers
+
+## Wrapper rules
+
+- `Default` means exactly `Zlib_Header`.
+- No public API auto-detects wrappers.
+- `Inflate` is zlib-wrapper-only.
+- `GZip` emits gzip, not zlib.
+- `Deflate_Raw` emits raw Deflate payload bytes only, with no wrapper checksum.
+- Multi-member gzip input is explicit through `GZip_Member_Mode`.
+- Multi-member gzip output and ZIP container support are out of scope.
+
+## Validation
+
+Preferred repository validation:
+
+```sh
+alr build
+alr exec -- gprbuild -P zlib.gpr
+cd tests && alr exec -- gprbuild -P tests.gpr
+cd tests && ./bin/tests
+alr exec -- gprbuild -P examples/examples.gpr
+alr exec -- gprbuild -P tools/tools.gpr
+./tools/bin/smoke_test
+tools/bin/check_all
+```
+
+If Ada tools are unavailable, report that and run static checks available in the
+environment.
