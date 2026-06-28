@@ -126,10 +126,11 @@ and the 7z range decoder **and** encoder. `Compress`/`Decompress` are the API.
   writes archives stock `7z` reads. Defaults now match stock (order 6, 16 MB).
 - 845/845 suite green; end-to-end interop both ways verified.
 
-Remaining polish: `Glue_Free_Blocks` is stubbed (only diverges under heavy
-memory pressure — high order + large input + tight `mem`; default 16 MB
-auto-covers realistic inputs). The ~25 fake `Stock_*_Context_Encode` generators
-and the canned decoder are now dead code and can be deleted.
+Fully complete: `Glue_Free_Blocks` (the memory-pressure coalescing path) is
+implemented and validated bit-exact vs stock on 1–2 MB inputs at 1 MB `mem`,
+orders 4–32, both directions. The ~8500 lines of fake PPMd code (pattern
+encoders + canned decoder) have been deleted; the historic decode entry points
+remain only as thin shims to `Zlib.PPMd7.Decompress`.
 
 ### M3.5 — LZMA/LZMA2 standard-compliance (CORRECTNESS — mostly DONE)
 
