@@ -22,6 +22,7 @@ with Zlib.Stream_Inflate;
 with Zlib.Sliding_Window;
 with Zlib.Seven_Zip_Filters;
 with Zlib.PPMd7;
+with Zlib.Seven_Zip_AES;
 
 package body Zlib is
    use type Interfaces.Unsigned_16;
@@ -39,6 +40,11 @@ package body Zlib is
 
    package SIO renames Ada.Streams.Stream_IO;
    package US renames Ada.Strings.Unbounded;
+
+   --  Active 7z password for AES-encrypted folders, set by the password-aware
+   --  Extract_Seven_Zip overload just before extraction (the deep extractor
+   --  call chain makes threading a parameter impractical).
+   Active_Seven_Zip_Password : US.Unbounded_String := US.Null_Unbounded_String;
 
    function BZ2_bzBuffToBuffCompress
      (Dest          : System.Address;
@@ -6846,7 +6852,8 @@ package body Zlib is
       Seven_Zip_BCJ_ARM64_Method,
       Seven_Zip_BCJ_PPC_Method, Seven_Zip_BCJ_SPARC_Method,
       Seven_Zip_BCJ_IA64_Method,
-      Seven_Zip_BCJ2_Method, Seven_Zip_PPMd_Method);
+      Seven_Zip_BCJ2_Method, Seven_Zip_PPMd_Method,
+      Seven_Zip_AES_Method);
 
    --  Map a branch-filter coder method to its filter architecture.
    function Branch_Arch_Of
@@ -7362,6 +7369,11 @@ package body Zlib is
             Header.Append (5);
             Header.Append (Byte (PPMd_Default_Order));
             Append_U32_LE (Header, PPMd_Default_Memory);
+
+         when Seven_Zip_AES_Method =>
+            --  AES coder bytes are emitted by the encryption writer, which
+            --  carries the per-archive salt/iv/cycles props.
+            null;
       end case;
    end Append_Seven_Zip_Coder;
 
@@ -10827,6 +10839,10 @@ package body Zlib is
                                           end if;
                                           return Out_B;
                                        end;
+
+                                    when Seven_Zip_AES_Method =>
+                                       Local_Status := Unsupported_Method;
+                                       return Empty;
                                  end case;
                               end Decode_Payload;
 
@@ -11155,6 +11171,10 @@ package body Zlib is
                      type Seven_Zip_Folder_U64_Table is
                        array (Positive range <>, Positive range <>)
                          of Interfaces.Unsigned_64;
+                     type Seven_Zip_AES_Block is array (1 .. 16) of Byte;
+                     type Seven_Zip_Folder_AES_Block_Table is
+                       array (Positive range <>, Positive range <>)
+                         of Seven_Zip_AES_Block;
                      Stream_Count : constant Natural := Natural (Value);
                      Pack_Sizes   : Seven_Zip_U64_Array (1 .. Stream_Count);
                      Pack_CRCs    : Seven_Zip_U32_Array (1 .. Stream_Count);
@@ -11191,6 +11211,21 @@ package body Zlib is
                      Folder_PPMd_Orders : Seven_Zip_Folder_Natural_Table
                        (1 .. Stream_Count, 1 .. Max_Folder_Coders) :=
                          [others => [others => 0]];
+                     Folder_AES_Cycles : Seven_Zip_Folder_Natural_Table
+                       (1 .. Stream_Count, 1 .. Max_Folder_Coders) :=
+                         [others => [others => 0]];
+                     Folder_AES_Salt_Len : Seven_Zip_Folder_Natural_Table
+                       (1 .. Stream_Count, 1 .. Max_Folder_Coders) :=
+                         [others => [others => 0]];
+                     Folder_AES_IV_Len : Seven_Zip_Folder_Natural_Table
+                       (1 .. Stream_Count, 1 .. Max_Folder_Coders) :=
+                         [others => [others => 0]];
+                     Folder_AES_Salt : Seven_Zip_Folder_AES_Block_Table
+                       (1 .. Stream_Count, 1 .. Max_Folder_Coders) :=
+                         [others => [others => [others => 0]]];
+                     Folder_AES_IV : Seven_Zip_Folder_AES_Block_Table
+                       (1 .. Stream_Count, 1 .. Max_Folder_Coders) :=
+                         [others => [others => [others => 0]]];
                      Folder_PPMd_Memories : Seven_Zip_Folder_U32_Table
                        (1 .. Stream_Count, 1 .. Max_Folder_Coders) :=
                          [others => [others => 0]];
@@ -11489,6 +11524,66 @@ package body Zlib is
                                          (I, Coder_Index) := Natural (B) + 1;
                                        Folder_Methods (I, Coder_Index) :=
                                          Seven_Zip_Delta_Method;
+                                    elsif ID_Size = 4
+                                      and then ID (1) = 16#06#
+                                      and then ID (2) = 16#F1#
+                                      and then ID (3) = 16#07#
+                                      and then ID (4) = 16#01#
+                                    then
+                                       --  7zAES (AES-256 + SHA-256).
+                                       if Has_Streams
+                                         or else not Has_Props
+                                         or else not Read_Seven_Zip_Number
+                                           (Archive_Image, Pos, Header_Last,
+                                            Prop_Size)
+                                         or else Prop_Size < 1
+                                         or else not Seven_Zip_Has_Bytes
+                                           (Pos, Header_Last, Natural (Prop_Size))
+                                       then
+                                          return Empty;
+                                       end if;
+                                       declare
+                                          PB : Byte_Array (1 .. Natural (Prop_Size));
+                                          B0, B1 : Natural := 0;
+                                          Salt_Sz, IV_Sz, PP : Natural := 0;
+                                       begin
+                                          for J in PB'Range loop
+                                             PB (J) := Archive_Image (Pos);
+                                             Pos := Pos + 1;
+                                          end loop;
+                                          B0 := Natural (PB (1));
+                                          Folder_AES_Cycles (I, Coder_Index) :=
+                                            B0 mod 64;
+                                          if (B0 / 64) /= 0
+                                            and then Natural (Prop_Size) >= 2
+                                          then
+                                             B1 := Natural (PB (2));
+                                             PP := 3;
+                                          else
+                                             PP := 2;
+                                          end if;
+                                          Salt_Sz := ((B0 / 128) mod 2) + (B1 / 16);
+                                          IV_Sz := ((B0 / 64) mod 2) + (B1 mod 16);
+                                          if Salt_Sz > 16 or else IV_Sz > 16
+                                            or else Natural (Prop_Size) <
+                                              (PP - 1) + Salt_Sz + IV_Sz
+                                          then
+                                             return Empty;
+                                          end if;
+                                          Folder_AES_Salt_Len (I, Coder_Index) :=
+                                            Salt_Sz;
+                                          Folder_AES_IV_Len (I, Coder_Index) := IV_Sz;
+                                          for J in 1 .. Salt_Sz loop
+                                             Folder_AES_Salt (I, Coder_Index) (J) :=
+                                               PB (PP + J - 1);
+                                          end loop;
+                                          for J in 1 .. IV_Sz loop
+                                             Folder_AES_IV (I, Coder_Index) (J) :=
+                                               PB (PP + Salt_Sz + J - 1);
+                                          end loop;
+                                       end;
+                                       Folder_Methods (I, Coder_Index) :=
+                                         Seven_Zip_AES_Method;
                                     elsif ID_Size = 4
                                       and then ID (1) = 16#03#
                                       and then ID (2) = 16#03#
@@ -12571,6 +12666,48 @@ package body Zlib is
                                             (Next_Coder, Decoded);
                                        end;
 
+                                    when Seven_Zip_AES_Method =>
+                                       declare
+                                          Salt_Len : constant Natural :=
+                                            Folder_AES_Salt_Len
+                                              (Target_Folder_Index, Coder_Index);
+                                          IV_Len : constant Natural :=
+                                            Folder_AES_IV_Len
+                                              (Target_Folder_Index, Coder_Index);
+                                          Salt : Byte_Array (1 .. Salt_Len);
+                                          IV   : Byte_Array (1 .. 16) :=
+                                            [others => 0];
+                                       begin
+                                          for J in 1 .. Salt_Len loop
+                                             Salt (J) := Folder_AES_Salt
+                                               (Target_Folder_Index,
+                                                Coder_Index) (J);
+                                          end loop;
+                                          for J in 1 .. IV_Len loop
+                                             IV (J) := Folder_AES_IV
+                                               (Target_Folder_Index,
+                                                Coder_Index) (J);
+                                          end loop;
+                                          if US.Length
+                                               (Active_Seven_Zip_Password) = 0
+                                            or else Input'Length mod 16 /= 0
+                                          then
+                                             Status := Unsupported_Method;
+                                             return Empty;
+                                          end if;
+                                          return Run_Post_Coders
+                                            (Next_Coder,
+                                             Zlib.Seven_Zip_AES.Decrypt_CBC
+                                               (Zlib.Seven_Zip_AES.Derive_Key
+                                                  (US.To_String
+                                                     (Active_Seven_Zip_Password),
+                                                   Salt,
+                                                   Folder_AES_Cycles
+                                                     (Target_Folder_Index,
+                                                      Coder_Index)),
+                                                IV, Input));
+                                       end;
+
                                     when Seven_Zip_BCJ_X86_Method =>
                                        declare
                                           Decoded : constant Byte_Array :=
@@ -12782,6 +12919,46 @@ package body Zlib is
                                  end if;
 
                                  return Finish_Decoded_Payload (Payload);
+
+                              when Seven_Zip_AES_Method =>
+                                 --  Encrypted chain: AES is the packed coder.
+                                 --  Decrypt the pack, then apply the inner
+                                 --  coder(s) via Finish_Decoded_Payload.
+                                 declare
+                                    C : constant Natural :=
+                                      Folder_Packed_Coder (Target_Folder_Index);
+                                    Salt_Len : constant Natural :=
+                                      Folder_AES_Salt_Len
+                                        (Target_Folder_Index, C);
+                                    IV_Len : constant Natural :=
+                                      Folder_AES_IV_Len (Target_Folder_Index, C);
+                                    Salt : Byte_Array (1 .. Salt_Len);
+                                    IV   : Byte_Array (1 .. 16) := [others => 0];
+                                 begin
+                                    for J in 1 .. Salt_Len loop
+                                       Salt (J) := Folder_AES_Salt
+                                         (Target_Folder_Index, C) (J);
+                                    end loop;
+                                    for J in 1 .. IV_Len loop
+                                       IV (J) := Folder_AES_IV
+                                         (Target_Folder_Index, C) (J);
+                                    end loop;
+                                    if US.Length (Active_Seven_Zip_Password) = 0
+                                      or else Payload'Length mod 16 /= 0
+                                    then
+                                       Status := Unsupported_Method;
+                                       return Empty;
+                                    end if;
+                                    return Finish_Decoded_Payload
+                                      (Zlib.Seven_Zip_AES.Decrypt_CBC
+                                         (Zlib.Seven_Zip_AES.Derive_Key
+                                            (US.To_String
+                                               (Active_Seven_Zip_Password),
+                                             Salt,
+                                             Folder_AES_Cycles
+                                               (Target_Folder_Index, C)),
+                                          IV, Payload));
+                                 end;
 
                               when Seven_Zip_Deflate_Method =>
                                  declare
@@ -13677,6 +13854,20 @@ package body Zlib is
    begin
       return Extract_Seven_Zip_Entry
         (Archive_Image, Entry_Name, Status, Kind, Metadata);
+   end Extract_Seven_Zip;
+
+   function Extract_Seven_Zip
+     (Archive_Image : Byte_Array;
+      Entry_Name    : String;
+      Password      : String;
+      Status        : out Status_Code) return Byte_Array is
+   begin
+      Active_Seven_Zip_Password := US.To_Unbounded_String (Password);
+      return R : constant Byte_Array :=
+        Extract_Seven_Zip (Archive_Image, Entry_Name, Status)
+      do
+         Active_Seven_Zip_Password := US.Null_Unbounded_String;
+      end return;
    end Extract_Seven_Zip;
 
    function Extract_Seven_Zip_Metadata

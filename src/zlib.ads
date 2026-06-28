@@ -1701,6 +1701,19 @@ package Zlib is
    --  @param Status set to Ok on success, otherwise a deterministic failure code
    --  @return extracted payload when Status is Ok
 
+   function Extract_Seven_Zip
+     (Archive_Image : Byte_Array;
+      Entry_Name    : String;
+      Password      : String;
+      Status        : out Status_Code) return Byte_Array;
+   --  As Extract_Seven_Zip, but supplies a password for AES-256 (7zAES)
+   --  encrypted folders. A wrong password surfaces as Invalid_Checksum.
+   --  @param Archive_Image complete .7z archive image
+   --  @param Entry_Name expected archive entry name, without NUL characters
+   --  @param Password the archive password
+   --  @param Status set to Ok on success, otherwise a deterministic failure code
+   --  @return extracted payload when Status is Ok
+
    function Extract_Seven_Zip_Metadata
      (Archive_Image : Byte_Array;
       Entry_Name    : String;
