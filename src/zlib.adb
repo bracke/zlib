@@ -3850,7 +3850,6 @@ package body Zlib is
    LZMA_Len_Mid_Symbols : constant Natural := 8;
    LZMA_Len_High_Symbols : constant Natural := 256;
    LZMA_Min_Match_Length : constant Natural := 2;
-   LZMA_Max_Fast_Match_Length : constant Natural := 17;
    LZMA_Default_LC      : constant Natural := 3;
    LZMA_Default_LP      : constant Natural := 0;
    LZMA_Default_PB      : constant Natural := 2;
@@ -3862,7 +3861,6 @@ package body Zlib is
    LZMA_Num_Full_Distances : constant Natural := 2 ** (LZMA_End_Pos_Model_Index / 2);
    LZMA_Num_Align_Bits : constant Natural := 4;
    LZMA_Align_Table_Size : constant Natural := 2 ** LZMA_Num_Align_Bits;
-   LZMA_Max_Search_Distance : constant Natural := Natural (LZMA_Default_Dict);
 
    type LZMA_Prob_Array is array (Natural range <>) of Interfaces.Unsigned_32;
 
@@ -4183,6 +4181,190 @@ package body Zlib is
       Position      : Natural := 0;
       In_Index      : Natural := Plain'First;
       Rep0          : Natural := 0;
+      Rep1          : Natural := 0;
+      Rep2          : Natural := 0;
+      Rep3          : Natural := 0;
+
+      --  Hash-chain (HC3) match finder. Each position is hashed on its next
+      --  three bytes into Head/Chain; Find_Match walks the chain for the
+      --  nearest longest match (extending to the LZMA maximum of 273), so long
+      --  repeats compress to a single match. This replaces the previous
+      --  brute-force scan that was both O(n*dict) and capped matches at 17.
+      Max_Match : constant Natural := 273;
+      Nice_Len  : constant Natural := 128;
+      Max_Chain : constant Natural := 128;
+      Hash_Bits : constant Natural := 16;
+      Dict_Sz   : constant Natural := Natural (LZMA_Default_Dict);
+      type Pos_Table is array (Natural range <>) of Natural;
+      Head  : Pos_Table (0 .. 2 ** Hash_Bits - 1) := [others => 0];
+      Chain : Pos_Table (1 .. Natural'Max (Plain'Length, 1)) := [others => 0];
+
+      function Hash3 (I : Natural) return Natural is
+         V : constant Interfaces.Unsigned_32 :=
+           Interfaces.Unsigned_32 (Plain (I))
+           or Interfaces.Shift_Left (Interfaces.Unsigned_32 (Plain (I + 1)), 8)
+           or Interfaces.Shift_Left
+                (Interfaces.Unsigned_32 (Plain (I + 2)), 16);
+      begin
+         return Natural
+           (Interfaces.Shift_Right (V * 16#9E37_79B1#, 32 - Hash_Bits));
+      end Hash3;
+
+      procedure Insert (I : Natural) is
+      begin
+         if I + 2 <= Plain'Last then
+            declare
+               H : constant Natural := Hash3 (I);
+               S : constant Natural := I - Plain'First + 1;
+            begin
+               Chain (S) := Head (H);
+               Head (H) := S;
+            end;
+         end if;
+      end Insert;
+
+      function Match_Length (I, D : Natural) return Natural is
+         L : Natural := 0;
+      begin
+         while I + L <= Plain'Last and then L < Max_Match
+           and then Plain (I + L) = Plain (I + L - D)
+         loop
+            L := L + 1;
+         end loop;
+         return L;
+      end Match_Length;
+
+      procedure Find_Match
+        (I : Natural; M_Len : out Natural; M_Dist : out Natural)
+      is
+         I_Pos : constant Natural := I - Plain'First;
+         Cur   : Natural;
+         Depth : Natural := 0;
+      begin
+         M_Len  := 0;
+         M_Dist := 0;
+         if I + 2 > Plain'Last then
+            return;
+         end if;
+         Cur := Head (Hash3 (I));
+         while Cur /= 0 and then Depth < Max_Chain loop
+            declare
+               D : constant Natural := I_Pos - (Cur - 1);
+            begin
+               exit when D > Dict_Sz;
+               declare
+                  L : constant Natural := Match_Length (I, D);
+               begin
+                  if L > M_Len then
+                     M_Len  := L;
+                     M_Dist := D;
+                     exit when L >= Nice_Len;
+                  end if;
+               end;
+            end;
+            Cur := Chain (Cur);
+            Depth := Depth + 1;
+         end loop;
+      end Find_Match;
+
+      procedure Best_Rep
+        (I : Natural; Idx : out Natural; Len : out Natural)
+      is
+         Reps  : constant array (0 .. 3) of Natural := [Rep0, Rep1, Rep2, Rep3];
+         Avail : constant Natural := I - Plain'First;
+      begin
+         Idx := 0;
+         Len := 0;
+         for K in 0 .. 3 loop
+            if Reps (K) > 0 and then Reps (K) <= Avail then
+               declare
+                  L : constant Natural := Match_Length (I, Reps (K));
+               begin
+                  if L > Len then
+                     Len := L;
+                     Idx := K;
+                  end if;
+               end;
+            end if;
+         end loop;
+      end Best_Rep;
+
+      procedure Emit_Literal is
+         B         : constant Byte := Plain (In_Index);
+         Pos_State : constant Natural := Position mod Pos_States;
+         Context   : constant Natural :=
+           LZMA_Literal_Context
+             (LZMA_Default_LC, LZMA_Default_LP, Position, Prev);
+         Symbol    : Natural := 1;
+      begin
+         LZMA_Encode_Bit
+           (E, Is_Match (State * LZMA_Num_Pos_States_Max + Pos_State), 0);
+         if State >= 7 and then Rep0 > 0 and then Rep0 <= Position then
+            declare
+               Match_Byte : Natural := Natural (Plain (In_Index - Rep0));
+               Matched    : Boolean := True;
+            begin
+               for Bit_Index in reverse 0 .. 7 loop
+                  declare
+                     Bit : constant Natural :=
+                       (Natural (B) / (2 ** Bit_Index)) mod 2;
+                  begin
+                     if Matched then
+                        Match_Byte := Match_Byte * 2;
+                        declare
+                           Match_Bit_Literal : constant Natural :=
+                             ((Match_Byte / 16#100#) mod 2) * 16#100#;
+                        begin
+                           LZMA_Encode_Bit
+                             (E,
+                              Literals
+                                (Context * LZMA_Literal_Probs
+                                 + 16#100# + Match_Bit_Literal + Symbol),
+                              Bit);
+                           Symbol := Symbol * 2 + Bit;
+                           if Match_Bit_Literal /= Bit * 16#100# then
+                              Matched := False;
+                           end if;
+                        end;
+                     else
+                        LZMA_Encode_Bit
+                          (E,
+                           Literals (Context * LZMA_Literal_Probs + Symbol),
+                           Bit);
+                        Symbol := Symbol * 2 + Bit;
+                     end if;
+                  end;
+               end loop;
+            end;
+         else
+            for Bit_Index in reverse 0 .. 7 loop
+               declare
+                  Bit : constant Natural :=
+                    (Natural (B) / (2 ** Bit_Index)) mod 2;
+               begin
+                  LZMA_Encode_Bit
+                    (E, Literals (Context * LZMA_Literal_Probs + Symbol), Bit);
+                  Symbol := Symbol * 2 + Bit;
+               end;
+            end loop;
+         end if;
+         State := LZMA_Literal_State_After (State);
+         Prev := B;
+         Position := Position + 1;
+         In_Index := In_Index + 1;
+      end Emit_Literal;
+
+      procedure Advance_Match (Len : Natural) is
+      begin
+         --  The first position was already inserted at the top of the main
+         --  loop; insert the remaining consumed positions.
+         for K in 1 .. Len - 1 loop
+            Insert (In_Index + K);
+         end loop;
+         Prev := Plain (In_Index + Len - 1);
+         Position := Position + Len;
+         In_Index := In_Index + Len;
+      end Advance_Match;
    begin
       Zlib.Bit_Writer.Reset (E.Writer);
       LZMA_Init_Probs (Is_Match);
@@ -4200,151 +4382,121 @@ package body Zlib is
 
       while In_Index <= Plain'Last loop
          declare
-            B         : constant Byte := Plain (In_Index);
             Pos_State : constant Natural := Position mod Pos_States;
-            Best_Len  : Natural := 0;
-            Best_Dist : Natural := 0;
-            Rep_Len0  : Natural := 0;
+            M_Len     : Natural;
+            M_Dist    : Natural;
+            Rep_Idx   : Natural;
+            Rep_Best  : Natural;
+            Use_Rep   : Boolean;
+            Cur_Len   : Natural;
+            Defer     : Boolean := False;
          begin
-            if Rep0 > 0 and then Rep0 <= Position then
-               while In_Index + Rep_Len0 <= Plain'Last
-                 and then Rep_Len0 < LZMA_Max_Fast_Match_Length
-                 and then Plain (In_Index + Rep_Len0) =
-                   Plain (In_Index + Rep_Len0 - Rep0)
-               loop
-                  Rep_Len0 := Rep_Len0 + 1;
-               end loop;
+            Find_Match (In_Index, M_Len, M_Dist);
+            Best_Rep (In_Index, Rep_Idx, Rep_Best);
+            --  Skip an expensive length-2 normal match with a large distance.
+            if M_Len = LZMA_Min_Match_Length and then M_Dist > 512 then
+               M_Len := 0;
             end if;
 
-            for Distance in 1 .. Natural'Min (LZMA_Max_Search_Distance, Position) loop
-               declare
-                  Candidate_Len : Natural := 0;
-               begin
-                  while In_Index + Candidate_Len <= Plain'Last
-                    and then Candidate_Len < LZMA_Max_Fast_Match_Length
-                    and then
-                      Plain (In_Index + Candidate_Len) =
-                      Plain (In_Index + Candidate_Len - Distance)
-                  loop
-                     Candidate_Len := Candidate_Len + 1;
-                  end loop;
+            --  Insert the current position so the lazy look-ahead can see it.
+            Insert (In_Index);
 
-                  if Candidate_Len > Best_Len then
-                     Best_Len := Candidate_Len;
-                     Best_Dist := Distance;
-                  end if;
-               end;
-            end loop;
+            Use_Rep := Rep_Best >= LZMA_Min_Match_Length
+              and then Rep_Best >= M_Len;
+            if Use_Rep then
+               Cur_Len := Rep_Best;
+            elsif M_Len >= LZMA_Min_Match_Length then
+               Cur_Len := M_Len;
+            else
+               Cur_Len := 0;
+            end if;
 
-            if Best_Len >= LZMA_Min_Match_Length
-              or else Rep_Len0 >= LZMA_Min_Match_Length
+            --  Lazy matching: if a strictly longer match (normal or any rep)
+            --  starts at the next byte, emit a literal here instead.
+            if Cur_Len >= LZMA_Min_Match_Length
+              and then Cur_Len < Nice_Len
+              and then In_Index < Plain'Last
             then
+               declare
+                  N_Len  : Natural;
+                  N_Dist : Natural;
+                  N_Idx  : Natural;
+                  N_Rep  : Natural;
+               begin
+                  Find_Match (In_Index + 1, N_Len, N_Dist);
+                  if N_Len = LZMA_Min_Match_Length and then N_Dist > 512 then
+                     N_Len := 0;
+                  end if;
+                  Best_Rep (In_Index + 1, N_Idx, N_Rep);
+                  Defer := Natural'Max (N_Len, N_Rep) > Cur_Len;
+               end;
+            end if;
+
+            if Defer or else Cur_Len < LZMA_Min_Match_Length then
+               Emit_Literal;
+            elsif Use_Rep then
+               --  Repeated-distance match (one of the last four distances).
                LZMA_Encode_Bit
                  (E, Is_Match (State * LZMA_Num_Pos_States_Max + Pos_State), 1);
-               if Rep_Len0 >= LZMA_Min_Match_Length
-                 and then Rep_Len0 >= Best_Len
-               then
-                  LZMA_Encode_Bit (E, Is_Rep (State), 1);
-                  LZMA_Encode_Bit (E, Is_Rep_G0 (State), 0);
-                  LZMA_Encode_Bit
-                    (E, Is_Rep0_Long (State * LZMA_Num_Pos_States_Max + Pos_State), 1);
-                  LZMA_Encode_Len
-                    (E, Rep_Len, Pos_State,
-                     Rep_Len0 - LZMA_Min_Match_Length);
-                  State := LZMA_Rep_State_After (State);
-                  Prev := Plain (In_Index + Rep_Len0 - 1);
-                  Position := Position + Rep_Len0;
-                  In_Index := In_Index + Rep_Len0;
-               else
-                  LZMA_Encode_Bit (E, Is_Rep (State), 0);
-                  LZMA_Encode_Len
-                    (E, Match_Len, Pos_State,
-                     Best_Len - LZMA_Min_Match_Length);
-                  LZMA_Encode_Distance
-                    (E, Pos_Slot, Pos_Special, Pos_Align, Best_Len,
-                     Best_Dist);
-                  Rep0 := Best_Dist;
-                  State := LZMA_Match_State_After (State);
-                  Prev := Plain (In_Index + Best_Len - 1);
-                  Position := Position + Best_Len;
-                  In_Index := In_Index + Best_Len;
-               end if;
-            else
-               declare
-                  Context : constant Natural :=
-                    LZMA_Literal_Context
-                      (LZMA_Default_LC, LZMA_Default_LP, Position, Prev);
-                  Symbol  : Natural := 1;
-               begin
-                  LZMA_Encode_Bit
-                    (E, Is_Match (State * LZMA_Num_Pos_States_Max + Pos_State), 0);
-
-                  if State >= 7
-                    and then Rep0 > 0
-                    and then Rep0 <= Position
-                  then
-                     --  Matched literal (standard LZMA): code each bit against
-                     --  the byte Rep0 back using the match-conditioned model
-                     --  until they diverge, then fall back to the plain model.
+               LZMA_Encode_Bit (E, Is_Rep (State), 1);
+               case Rep_Idx is
+                  when 0 =>
+                     LZMA_Encode_Bit (E, Is_Rep_G0 (State), 0);
+                     LZMA_Encode_Bit
+                       (E,
+                        Is_Rep0_Long
+                          (State * LZMA_Num_Pos_States_Max + Pos_State), 1);
+                  when 1 =>
+                     LZMA_Encode_Bit (E, Is_Rep_G0 (State), 1);
+                     LZMA_Encode_Bit (E, Is_Rep_G1 (State), 0);
                      declare
-                        Match_Byte : Natural :=
-                          Natural (Plain (In_Index - Rep0));
-                        Matched    : Boolean := True;
+                        D : constant Natural := Rep1;
                      begin
-                        for Bit_Index in reverse 0 .. 7 loop
-                           declare
-                              Bit : constant Natural :=
-                                (Natural (B) / (2 ** Bit_Index)) mod 2;
-                           begin
-                              if Matched then
-                                 Match_Byte := Match_Byte * 2;
-                                 declare
-                                    Match_Bit_Literal : constant Natural :=
-                                      ((Match_Byte / 16#100#) mod 2) * 16#100#;
-                                 begin
-                                    LZMA_Encode_Bit
-                                      (E,
-                                       Literals
-                                         (Context * LZMA_Literal_Probs
-                                          + 16#100# + Match_Bit_Literal
-                                          + Symbol),
-                                       Bit);
-                                    Symbol := Symbol * 2 + Bit;
-                                    if Match_Bit_Literal /= Bit * 16#100# then
-                                       Matched := False;
-                                    end if;
-                                 end;
-                              else
-                                 LZMA_Encode_Bit
-                                   (E,
-                                    Literals
-                                      (Context * LZMA_Literal_Probs + Symbol),
-                                    Bit);
-                                 Symbol := Symbol * 2 + Bit;
-                              end if;
-                           end;
-                        end loop;
+                        Rep1 := Rep0;
+                        Rep0 := D;
                      end;
-                  else
-                     for Bit_Index in reverse 0 .. 7 loop
-                        declare
-                           Bit : constant Natural :=
-                             (Natural (B) / (2 ** Bit_Index)) mod 2;
-                        begin
-                           LZMA_Encode_Bit
-                             (E,
-                              Literals (Context * LZMA_Literal_Probs + Symbol),
-                              Bit);
-                           Symbol := Symbol * 2 + Bit;
-                        end;
-                     end loop;
-                  end if;
-
-                  State := LZMA_Literal_State_After (State);
-                  Prev := B;
-                  Position := Position + 1;
-                  In_Index := In_Index + 1;
-               end;
+                  when 2 =>
+                     LZMA_Encode_Bit (E, Is_Rep_G0 (State), 1);
+                     LZMA_Encode_Bit (E, Is_Rep_G1 (State), 1);
+                     LZMA_Encode_Bit (E, Is_Rep_G2 (State), 0);
+                     declare
+                        D : constant Natural := Rep2;
+                     begin
+                        Rep2 := Rep1;
+                        Rep1 := Rep0;
+                        Rep0 := D;
+                     end;
+                  when others =>
+                     LZMA_Encode_Bit (E, Is_Rep_G0 (State), 1);
+                     LZMA_Encode_Bit (E, Is_Rep_G1 (State), 1);
+                     LZMA_Encode_Bit (E, Is_Rep_G2 (State), 1);
+                     declare
+                        D : constant Natural := Rep3;
+                     begin
+                        Rep3 := Rep2;
+                        Rep2 := Rep1;
+                        Rep1 := Rep0;
+                        Rep0 := D;
+                     end;
+               end case;
+               LZMA_Encode_Len
+                 (E, Rep_Len, Pos_State, Cur_Len - LZMA_Min_Match_Length);
+               State := LZMA_Rep_State_After (State);
+               Advance_Match (Cur_Len);
+            else
+               LZMA_Encode_Bit
+                 (E, Is_Match (State * LZMA_Num_Pos_States_Max + Pos_State), 1);
+               LZMA_Encode_Bit (E, Is_Rep (State), 0);
+               LZMA_Encode_Len
+                 (E, Match_Len, Pos_State, Cur_Len - LZMA_Min_Match_Length);
+               LZMA_Encode_Distance
+                 (E, Pos_Slot, Pos_Special, Pos_Align, Cur_Len, M_Dist);
+               Rep3 := Rep2;
+               Rep2 := Rep1;
+               Rep1 := Rep0;
+               Rep0 := M_Dist;
+               State := LZMA_Match_State_After (State);
+               Advance_Match (Cur_Len);
             end if;
          end;
       end loop;
