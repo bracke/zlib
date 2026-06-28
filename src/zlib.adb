@@ -8825,8 +8825,9 @@ package body Zlib is
       if All_Have_Attributes then
          Header.Append (16#15#); --  WinAttributes
          Append_Seven_Zip_Number
-           (Header, Interfaces.Unsigned_64 (1 + 4 * Metadata'Length));
+           (Header, Interfaces.Unsigned_64 (2 + 4 * Metadata'Length));
          Header.Append (1); --  all entries defined
+         Header.Append (0); --  inline values, not external
          for Item of Metadata loop
             Append_U32_LE (Header, Item.Windows_Attributes);
          end loop;
@@ -9926,10 +9927,12 @@ package body Zlib is
       Mode        : Compression_Mode;
       Level       : Compression_Level;
       Use_Level   : Boolean;
+      Solid       : Boolean;
       Status      : out Status_Code)
    is
       Count        : constant Natural := Input_Paths'Length;
       Payloads     : Byte_Vectors.Vector;
+      Solid_Input  : Byte_Vectors.Vector;
       Read_Status  : Status_Code := Ok;
       Write_Status : Status_Code := Ok;
 
@@ -10041,39 +10044,107 @@ package body Zlib is
                         return;
                      end if;
 
-                     declare
-                        Compress_Status : Status_Code := Ok;
-                        Packed_Data     : constant Byte_Array :=
-                          Pack_Input (Input_Data, Compress_Status);
-                     begin
-                        if Compress_Status /= Ok then
-                           Status := Compress_Status;
-                           return;
-                        end if;
+                     Unpack_Sizes (Stream_Count) :=
+                       Interfaces.Unsigned_64 (Input_Data'Length);
+                     Unpack_CRCs (Stream_Count) := CRC32 (Input_Data);
 
-                        Pack_Sizes (Stream_Count) :=
-                          Interfaces.Unsigned_64 (Packed_Data'Length);
-                        Pack_CRCs (Stream_Count) := CRC32 (Packed_Data);
-                        Unpack_Sizes (Stream_Count) :=
-                          Interfaces.Unsigned_64 (Input_Data'Length);
-                        Unpack_CRCs (Stream_Count) := CRC32 (Input_Data);
-
-                        for B of Packed_Data loop
-                           Payloads.Append (B);
+                     if Solid then
+                        --  Defer compression: concatenate into one stream.
+                        for B of Input_Data loop
+                           Solid_Input.Append (B);
                         end loop;
-                     end;
+                     else
+                        declare
+                           Compress_Status : Status_Code := Ok;
+                           Packed_Data     : constant Byte_Array :=
+                             Pack_Input (Input_Data, Compress_Status);
+                        begin
+                           if Compress_Status /= Ok then
+                              Status := Compress_Status;
+                              return;
+                           end if;
+
+                           Pack_Sizes (Stream_Count) :=
+                             Interfaces.Unsigned_64 (Packed_Data'Length);
+                           Pack_CRCs (Stream_Count) := CRC32 (Packed_Data);
+
+                           for B of Packed_Data loop
+                              Payloads.Append (B);
+                           end loop;
+                        end;
+                     end if;
                   end;
                end if;
             end;
          end loop;
 
+         if Solid and then Stream_Count > 0 then
+            declare
+               Solid_Data      : constant Byte_Array :=
+                 To_Byte_Array (Solid_Input);
+               Compress_Status : Status_Code := Ok;
+               Packed_Data     : constant Byte_Array :=
+                 Pack_Input (Solid_Data, Compress_Status);
+            begin
+               if Compress_Status /= Ok then
+                  Status := Compress_Status;
+                  return;
+               end if;
+               Pack_Sizes (1) := Interfaces.Unsigned_64 (Packed_Data'Length);
+               for B of Packed_Data loop
+                  Payloads.Append (B);
+               end loop;
+            end;
+         end if;
+
          declare
             Header     : Byte_Vectors.Vector;
             Name_Field : Byte_Vectors.Vector;
+            Total_Unpack_Size : Interfaces.Unsigned_64 := 0;
          begin
+            for I in 1 .. Stream_Count loop
+               Total_Unpack_Size := Total_Unpack_Size + Unpack_Sizes (I);
+            end loop;
+
             Header.Append (16#01#); --  Header
 
-            if Stream_Count > 0 then
+            if Stream_Count > 0 and then Solid then
+               Header.Append (16#04#); --  MainStreamsInfo
+               Header.Append (16#06#); --  PackInfo
+               Append_Seven_Zip_Number (Header, 0);
+               Append_Seven_Zip_Number (Header, 1);
+               Header.Append (16#09#); --  Size
+               Append_Seven_Zip_Number (Header, Pack_Sizes (1));
+               Header.Append (0);      --  end PackInfo
+
+               Header.Append (16#07#); --  UnPackInfo
+               Header.Append (16#0B#); --  Folder
+               Append_Seven_Zip_Number (Header, 1);  --  one folder
+               Header.Append (0);
+               Append_Seven_Zip_Number (Header, 1);  --  one coder
+               Append_Seven_Zip_Coder (Header, Method);
+               Header.Append (16#0C#); --  CodersUnPackSize
+               Append_Seven_Zip_Number (Header, Total_Unpack_Size);
+               Header.Append (0);      --  end UnPackInfo (no folder CRC)
+
+               Header.Append (16#08#); --  SubStreamsInfo
+               Header.Append (16#0D#); --  NumUnPackStream
+               Append_Seven_Zip_Number
+                 (Header, Interfaces.Unsigned_64 (Stream_Count));
+               if Stream_Count > 1 then
+                  Header.Append (16#09#); --  Size (all but last substream)
+                  for I in 1 .. Stream_Count - 1 loop
+                     Append_Seven_Zip_Number (Header, Unpack_Sizes (I));
+                  end loop;
+               end if;
+               Header.Append (16#0A#); --  CRC
+               Header.Append (1);
+               for I in 1 .. Stream_Count loop
+                  Append_U32_LE (Header, Unpack_CRCs (I));
+               end loop;
+               Header.Append (0);      --  end SubStreamsInfo
+               Header.Append (0);      --  end MainStreamsInfo
+            elsif Stream_Count > 0 then
                Header.Append (16#04#); --  MainStreamsInfo
                Header.Append (16#06#); --  PackInfo
                Append_Seven_Zip_Number (Header, 0);
@@ -10205,7 +10276,7 @@ package body Zlib is
    begin
       Seven_Zip_Compressed_Files_Internal
         (Input_Paths, Output_Path, Entry_Names, Seven_Zip_Deflate_Method,
-         Mode, Default_Level, False, Status);
+         Mode, Default_Level, False, False, Status);
    end Seven_Zip_Deflate_Files;
 
    procedure Seven_Zip_Deflate_Files
@@ -10217,7 +10288,7 @@ package body Zlib is
    begin
       Seven_Zip_Compressed_Files_Internal
         (Input_Paths, Output_Path, Entry_Names, Seven_Zip_Deflate_Method,
-         Auto, Level, True, Status);
+         Auto, Level, True, False, Status);
    end Seven_Zip_Deflate_Files;
 
    procedure Seven_Zip_Deflate_Files
@@ -10238,7 +10309,7 @@ package body Zlib is
    begin
       Seven_Zip_Compressed_Files_Internal
         (Input_Paths, Output_Path, Entry_Names, Seven_Zip_BZip2_Method,
-         Auto, Default_Level, False, Status);
+         Auto, Default_Level, False, False, Status);
    end Seven_Zip_BZip2_Files;
 
    procedure Seven_Zip_LZMA_Files
@@ -10249,7 +10320,7 @@ package body Zlib is
    begin
       Seven_Zip_Compressed_Files_Internal
         (Input_Paths, Output_Path, Entry_Names, Seven_Zip_LZMA_Method,
-         Auto, Default_Level, False, Status);
+         Auto, Default_Level, False, False, Status);
    end Seven_Zip_LZMA_Files;
 
    procedure Seven_Zip_LZMA2_Files
@@ -10260,7 +10331,7 @@ package body Zlib is
    begin
       Seven_Zip_Compressed_Files_Internal
         (Input_Paths, Output_Path, Entry_Names, Seven_Zip_LZMA2_Method,
-         Auto, Default_Level, False, Status);
+         Auto, Default_Level, False, False, Status);
    end Seven_Zip_LZMA2_Files;
 
    procedure Seven_Zip_PPMd_Files
@@ -10271,8 +10342,41 @@ package body Zlib is
    begin
       Seven_Zip_Compressed_Files_Internal
         (Input_Paths, Output_Path, Entry_Names, Seven_Zip_PPMd_Method,
-         Auto, Default_Level, False, Status);
+         Auto, Default_Level, False, False, Status);
    end Seven_Zip_PPMd_Files;
+
+   procedure Seven_Zip_LZMA_Solid_Files
+     (Input_Paths : Text_Array;
+      Output_Path : String;
+      Entry_Names : Text_Array;
+      Status      : out Status_Code) is
+   begin
+      Seven_Zip_Compressed_Files_Internal
+        (Input_Paths, Output_Path, Entry_Names, Seven_Zip_LZMA_Method,
+         Auto, Default_Level, False, True, Status);
+   end Seven_Zip_LZMA_Solid_Files;
+
+   procedure Seven_Zip_LZMA2_Solid_Files
+     (Input_Paths : Text_Array;
+      Output_Path : String;
+      Entry_Names : Text_Array;
+      Status      : out Status_Code) is
+   begin
+      Seven_Zip_Compressed_Files_Internal
+        (Input_Paths, Output_Path, Entry_Names, Seven_Zip_LZMA2_Method,
+         Auto, Default_Level, False, True, Status);
+   end Seven_Zip_LZMA2_Solid_Files;
+
+   procedure Seven_Zip_PPMd_Solid_Files
+     (Input_Paths : Text_Array;
+      Output_Path : String;
+      Entry_Names : Text_Array;
+      Status      : out Status_Code) is
+   begin
+      Seven_Zip_Compressed_Files_Internal
+        (Input_Paths, Output_Path, Entry_Names, Seven_Zip_PPMd_Method,
+         Auto, Default_Level, False, True, Status);
+   end Seven_Zip_PPMd_Solid_Files;
 
    function Extract_Seven_Zip_Entry
      (Archive_Image : Byte_Array;

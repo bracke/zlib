@@ -756,6 +756,46 @@ package body Zlib_Release_Contract_Tests is
          First_Data,
          "public PPMd 7z file-list first payload");
 
+      --  Solid multi-file archives: all entries in one shared folder.
+      Delete_If_Exists (Archive_Path);
+      Delete_If_Exists (Output_Dir);
+      Zlib.Seven_Zip_LZMA_Solid_Files
+        (Input_Paths, Archive_Path, Entry_Names, Status);
+      Assert
+        (Status = Zlib.Ok, "Seven_Zip_LZMA_Solid_Files must succeed");
+      Zlib.Extract_Seven_Zip_Files
+        (Archive_Path, Output_Dir, Entry_Names, Status);
+      Assert (Status = Zlib.Ok, "extract solid LZMA file list");
+      Assert_Bytes_Equal
+        (Read_File (Ada.Directories.Compose (Output_Dir, "first.bin")),
+         First_Data, "solid LZMA first payload");
+
+      Delete_If_Exists (Archive_Path);
+      Delete_If_Exists (Output_Dir);
+      Zlib.Seven_Zip_LZMA2_Solid_Files
+        (Input_Paths, Archive_Path, Entry_Names, Status);
+      Assert
+        (Status = Zlib.Ok, "Seven_Zip_LZMA2_Solid_Files must succeed");
+      Zlib.Extract_Seven_Zip_Files
+        (Archive_Path, Output_Dir, Entry_Names, Status);
+      Assert (Status = Zlib.Ok, "extract solid LZMA2 file list");
+      Assert_Bytes_Equal
+        (Read_File (Ada.Directories.Compose (Output_Dir, "first.bin")),
+         First_Data, "solid LZMA2 first payload");
+
+      Delete_If_Exists (Archive_Path);
+      Delete_If_Exists (Output_Dir);
+      Zlib.Seven_Zip_PPMd_Solid_Files
+        (Input_Paths, Archive_Path, Entry_Names, Status);
+      Assert
+        (Status = Zlib.Ok, "Seven_Zip_PPMd_Solid_Files must succeed");
+      Zlib.Extract_Seven_Zip_Files
+        (Archive_Path, Output_Dir, Entry_Names, Status);
+      Assert (Status = Zlib.Ok, "extract solid PPMd file list");
+      Assert_Bytes_Equal
+        (Read_File (Ada.Directories.Compose (Output_Dir, "first.bin")),
+         First_Data, "solid PPMd first payload");
+
       Delete_If_Exists (First_Path);
       Delete_If_Exists (Second_Path);
       Delete_If_Exists (Archive_Path);

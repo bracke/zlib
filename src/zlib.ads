@@ -1598,6 +1598,43 @@ package Zlib is
    --  @param Entry_Names archive entry names, without NUL characters
    --  @param Status set to Ok on success, otherwise a deterministic failure code
 
+   procedure Seven_Zip_LZMA_Solid_Files
+     (Input_Paths : Text_Array;
+      Output_Path : String;
+      Entry_Names : Text_Array;
+      Status      : out Status_Code);
+   --  Like Seven_Zip_LZMA_Files but SOLID: all ordinary files are
+   --  concatenated and compressed into a single LZMA folder, with per-file
+   --  substream sizes and CRCs, for a better ratio across many small files.
+   --  Stock 7z reads the result and our extractor round-trips it.
+   --  @param Input_Paths source files or directories to archive
+   --  @param Output_Path path that receives the .7z archive
+   --  @param Entry_Names archive entry names, without NUL characters
+   --  @param Status set to Ok on success, otherwise a deterministic failure code
+
+   procedure Seven_Zip_LZMA2_Solid_Files
+     (Input_Paths : Text_Array;
+      Output_Path : String;
+      Entry_Names : Text_Array;
+      Status      : out Status_Code);
+   --  Solid LZMA2 multi-file archive (see Seven_Zip_LZMA_Solid_Files).
+   --  @param Input_Paths source files or directories to archive
+   --  @param Output_Path path that receives the .7z archive
+   --  @param Entry_Names archive entry names, without NUL characters
+   --  @param Status set to Ok on success, otherwise a deterministic failure code
+
+   procedure Seven_Zip_PPMd_Solid_Files
+     (Input_Paths : Text_Array;
+      Output_Path : String;
+      Entry_Names : Text_Array;
+      Status      : out Status_Code);
+   --  Solid PPMd multi-file archive (see Seven_Zip_LZMA_Solid_Files). PPMd
+   --  benefits most from solid mode since its model carries across files.
+   --  @param Input_Paths source files or directories to archive
+   --  @param Output_Path path that receives the .7z archive
+   --  @param Entry_Names archive entry names, without NUL characters
+   --  @param Status set to Ok on success, otherwise a deterministic failure code
+
    function Seven_Zip_Stored
      (Input      : Byte_Array;
       Entry_Name : String;

@@ -195,14 +195,21 @@ Still future work: 7z-style flush-at-long-match segmentation (removes the small
 residual match split at segment boundaries on pathological inputs) and per-input
 `lc`/`lp`/`pb` tuning (defaults 3/0/2).
 
-### M5 — Solid compression
+### M5 — Solid compression — DONE
 
-Real ratio wins for many-file archives come from a single shared stream.
+`Seven_Zip_Compressed_Files_Internal` gained a solid mode: it concatenates all
+ordinary-file payloads, compresses them as a single folder, and emits
+`SubStreamsInfo` (per-file substream sizes + CRCs). Public entry points
+`Seven_Zip_{LZMA,LZMA2,PPMd}_Solid_Files`. The decoder already handled solid
+substreams.
 
-- `*_Files` writers currently pack entries independently. Add a solid mode that
-  concatenates entry payloads into one folder with substream sizes/CRCs.
-- Decoder already handles covered solid substreams; verify and broaden.
-- Tests: multi-file solid archives, both directions, vs stock `7z`.
+Also fixed a pre-existing bug in the shared multi-file metadata writer (the
+`WinAttributes` property omitted its `External` byte), which had made **all**
+multi-file archives — solid and non-solid — unreadable by stock `7z`.
+
+Validated both directions vs stock `7z`: our solid archives extract in stock and
+round-trip in our extractor (LZMA/LZMA2/PPMd, 5–8 files); the ratio win is large
+on many similar files (e.g. 1.3 KB solid vs 5.4 KB non-solid). 845/845 green.
 
 ### M6 — Encryption (AES-256 + SHA-256 key derivation, encrypted headers)
 
