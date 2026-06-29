@@ -11228,11 +11228,55 @@ package body Zlib_Seven_Zip_Tests is
          raise;
    end Test_Stored_Extract_Rejects_Duplicate_Names;
 
+   procedure Test_AES_Encrypt_Decrypt_Roundtrip
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Data   : Zlib.Byte_Array (1 .. 200);
+      Status : Zlib.Status_Code := Zlib.Unsupported_Method;
+   begin
+      for I in Data'Range loop
+         Data (I) := Zlib.Byte ((I * 7 + 3) mod 256);
+      end loop;
+      declare
+         Archive : constant Zlib.Byte_Array :=
+           Zlib.Seven_Zip_LZMA_Encrypted
+             (Data, "secret.bin", "pa55word", Status);
+      begin
+         Assert
+           (Status = Zlib.Ok,
+            "AES-256 7z encryption: " & Zlib.Status_Image (Status));
+         declare
+            Out_Status : Zlib.Status_Code := Zlib.Unsupported_Method;
+            Decoded    : constant Zlib.Byte_Array :=
+              Zlib.Extract_Seven_Zip
+                (Archive, "secret.bin", "pa55word", Out_Status);
+         begin
+            Assert
+              (Out_Status = Zlib.Ok and then Decoded = Data,
+               "AES-256 7z round-trips with the correct password");
+         end;
+         declare
+            Bad_Status : Zlib.Status_Code := Zlib.Ok;
+            Bad        : constant Zlib.Byte_Array :=
+              Zlib.Extract_Seven_Zip
+                (Archive, "secret.bin", "wrong-password", Bad_Status);
+         begin
+            Assert
+              (Bad_Status /= Zlib.Ok or else Bad /= Data,
+               "AES-256 7z rejects a wrong password");
+         end;
+      end;
+   end Test_AES_Encrypt_Decrypt_Roundtrip;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Test_AES_Encrypt_Decrypt_Roundtrip'Access,
+         "native 7z AES-256 encrypt/decrypt round-trip");
       Register_Routine
         (T, Test_Stored_Header_Structure'Access,
          "native stored 7z header structure and CRCs");
