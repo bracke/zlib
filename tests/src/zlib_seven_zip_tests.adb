@@ -11412,6 +11412,15 @@ package body Zlib_Seven_Zip_Tests is
                and then Entries (1).Uncompressed_Size = 250,
                "7z catalogue lists the entry with its uncompressed size");
          end;
+         declare
+            AStatus : Zlib.Status_Code := Zlib.Unsupported_Method;
+            Auto    : constant Zlib.Archive_Entry_Array :=
+              Zlib.List_Archive_Entries (Archive, "", AStatus);
+         begin
+            Assert
+              (AStatus = Zlib.Ok and then Auto'Length = 1,
+               "List_Archive_Entries auto-detects the 7z archive");
+         end;
       end;
    end Test_Seven_Zip_List;
 

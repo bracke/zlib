@@ -791,6 +791,18 @@ package Zlib is
    --  @param Status Ok on success, otherwise a deterministic failure code
    --  @return one Archive_Entry per file when Status is Ok
 
+   function List_Archive_Entries
+     (Archive_Image : Byte_Array;
+      Password      : String;
+      Status        : out Status_Code) return Archive_Entry_Array;
+   --  Auto-detect ZIP or 7z by signature and catalogue every member, without
+   --  decompressing payloads. Password is used only to decode 7z encrypted
+   --  headers; pass "" when not needed.
+   --  @param Archive_Image complete ZIP or .7z archive image
+   --  @param Password archive password, or "" if not needed
+   --  @param Status Ok on success, otherwise a deterministic failure code
+   --  @return one Archive_Entry per member when Status is Ok
+
    procedure Extract_Archive_To_Directory
      (Archive_Image   : Byte_Array;
       Destination_Dir : String;

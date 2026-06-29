@@ -16025,6 +16025,30 @@ package body Zlib is
         (Image, Destination_Dir, Password, Status);
    end Extract_Archive_File_To_Directory;
 
+   function List_Archive_Entries
+     (Archive_Image : Byte_Array;
+      Password      : String;
+      Status        : out Status_Code) return Archive_Entry_Array
+   is
+      Is_7z : constant Boolean :=
+        Archive_Image'Length >= 6
+        and then Archive_Image (Archive_Image'First) = 16#37#
+        and then Archive_Image (Archive_Image'First + 1) = 16#7A#
+        and then Archive_Image (Archive_Image'First + 2) = 16#BC#
+        and then Archive_Image (Archive_Image'First + 3) = 16#AF#;
+   begin
+      if Is_7z then
+         Active_Seven_Zip_Password := US.To_Unbounded_String (Password);
+         return R : constant Archive_Entry_Array :=
+           List_Seven_Zip_Entries (Archive_Image, Status)
+         do
+            Active_Seven_Zip_Password := US.Null_Unbounded_String;
+         end return;
+      else
+         return List_ZIP_Entries (Archive_Image, Status);
+      end if;
+   end List_Archive_Entries;
+
    function Extract_Seven_Zip_Metadata
      (Archive_Image : Byte_Array;
       Entry_Name    : String;
