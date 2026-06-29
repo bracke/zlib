@@ -31,4 +31,8 @@ package Zlib.Seven_Zip_AES is
    function Pad_To_Block (Data : Byte_Array) return Byte_Array;
    --  Zero-pad Data up to the next 16-byte boundary (7z AES padding).
 
+   function Random_IV return Byte_Array;
+   --  16 cryptographically-random bytes (CSPRNG) for an AES-CBC IV. Falls
+   --  back to zeros only if the system entropy source is unavailable.
+
 end Zlib.Seven_Zip_AES;

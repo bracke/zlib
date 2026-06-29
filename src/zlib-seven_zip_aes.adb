@@ -1,6 +1,7 @@
 with Ada.Streams; use Ada.Streams;
 with CryptoLib.Hashes;
 with CryptoLib.Ciphers;
+with CryptoLib.Random;
 with CryptoLib.Errors;
 
 package body Zlib.Seven_Zip_AES is
@@ -119,5 +120,18 @@ package body Zlib.Seven_Zip_AES is
       end if;
       return R;
    end Pad_To_Block;
+
+   function Random_IV return Byte_Array is
+      Src : CryptoLib.Random.Random_Source;
+      Buf : Stream_Element_Array (1 .. 16);
+      St  : CryptoLib.Errors.Status;
+   begin
+      CryptoLib.Random.Initialize_Production (Src);
+      St := CryptoLib.Random.Fill (Src, Buf);
+      if St /= CryptoLib.Errors.Ok then
+         return [1 .. 16 => 0];
+      end if;
+      return To_BA (Buf);
+   end Random_IV;
 
 end Zlib.Seven_Zip_AES;

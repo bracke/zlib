@@ -8812,20 +8812,8 @@ package body Zlib is
            Zlib.Seven_Zip_AES.Pad_To_Block (Compressed);
          Key        : constant Byte_Array :=
            Zlib.Seven_Zip_AES.Derive_Key (Password, Empty, Num_Cycles_Power);
-         --  IV derived from the data so distinct inputs get distinct IVs
-         --  (a full CSPRNG IV is a later refinement).
-         IV         : Byte_Array (1 .. 16);
+         IV         : constant Byte_Array := Zlib.Seven_Zip_AES.Random_IV;
       begin
-         declare
-            Seed : Interfaces.Unsigned_32 :=
-              CRC32 (Input) xor 16#9E37_79B1#;
-         begin
-            for J in IV'Range loop
-               Seed := Seed * 1_103_515_245 + 12_345;
-               IV (J) := Byte (Interfaces.Shift_Right (Seed, 16) and 16#FF#);
-            end loop;
-         end;
-
          declare
             Pack_V : constant Byte_Array :=
               Zlib.Seven_Zip_AES.Encrypt_CBC (Key, IV, Padded);
