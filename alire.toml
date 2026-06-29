@@ -1,6 +1,6 @@
 name = "zlib"
-description = "Pure Ada zlib, gzip, and raw Deflate compression and decompression"
-version = "0.1.0-dev"
+description = "Pure Ada zlib, gzip, raw Deflate, and native 7z compression"
+version = "0.1.0"
 
 authors = ["Bent Bracke"]
 maintainers = ["Bent Bracke <bent@bracke.dk>"]

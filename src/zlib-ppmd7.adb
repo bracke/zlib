@@ -435,7 +435,7 @@ package body Zlib.PPMd7 is
       Restart_Model (P);
    end Init;
 
-   --  Placeholder for the OOM glue path (only hit by large inputs).
+   --  The memory-pressure glue path (only hit by large inputs).
    --  Coalesce adjacent free blocks back into larger units, then re-split
    --  them across the indexed free lists (faithful to Ppmd7 GlueFreeBlocks).
    --  Free nodes are tagged Stamp=0; allocated contexts/state blocks always

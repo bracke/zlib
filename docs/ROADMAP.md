@@ -1,6 +1,6 @@
 # Roadmap
 
-`Zlib` is currently at development version `0.1.0-dev`. The intended initial stable surface is the
+`Zlib` is at version `0.1.0`. The intended initial stable surface is the
 public root-package API in `src/zlib.ads`, plus the documented examples, tools,
 tests, and deterministic fuzzing infrastructure shipped in this repository.
 
@@ -59,21 +59,31 @@ tools/bin/check_all
 
 The headline goal of the crate is **complete, pure-Ada 7z support**: decode any
 standard `.7z` archive that `7z`/p7zip can produce, and produce archives they
-can read back, with no external codec libraries. The currently shipped Copy /
-Deflate / BZip2 / LZMA / LZMA2 layouts and the narrow PPMd/filter subsets are
-*progress toward* this goal, not the intended end state.
+can read back, with no external codec libraries (AES uses the sibling
+`../cryptolib` Ada crate). This goal is **substantially met** — per-milestone
+status lives in `docs/SEVEN_ZIP_PLAN.md`.
 
-The detailed, ordered engineering plan lives in `docs/SEVEN_ZIP_PLAN.md`. The
-major remaining workstreams are:
+Delivered and validated against stock 7-Zip in both directions:
 
-- a general PPMd7 (variant H) encoder and decoder for arbitrary input;
-- AES-256 payload encryption, encrypted headers, and password handling
-  (including the SHA-256 key derivation 7z uses);
-- solid compression — a single shared compressed stream across many entries;
-- the full branch-filter family for encode and decode (ARM, ARM64, ARMT, PPC,
-  SPARC, IA-64, RISC-V), alongside the existing x86 BCJ and Delta;
-- a competitive LZMA/LZMA2 encoder (optimal parsing, tunable properties);
-- multi-volume (split) archives.
+- general PPMd7 (variant H) encoder and decoder, bit-exact, including the
+  memory-pressure glue path;
+- AES-256 payload encryption, encrypted headers (`mhe=on`) read **and** write,
+  and password handling (SHA-256 key derivation) via `../cryptolib`;
+- solid compression (one shared compressed stream across entries), including
+  encrypted solid archives for LZMA / LZMA2 / PPMd;
+- the branch-filter family on decode and (except RISC-V) encode — x86 masked
+  BCJ, ARM, ARM64, ARMT, PPC, SPARC, IA-64, plus Delta;
+- a competitive LZMA/LZMA2 encoder with optimal (price-based) parsing;
+- multi-volume (split) archives, read and write.
+
+Remaining 7z work:
+
+- **RISC-V** branch filter — deferred until a 7-Zip 24.x+ is available to
+  cross-validate against (the algorithm is in 24.x; 23.01 cannot verify it);
+- a public **writer for non-encrypted filtered archives** (e.g. `BCJ + LZMA`);
+  the decode side and the multi-coder writer machinery already exist;
+- a **BCJ2 encoder** (BCJ2 decode is supported; encode is the last decode-only
+  codec).
 
 ## Other future work
 
