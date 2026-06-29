@@ -11269,6 +11269,42 @@ package body Zlib_Seven_Zip_Tests is
       end;
    end Test_AES_Encrypt_Decrypt_Roundtrip;
 
+   procedure Test_AES_Encrypted_Header_Roundtrip
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Data   : Zlib.Byte_Array (1 .. 300);
+      Status : Zlib.Status_Code := Zlib.Unsupported_Method;
+   begin
+      for I in Data'Range loop
+         Data (I) := Zlib.Byte ((I * 11 + 5) mod 256);
+      end loop;
+      declare
+         Inner : constant Zlib.Byte_Array :=
+           Zlib.Seven_Zip_LZMA_Encrypted
+             (Data, "hidden.bin", "hdr-pw-9", Status);
+      begin
+         Assert (Status = Zlib.Ok, "encrypted data archive built");
+         declare
+            HStatus : Zlib.Status_Code := Zlib.Unsupported_Method;
+            MHE     : constant Zlib.Byte_Array :=
+              Zlib.Encrypt_Seven_Zip_Header (Inner, "hdr-pw-9", HStatus);
+         begin
+            Assert (HStatus = Zlib.Ok, "header encryption (mhe) applied");
+            declare
+               OStatus : Zlib.Status_Code := Zlib.Unsupported_Method;
+               Out_B   : constant Zlib.Byte_Array :=
+                 Zlib.Extract_Seven_Zip
+                   (MHE, "hidden.bin", "hdr-pw-9", OStatus);
+            begin
+               Assert
+                 (OStatus = Zlib.Ok and then Out_B = Data,
+                  "mhe archive round-trips header + data with the password");
+            end;
+         end;
+      end;
+   end Test_AES_Encrypted_Header_Roundtrip;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
@@ -11277,6 +11313,9 @@ package body Zlib_Seven_Zip_Tests is
       Register_Routine
         (T, Test_AES_Encrypt_Decrypt_Roundtrip'Access,
          "native 7z AES-256 encrypt/decrypt round-trip");
+      Register_Routine
+        (T, Test_AES_Encrypted_Header_Roundtrip'Access,
+         "native 7z AES-256 encrypted-header (mhe) round-trip");
       Register_Routine
         (T, Test_Stored_Header_Structure'Access,
          "native stored 7z header structure and CRCs");

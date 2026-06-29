@@ -10709,6 +10709,283 @@ package body Zlib is
                      declare
                         Encoded_Header_Pack_Pos : Natural := 0;
 
+                        --  Decode a 2-coder [AES -> LZMA] encoded header (7z
+                        --  "mhe=on"): parse the AES + LZMA coders, AES-decrypt
+                        --  the pack with the active password, then LZMA-decode
+                        --  to the real (plain) header bytes.
+                        function Decode_AES_Encoded_Header
+                          (Decode_Status : out Status_Code) return Byte_Array
+                        is
+                           P         : Natural := Header_First;
+                           V         : Interfaces.Unsigned_64 := 0;
+                           B         : Byte := 0;
+                           Pack_Pos  : Interfaces.Unsigned_64 := 0;
+                           Pack_Size : Interfaces.Unsigned_64 := 0;
+                           HC_Size   : Interfaces.Unsigned_64 := 0;
+                           Hdr_Size  : Interfaces.Unsigned_64 := 0;
+                           Cycles    : Natural := 0;
+                           Salt_Len  : Natural := 0;
+                           IV_Len    : Natural := 0;
+                           Salt      : Byte_Array (1 .. 16) := [others => 0];
+                           IV        : Byte_Array (1 .. 16) := [others => 0];
+                           LZMA_P    : Seven_Zip_LZMA_Props := [others => 0];
+                           Num_Coders : Natural := 0;
+                        begin
+                           Decode_Status := Unsupported_Method;
+                           if not Seven_Zip_Expect_Byte
+                             (Archive_Image, P, Header_Last, 16#17#)
+                           then
+                              return Empty;
+                           end if;
+                           if P <= Header_Last
+                             and then Archive_Image (P) = 16#04#
+                           then
+                              P := P + 1;
+                           end if;
+                           --  PackInfo
+                           if not Seven_Zip_Expect_Byte
+                                (Archive_Image, P, Header_Last, 16#06#)
+                             or else not Read_Seven_Zip_Number
+                               (Archive_Image, P, Header_Last, Pack_Pos)
+                             or else not Read_Seven_Zip_Number
+                               (Archive_Image, P, Header_Last, V)
+                             or else V /= 1
+                             or else not Seven_Zip_Expect_Byte
+                               (Archive_Image, P, Header_Last, 16#09#)
+                             or else not Read_Seven_Zip_Number
+                               (Archive_Image, P, Header_Last, Pack_Size)
+                           then
+                              return Empty;
+                           end if;
+                           if P <= Header_Last
+                             and then Archive_Image (P) = 16#0A#
+                           then
+                              P := P + 1;
+                              if not Seven_Zip_Expect_Byte
+                                   (Archive_Image, P, Header_Last, 1)
+                                or else not Seven_Zip_Has_Bytes
+                                  (P, Header_Last, 4)
+                              then
+                                 return Empty;
+                              end if;
+                              P := P + 4;
+                           end if;
+                           --  end PackInfo, UnpackInfo, Folder, 2 coders
+                           if not Seven_Zip_Expect_Byte
+                                (Archive_Image, P, Header_Last, 0)
+                             or else not Seven_Zip_Expect_Byte
+                               (Archive_Image, P, Header_Last, 16#07#)
+                             or else not Seven_Zip_Expect_Byte
+                               (Archive_Image, P, Header_Last, 16#0B#)
+                             or else not Read_Seven_Zip_Number
+                               (Archive_Image, P, Header_Last, V)
+                             or else V /= 1
+                             or else not Seven_Zip_Expect_Byte
+                               (Archive_Image, P, Header_Last, 0)
+                             or else not Read_Seven_Zip_Number
+                               (Archive_Image, P, Header_Last, V)
+                             or else V not in 1 | 2
+                           then
+                              return Empty;
+                           end if;
+                           Num_Coders := Natural (V);
+                           --  Coder 0: AES (id 06 F1 07 01, has props)
+                           if not Seven_Zip_Read_Byte
+                                (Archive_Image, P, Header_Last, B)
+                             or else (B and 16#0F#) /= 4
+                             or else (B and 16#20#) = 0
+                             or else not Seven_Zip_Expect_Byte
+                               (Archive_Image, P, Header_Last, 16#06#)
+                             or else not Seven_Zip_Expect_Byte
+                               (Archive_Image, P, Header_Last, 16#F1#)
+                             or else not Seven_Zip_Expect_Byte
+                               (Archive_Image, P, Header_Last, 16#07#)
+                             or else not Seven_Zip_Expect_Byte
+                               (Archive_Image, P, Header_Last, 16#01#)
+                           then
+                              return Empty;
+                           end if;
+                           declare
+                              Prop_Size : Interfaces.Unsigned_64 := 0;
+                           begin
+                              if not Read_Seven_Zip_Number
+                                   (Archive_Image, P, Header_Last, Prop_Size)
+                                or else Prop_Size < 1
+                                or else not Seven_Zip_Has_Bytes
+                                  (P, Header_Last, Natural (Prop_Size))
+                              then
+                                 return Empty;
+                              end if;
+                              declare
+                                 PB : Byte_Array (1 .. Natural (Prop_Size));
+                                 B0, B1, PP : Natural := 0;
+                              begin
+                                 for J in PB'Range loop
+                                    PB (J) := Archive_Image (P);
+                                    P := P + 1;
+                                 end loop;
+                                 B0 := Natural (PB (1));
+                                 Cycles := B0 mod 64;
+                                 if (B0 / 64) /= 0
+                                   and then Natural (Prop_Size) >= 2
+                                 then
+                                    B1 := Natural (PB (2));
+                                    PP := 3;
+                                 else
+                                    PP := 2;
+                                 end if;
+                                 Salt_Len := ((B0 / 128) mod 2) + (B1 / 16);
+                                 IV_Len := ((B0 / 64) mod 2) + (B1 mod 16);
+                                 if Salt_Len > 16 or else IV_Len > 16
+                                   or else Natural (Prop_Size) <
+                                     (PP - 1) + Salt_Len + IV_Len
+                                 then
+                                    return Empty;
+                                 end if;
+                                 for J in 1 .. Salt_Len loop
+                                    Salt (J) := PB (PP + J - 1);
+                                 end loop;
+                                 for J in 1 .. IV_Len loop
+                                    IV (J) := PB (PP + Salt_Len + J - 1);
+                                 end loop;
+                              end;
+                           end;
+                           --  Coder 1: LZMA (only present when 2 coders; a
+                           --  small header is AES-only, NumCoders = 1).
+                           if Num_Coders = 2 then
+                              if not Seven_Zip_Expect_Byte
+                                   (Archive_Image, P, Header_Last, 16#23#)
+                                or else not Seven_Zip_Expect_Byte
+                                  (Archive_Image, P, Header_Last, 16#03#)
+                                or else not Seven_Zip_Expect_Byte
+                                  (Archive_Image, P, Header_Last, 16#01#)
+                                or else not Seven_Zip_Expect_Byte
+                                  (Archive_Image, P, Header_Last, 16#01#)
+                                or else not Seven_Zip_Expect_Byte
+                                  (Archive_Image, P, Header_Last, 5)
+                              then
+                                 return Empty;
+                              end if;
+                              for J in LZMA_P'Range loop
+                                 if not Seven_Zip_Read_Byte
+                                   (Archive_Image, P, Header_Last, LZMA_P (J))
+                                 then
+                                    return Empty;
+                                 end if;
+                              end loop;
+                              if not Valid_LZMA_Props (LZMA_P (1)) then
+                                 return Empty;
+                              end if;
+                              --  bind pair In=1 (LZMA.in) Out=0 (AES.out)
+                              if not Read_Seven_Zip_Number
+                                   (Archive_Image, P, Header_Last, V)
+                                or else V /= 1
+                                or else not Read_Seven_Zip_Number
+                                  (Archive_Image, P, Header_Last, V)
+                                or else V /= 0
+                              then
+                                 return Empty;
+                              end if;
+                           end if;
+                           --  CodersUnPackSize: AES.out (=HC); LZMA.out (=hdr)
+                           --  for 2 coders.
+                           if not Seven_Zip_Expect_Byte
+                                (Archive_Image, P, Header_Last, 16#0C#)
+                             or else not Read_Seven_Zip_Number
+                               (Archive_Image, P, Header_Last, HC_Size)
+                           then
+                              return Empty;
+                           end if;
+                           if Num_Coders = 2 then
+                              if not Read_Seven_Zip_Number
+                                   (Archive_Image, P, Header_Last, Hdr_Size)
+                              then
+                                 return Empty;
+                              end if;
+                           else
+                              Hdr_Size := HC_Size;
+                           end if;
+                           --  optional folder CRC
+                           if P <= Header_Last
+                             and then Archive_Image (P) = 16#0A#
+                           then
+                              P := P + 1;
+                              if not Seven_Zip_Expect_Byte
+                                   (Archive_Image, P, Header_Last, 1)
+                                or else not Seven_Zip_Has_Bytes
+                                  (P, Header_Last, 4)
+                              then
+                                 return Empty;
+                              end if;
+                              P := P + 4;
+                           end if;
+                           if not Seven_Zip_Expect_Byte
+                                (Archive_Image, P, Header_Last, 0)
+                             or else not Seven_Zip_Expect_Byte
+                               (Archive_Image, P, Header_Last, 0)
+                           then
+                              return Empty;
+                           end if;
+
+                           if Pack_Pos >
+                                Interfaces.Unsigned_64 (Natural'Last)
+                             or else Pack_Size >
+                               Interfaces.Unsigned_64 (Natural'Last)
+                             or else Pack_Pos >
+                               Interfaces.Unsigned_64 (Payload_Count)
+                             or else Pack_Size >
+                               Interfaces.Unsigned_64 (Payload_Count) - Pack_Pos
+                             or else Natural (Pack_Size) mod 16 /= 0
+                             or else Natural (Pack_Size) = 0
+                             or else US.Length (Active_Seven_Zip_Password) = 0
+                           then
+                              return Empty;
+                           end if;
+
+                           Encoded_Header_Pack_Pos := Natural (Pack_Pos);
+                           declare
+                              Enc_First : constant Natural :=
+                                Payload_First + Natural (Pack_Pos);
+                              Enc : constant Byte_Array :=
+                                Archive_Image
+                                  (Enc_First ..
+                                   Enc_First + Natural (Pack_Size) - 1);
+                              Key : constant Byte_Array :=
+                                Zlib.Seven_Zip_AES.Derive_Key
+                                  (US.To_String (Active_Seven_Zip_Password),
+                                   Salt (1 .. Salt_Len), Cycles);
+                              Dec : constant Byte_Array :=
+                                Zlib.Seven_Zip_AES.Decrypt_CBC (Key, IV, Enc);
+                              LS  : Status_Code := Ok;
+                           begin
+                              if Natural (HC_Size) > Dec'Length then
+                                 return Empty;
+                              end if;
+                              declare
+                                 Trunc : constant Byte_Array :=
+                                   Dec (Dec'First ..
+                                        Dec'First + Natural (HC_Size) - 1);
+                                 Plain : constant Byte_Array :=
+                                   (if Num_Coders = 2
+                                    then LZMA_Decode_Raw_Encoded_Header
+                                           (Trunc, LZMA_P,
+                                            Natural (Hdr_Size), LS)
+                                    else Trunc);
+                              begin
+                                 if LS /= Ok then
+                                    Decode_Status := LS;
+                                    return Empty;
+                                 end if;
+                                 Decode_Status := Ok;
+                                 return Plain;
+                              end;
+                           end;
+                        exception
+                           when others =>
+                              Decode_Status := Unsupported_Method;
+                              return Empty;
+                        end Decode_AES_Encoded_Header;
+
                         function Decode_Encoded_Header
                           (Decode_Status : out Status_Code) return Byte_Array
                         is
@@ -11092,11 +11369,15 @@ package body Zlib is
                            end;
                         end Decode_Encoded_Header;
 
+                        AES_Status     : Status_Code := Ok;
+                        AES_Header     : constant Byte_Array :=
+                          Decode_AES_Encoded_Header (AES_Status);
                         Encoded_Status : Status_Code := Ok;
                         Decoded_Header : constant Byte_Array :=
-                          Decode_Encoded_Header (Encoded_Status);
+                          (if AES_Status = Ok then AES_Header
+                           else Decode_Encoded_Header (Encoded_Status));
                      begin
-                        if Encoded_Status /= Ok then
+                        if AES_Status /= Ok and then Encoded_Status /= Ok then
                            Status := Encoded_Status;
                            return Empty;
                         end if;
