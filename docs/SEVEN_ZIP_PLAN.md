@@ -211,17 +211,27 @@ Validated both directions vs stock `7z`: our solid archives extract in stock and
 round-trip in our extractor (LZMA/LZMA2/PPMd, 5–8 files); the ratio win is large
 on many similar files (e.g. 1.3 KB solid vs 5.4 KB non-solid). 845/845 green.
 
-### M6 — Encryption (AES-256 + SHA-256 key derivation, encrypted headers)
+### M6 — Encryption (AES-256 + SHA-256) — DONE (core)
 
-Table-stakes for 7z interop. Pure-Ada crypto.
+7zAES (`06 F1 07 01`) via the `../cryptolib` crate (AES-256-CBC + SHA-256).
 
-- `Zlib.Seven_Zip.Crypto`: AES-256 (CBC as 7z uses), SHA-256, and the 7z key
-  derivation (password + salt, `NumCyclesPower` iterations).
-- AES coder (`06 F1 07 01`) on decode and encode; encrypted-header support.
-- Password parameters already exist in the API surface
-  (`Seven_Zip_External_File`, etc.) but are currently inert — wire them in.
-- Tests: decrypt archives 7z produced from a known password; encrypt and have
-  7z decrypt; constant-time compare where it matters.
+- New `Zlib.Seven_Zip_AES`: 7z key derivation (iterated SHA-256 over salt +
+  UTF-16LE password + 8-byte LE counter, `2**NumCyclesPower` rounds) and
+  AES-256-CBC encrypt/decrypt. Validated bit-exact vs stock (decrypting a
+  stock pack reproduces the exact inner stream).
+- **Decode**: the AES coder is parsed (`06F10701` + control/salt/IV props),
+  the active password drives key derivation, and the decrypted pack (block
+  padding dropped to the coder unpack size) feeds the inner coder.
+  `Extract_Seven_Zip (.., Password, ..)` overload. Works for AES+LZMA /
+  AES+LZMA2 data **and** encrypted headers (`mhe=on`), various sizes.
+- **Encode**: `Seven_Zip_LZMA_Encrypted` builds an `[AES -> LZMA]` folder that
+  stock `7z` extracts with the password; wrong passwords are rejected.
+- Tested by an in-memory round-trip + wrong-password regression, and validated
+  against stock `7z` in both directions.
+
+Remaining (refinements, not blocking): a CSPRNG IV (currently data-derived),
+multi-file/solid encrypted *writing*, and encrypted-header *writing*
+(`mhe=on` output).
 
 ### M7 — Multi-volume (split) archives
 
