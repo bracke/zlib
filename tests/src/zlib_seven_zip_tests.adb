@@ -11415,6 +11415,42 @@ package body Zlib_Seven_Zip_Tests is
       end;
    end Test_Seven_Zip_List;
 
+   procedure Test_Extract_Archive_To_Directory
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Dir    : constant String := "x2d_test_tmp";
+      Data   : Zlib.Byte_Array (1 .. 120);
+      Status : Zlib.Status_Code := Zlib.Unsupported_Method;
+   begin
+      for I in Data'Range loop
+         Data (I) := Zlib.Byte ((I * 9) mod 256);
+      end loop;
+      if Ada.Directories.Exists (Dir) then
+         Ada.Directories.Delete_Tree (Dir);
+      end if;
+      declare
+         Archive : constant Zlib.Byte_Array :=
+           Zlib.ZIP (Data, "sub/leaf.bin", Zlib.Auto, Status);
+      begin
+         Assert (Status = Zlib.Ok, "archive built");
+         Zlib.Extract_Archive_To_Directory (Archive, Dir, "", Status);
+         Assert (Status = Zlib.Ok, "auto-detected ZIP extracts to a directory");
+         Assert
+           (Ada.Directories.Exists (Dir & "/sub/leaf.bin"),
+            "nested entry written under the destination directory");
+      end;
+      if Ada.Directories.Exists (Dir) then
+         Ada.Directories.Delete_Tree (Dir);
+      end if;
+   exception
+      when others =>
+         if Ada.Directories.Exists (Dir) then
+            Ada.Directories.Delete_Tree (Dir);
+         end if;
+         Assert (False, "Extract_Archive_To_Directory raised");
+   end Test_Extract_Archive_To_Directory;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
@@ -11435,6 +11471,9 @@ package body Zlib_Seven_Zip_Tests is
       Register_Routine
         (T, Test_Seven_Zip_List'Access,
          "7z FilesInfo catalogue with per-entry sizes");
+      Register_Routine
+        (T, Test_Extract_Archive_To_Directory'Access,
+         "auto-detect archive extraction to a directory");
       Register_Routine
         (T, Test_Stored_Header_Structure'Access,
          "native stored 7z header structure and CRCs");

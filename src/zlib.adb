@@ -15928,6 +15928,103 @@ package body Zlib is
          return No;
    end List_Seven_Zip_Entries;
 
+   procedure Extract_Archive_To_Directory
+     (Archive_Image   : Byte_Array;
+      Destination_Dir : String;
+      Password        : String;
+      Status          : out Status_Code)
+   is
+      Is_7z : constant Boolean :=
+        Archive_Image'Length >= 6
+        and then Archive_Image (Archive_Image'First) = 16#37#
+        and then Archive_Image (Archive_Image'First + 1) = 16#7A#
+        and then Archive_Image (Archive_Image'First + 2) = 16#BC#
+        and then Archive_Image (Archive_Image'First + 3) = 16#AF#;
+   begin
+      Status := Unsupported_Method;
+      if Is_7z then
+         Active_Seven_Zip_Password := US.To_Unbounded_String (Password);
+      end if;
+      declare
+         List_Status : Status_Code := Ok;
+         Entries     : constant Archive_Entry_Array :=
+           (if Is_7z then List_Seven_Zip_Entries (Archive_Image, List_Status)
+            else List_ZIP_Entries (Archive_Image, List_Status));
+      begin
+         Active_Seven_Zip_Password := US.Null_Unbounded_String;
+         if List_Status /= Ok then
+            Status := List_Status;
+            return;
+         end if;
+
+         for E of Entries loop
+            declare
+               Name : constant String := US.To_String (E.Name);
+               Rel  : constant String :=
+                 (if Name'Length > 0 and then Name (Name'Last) = '/'
+                  then Name (Name'First .. Name'Last - 1) else Name);
+            begin
+               --  Reject unsafe paths (absolute, "..", drive, backslash).
+               if Rel'Length = 0 or else not Safe_ZIP_Entry_Name (Rel) then
+                  Status := Unsupported_Method;
+                  return;
+               end if;
+               declare
+                  Target : constant String := Destination_Dir & "/" & Rel;
+               begin
+                  if E.Is_Directory then
+                     Ada.Directories.Create_Path (Target);
+                  else
+                     Ada.Directories.Create_Path
+                       (Ada.Directories.Containing_Directory (Target));
+                     declare
+                        XS   : Status_Code := Ok;
+                        Data : constant Byte_Array :=
+                          (if Is_7z
+                           then Extract_Seven_Zip
+                                  (Archive_Image, Name, Password, XS)
+                           else Extract_ZIP (Archive_Image, Name, XS));
+                        WS   : Status_Code := Ok;
+                     begin
+                        if XS /= Ok then
+                           Status := XS;
+                           return;
+                        end if;
+                        Write_File (Target, Data, WS);
+                        if WS /= Ok then
+                           Status := WS;
+                           return;
+                        end if;
+                     end;
+                  end if;
+               end;
+            end;
+         end loop;
+         Status := Ok;
+      end;
+   exception
+      when others =>
+         Active_Seven_Zip_Password := US.Null_Unbounded_String;
+         Status := Unsupported_Method;
+   end Extract_Archive_To_Directory;
+
+   procedure Extract_Archive_File_To_Directory
+     (Archive_Path    : String;
+      Destination_Dir : String;
+      Password        : String;
+      Status          : out Status_Code)
+   is
+      Read_Status : Status_Code := Ok;
+      Image       : constant Byte_Array := Read_File (Archive_Path, Read_Status);
+   begin
+      if Read_Status /= Ok then
+         Status := Read_Status;
+         return;
+      end if;
+      Extract_Archive_To_Directory
+        (Image, Destination_Dir, Password, Status);
+   end Extract_Archive_File_To_Directory;
+
    function Extract_Seven_Zip_Metadata
      (Archive_Image : Byte_Array;
       Entry_Name    : String;

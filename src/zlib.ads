@@ -791,6 +791,32 @@ package Zlib is
    --  @param Status Ok on success, otherwise a deterministic failure code
    --  @return one Archive_Entry per file when Status is Ok
 
+   procedure Extract_Archive_To_Directory
+     (Archive_Image   : Byte_Array;
+      Destination_Dir : String;
+      Password        : String;
+      Status          : out Status_Code);
+   --  Auto-detect ZIP or 7z, enumerate every member, and write each file under
+   --  Destination_Dir (creating subdirectories), recreating directory entries.
+   --  Entry paths are validated as safe relative paths (no absolute, "..",
+   --  drive, or backslash) before any file is written. Password is used for
+   --  7z (AES data and encrypted headers); pass "" when not needed.
+   --  @param Archive_Image complete ZIP or .7z archive image
+   --  @param Destination_Dir directory to extract into
+   --  @param Password archive password, or "" if not encrypted
+   --  @param Status Ok on success, otherwise a deterministic failure code
+
+   procedure Extract_Archive_File_To_Directory
+     (Archive_Path    : String;
+      Destination_Dir : String;
+      Password        : String;
+      Status          : out Status_Code);
+   --  Read an archive file and Extract_Archive_To_Directory it.
+   --  @param Archive_Path path to a .zip or .7z file
+   --  @param Destination_Dir directory to extract into
+   --  @param Password archive password, or "" if not encrypted
+   --  @param Status Ok on success, otherwise a deterministic failure code
+
    function Extract_ZIP
      (Archive_Image : Byte_Array;
       Entry_Name    : String;
