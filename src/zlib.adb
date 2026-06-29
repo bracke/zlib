@@ -8788,6 +8788,156 @@ package body Zlib is
          return Empty;
    end Seven_Zip_Single_File;
 
+   --  Build a one-file .7z whose data is LZMA-compressed then AES-256
+   --  encrypted (method 06F10701). Folder is [AES -> LZMA] with bind pair
+   --  LZMA.in <- AES.out; the AES coder props carry numCyclesPower=19, no
+   --  salt, and a 16-byte IV.
+   function Seven_Zip_LZMA_Encrypted
+     (Input      : Byte_Array;
+      Entry_Name : String;
+      Password   : String;
+      Status     : out Status_Code) return Byte_Array
+   is
+      Empty : constant Byte_Array (1 .. 0) := [others => 0];
+      Num_Cycles_Power : constant := 19;
+   begin
+      Status := Unsupported_Method;
+      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
+         return Empty;
+      end if;
+
+      declare
+         Compressed : constant Byte_Array := LZMA_Encode_Bounded (Input);
+         Padded     : constant Byte_Array :=
+           Zlib.Seven_Zip_AES.Pad_To_Block (Compressed);
+         Key        : constant Byte_Array :=
+           Zlib.Seven_Zip_AES.Derive_Key (Password, Empty, Num_Cycles_Power);
+         --  IV derived from the data so distinct inputs get distinct IVs
+         --  (a full CSPRNG IV is a later refinement).
+         IV         : Byte_Array (1 .. 16);
+      begin
+         declare
+            Seed : Interfaces.Unsigned_32 :=
+              CRC32 (Input) xor 16#9E37_79B1#;
+         begin
+            for J in IV'Range loop
+               Seed := Seed * 1_103_515_245 + 12_345;
+               IV (J) := Byte (Interfaces.Shift_Right (Seed, 16) and 16#FF#);
+            end loop;
+         end;
+
+         declare
+            Pack_V : constant Byte_Array :=
+              Zlib.Seven_Zip_AES.Encrypt_CBC (Key, IV, Padded);
+            Unpacked_CRC : constant Interfaces.Unsigned_32 := CRC32 (Input);
+            Header     : Byte_Vectors.Vector;
+            Name_Field : Byte_Vectors.Vector;
+         begin
+            if Pack_V'Length = 0 then
+               return Empty;
+            end if;
+
+            Header.Append (16#01#);
+            Header.Append (16#04#); --  MainStreamsInfo
+            Header.Append (16#06#); --  PackInfo
+            Append_Seven_Zip_Number (Header, 0);
+            Append_Seven_Zip_Number (Header, 1);
+            Header.Append (16#09#); --  Size
+            Append_Seven_Zip_Number
+              (Header, Interfaces.Unsigned_64 (Pack_V'Length));
+            Header.Append (0);      --  end PackInfo
+
+            Header.Append (16#07#); --  UnPackInfo
+            Header.Append (16#0B#); --  Folder
+            Append_Seven_Zip_Number (Header, 1);  --  one folder
+            Header.Append (0);                    --  external
+            Append_Seven_Zip_Number (Header, 2);  --  two coders
+            --  Coder 0: AES (06F10701) with 18-byte props (control + IV).
+            Header.Append (16#24#);
+            Header.Append (16#06#);
+            Header.Append (16#F1#);
+            Header.Append (16#07#);
+            Header.Append (16#01#);
+            Append_Seven_Zip_Number (Header, 18);
+            Header.Append (16#53#); --  numCyclesPower=19, ivSize bit
+            Header.Append (16#0F#); --  ivSize low nibble (=> ivSize 16)
+            for B of IV loop
+               Header.Append (B);
+            end loop;
+            --  Coder 1: LZMA.
+            Append_Seven_Zip_Coder (Header, Seven_Zip_LZMA_Method);
+            --  Bind pair: LZMA.in (1) <- AES.out (0).
+            Append_Seven_Zip_Number (Header, 1);
+            Append_Seven_Zip_Number (Header, 0);
+            Header.Append (16#0C#); --  CodersUnPackSize
+            Append_Seven_Zip_Number
+              (Header, Interfaces.Unsigned_64 (Compressed'Length));
+            Append_Seven_Zip_Number
+              (Header, Interfaces.Unsigned_64 (Input'Length));
+            Header.Append (0);      --  end UnPackInfo
+
+            Header.Append (16#08#); --  SubStreamsInfo
+            Header.Append (16#0A#); --  CRC
+            Header.Append (1);
+            Append_U32_LE (Header, Unpacked_CRC);
+            Header.Append (0);      --  end SubStreamsInfo
+            Header.Append (0);      --  end MainStreamsInfo
+
+            Header.Append (16#05#); --  FilesInfo
+            Append_Seven_Zip_Number (Header, 1);
+            Header.Append (16#11#); --  Name
+            Name_Field.Append (0);
+            Append_UTF16LE_NT (Name_Field, Entry_Name);
+            Append_Seven_Zip_Number
+              (Header, Interfaces.Unsigned_64 (Name_Field.Length));
+            Header.Append_Vector (Name_Field);
+            Header.Append (0);
+            Header.Append (0);
+
+            declare
+               Header_Image : constant Byte_Array := To_Byte_Array (Header);
+               Header_CRC   : constant Interfaces.Unsigned_32 :=
+                 Seven_Zip_Header_CRC (Header_Image);
+               Start_Header : Byte_Vectors.Vector;
+            begin
+               Append_U64_LE
+                 (Start_Header, Interfaces.Unsigned_64 (Pack_V'Length));
+               Append_U64_LE
+                 (Start_Header, Interfaces.Unsigned_64 (Header_Image'Length));
+               Append_U32_LE (Start_Header, Header_CRC);
+               declare
+                  Start_Image : constant Byte_Array :=
+                    To_Byte_Array (Start_Header);
+                  Start_CRC   : constant Interfaces.Unsigned_32 :=
+                    Seven_Zip_Header_CRC (Start_Image);
+                  Archive     : Byte_Vectors.Vector;
+               begin
+                  Archive.Append (16#37#);
+                  Archive.Append (16#7A#);
+                  Archive.Append (16#BC#);
+                  Archive.Append (16#AF#);
+                  Archive.Append (16#27#);
+                  Archive.Append (16#1C#);
+                  Archive.Append (0);
+                  Archive.Append (4);
+                  Append_U32_LE (Archive, Start_CRC);
+                  Archive.Append_Vector (Start_Header);
+                  for B of Pack_V loop
+                     Archive.Append (B);
+                  end loop;
+                  Archive.Append_Vector (Header);
+                  Status := Ok;
+                  return To_Byte_Array (Archive);
+               end;
+            end;
+         end;
+      end;
+   exception
+      when others =>
+         Status := Unsupported_Method;
+         return Empty;
+   end Seven_Zip_LZMA_Encrypted;
+
    procedure Append_Seven_Zip_File_Metadata
      (Header   : in out Byte_Vectors.Vector;
       Metadata : Seven_Zip_Entry_Metadata)

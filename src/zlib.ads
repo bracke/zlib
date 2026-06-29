@@ -1701,6 +1701,20 @@ package Zlib is
    --  @param Status set to Ok on success, otherwise a deterministic failure code
    --  @return extracted payload when Status is Ok
 
+   function Seven_Zip_LZMA_Encrypted
+     (Input      : Byte_Array;
+      Entry_Name : String;
+      Password   : String;
+      Status     : out Status_Code) return Byte_Array;
+   --  Encode Input as a one-file .7z whose payload is LZMA-compressed then
+   --  AES-256 (7zAES) encrypted with the given password. The result is read by
+   --  stock 7z (and by Extract_Seven_Zip with the password).
+   --  @param Input uncompressed file payload
+   --  @param Entry_Name archive entry name, without NUL characters
+   --  @param Password the archive password
+   --  @param Status set to Ok on success, otherwise a deterministic failure code
+   --  @return .7z archive image when Status is Ok
+
    function Extract_Seven_Zip
      (Archive_Image : Byte_Array;
       Entry_Name    : String;
