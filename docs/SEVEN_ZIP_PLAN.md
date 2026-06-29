@@ -211,7 +211,7 @@ Validated both directions vs stock `7z`: our solid archives extract in stock and
 round-trip in our extractor (LZMA/LZMA2/PPMd, 5–8 files); the ratio win is large
 on many similar files (e.g. 1.3 KB solid vs 5.4 KB non-solid). 845/845 green.
 
-### M6 — Encryption (AES-256 + SHA-256) — DONE (core)
+### M6 — Encryption (AES-256 + SHA-256) — DONE
 
 7zAES (`06 F1 07 01`) via the `../cryptolib` crate (AES-256-CBC + SHA-256).
 
@@ -229,9 +229,12 @@ on many similar files (e.g. 1.3 KB solid vs 5.4 KB non-solid). 845/845 green.
 - Tested by an in-memory round-trip + wrong-password regression, and validated
   against stock `7z` in both directions.
 
-Remaining (refinements, not blocking): a CSPRNG IV (currently data-derived),
-multi-file/solid encrypted *writing*, and encrypted-header *writing*
-(`mhe=on` output).
+Refinements also done: CSPRNG IV (`Random_IV`); encrypted solid multi-file
+writing for LZMA/LZMA2/PPMd (`Seven_Zip_*_Encrypted_Files`); encrypted-header
+**writing** (`Encrypt_Seven_Zip_Header`, mhe=on) that composes with any writer;
+and encrypted-header **reading** (`Decode_AES_Encoded_Header`, both the
+AES-only and AES+LZMA encoded-header layouts). All validated both ways vs
+stock 7-Zip.
 
 ### M7 — Multi-volume (split) archives — DONE
 
