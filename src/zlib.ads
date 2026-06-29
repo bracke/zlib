@@ -1635,6 +1635,22 @@ package Zlib is
    --  @param Entry_Names archive entry names, without NUL characters
    --  @param Status set to Ok on success, otherwise a deterministic failure code
 
+   procedure Seven_Zip_LZMA_Encrypted_Files
+     (Input_Paths : Text_Array;
+      Output_Path : String;
+      Entry_Names : Text_Array;
+      Password    : String;
+      Status      : out Status_Code);
+   --  Solid, AES-256-encrypted multi-file .7z: all ordinary files are
+   --  concatenated, LZMA-compressed, and AES-256 encrypted into one
+   --  [AES -> LZMA] folder with per-file substream sizes and CRCs. Read by
+   --  stock 7z (and Extract_Seven_Zip) with the password.
+   --  @param Input_Paths source files or directories to archive
+   --  @param Output_Path path that receives the .7z archive
+   --  @param Entry_Names archive entry names, without NUL characters
+   --  @param Password the archive password
+   --  @param Status set to Ok on success, otherwise a deterministic failure code
+
    function Seven_Zip_Stored
      (Input      : Byte_Array;
       Entry_Name : String;

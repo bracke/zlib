@@ -10078,6 +10078,7 @@ package body Zlib is
       Level       : Compression_Level;
       Use_Level   : Boolean;
       Solid       : Boolean;
+      Password    : String;
       Status      : out Status_Code)
    is
       Count        : constant Natural := Input_Paths'Length;
@@ -10085,6 +10086,9 @@ package body Zlib is
       Solid_Input  : Byte_Vectors.Vector;
       Read_Status  : Status_Code := Ok;
       Write_Status : Status_Code := Ok;
+      Encrypt      : constant Boolean := Password /= "";
+      Solid_Compressed_Len : Natural := 0;
+      AES_IV       : Byte_Array (1 .. 16) := [others => 0];
 
       function Pack_Input
         (Input_Data : Byte_Array;
@@ -10240,10 +10244,29 @@ package body Zlib is
                   Status := Compress_Status;
                   return;
                end if;
-               Pack_Sizes (1) := Interfaces.Unsigned_64 (Packed_Data'Length);
-               for B of Packed_Data loop
-                  Payloads.Append (B);
-               end loop;
+               Solid_Compressed_Len := Packed_Data'Length;
+               if Encrypt then
+                  AES_IV := Zlib.Seven_Zip_AES.Random_IV;
+                  declare
+                     Pack : constant Byte_Array :=
+                       Zlib.Seven_Zip_AES.Encrypt_CBC
+                         (Zlib.Seven_Zip_AES.Derive_Key
+                            (Password, [1 .. 0 => 0], 19),
+                          AES_IV,
+                          Zlib.Seven_Zip_AES.Pad_To_Block (Packed_Data));
+                  begin
+                     Pack_Sizes (1) := Interfaces.Unsigned_64 (Pack'Length);
+                     for B of Pack loop
+                        Payloads.Append (B);
+                     end loop;
+                  end;
+               else
+                  Pack_Sizes (1) :=
+                    Interfaces.Unsigned_64 (Packed_Data'Length);
+                  for B of Packed_Data loop
+                     Payloads.Append (B);
+                  end loop;
+               end if;
             end;
          end if;
 
@@ -10270,11 +10293,33 @@ package body Zlib is
                Header.Append (16#07#); --  UnPackInfo
                Header.Append (16#0B#); --  Folder
                Append_Seven_Zip_Number (Header, 1);  --  one folder
-               Header.Append (0);
-               Append_Seven_Zip_Number (Header, 1);  --  one coder
-               Append_Seven_Zip_Coder (Header, Method);
-               Header.Append (16#0C#); --  CodersUnPackSize
-               Append_Seven_Zip_Number (Header, Total_Unpack_Size);
+               Header.Append (0);                    --  external
+               if Encrypt then
+                  Append_Seven_Zip_Number (Header, 2);  --  AES + inner coder
+                  Header.Append (16#24#);
+                  Header.Append (16#06#);
+                  Header.Append (16#F1#);
+                  Header.Append (16#07#);
+                  Header.Append (16#01#);
+                  Append_Seven_Zip_Number (Header, 18);
+                  Header.Append (16#53#);
+                  Header.Append (16#0F#);
+                  for B of AES_IV loop
+                     Header.Append (B);
+                  end loop;
+                  Append_Seven_Zip_Coder (Header, Method);
+                  Append_Seven_Zip_Number (Header, 1);  --  bind In=1 (inner.in)
+                  Append_Seven_Zip_Number (Header, 0);  --  bind Out=0 (AES.out)
+                  Header.Append (16#0C#); --  CodersUnPackSize
+                  Append_Seven_Zip_Number
+                    (Header, Interfaces.Unsigned_64 (Solid_Compressed_Len));
+                  Append_Seven_Zip_Number (Header, Total_Unpack_Size);
+               else
+                  Append_Seven_Zip_Number (Header, 1);  --  one coder
+                  Append_Seven_Zip_Coder (Header, Method);
+                  Header.Append (16#0C#); --  CodersUnPackSize
+                  Append_Seven_Zip_Number (Header, Total_Unpack_Size);
+               end if;
                Header.Append (0);      --  end UnPackInfo (no folder CRC)
 
                Header.Append (16#08#); --  SubStreamsInfo
@@ -10426,7 +10471,7 @@ package body Zlib is
    begin
       Seven_Zip_Compressed_Files_Internal
         (Input_Paths, Output_Path, Entry_Names, Seven_Zip_Deflate_Method,
-         Mode, Default_Level, False, False, Status);
+         Mode, Default_Level, False, False, "", Status);
    end Seven_Zip_Deflate_Files;
 
    procedure Seven_Zip_Deflate_Files
@@ -10438,7 +10483,7 @@ package body Zlib is
    begin
       Seven_Zip_Compressed_Files_Internal
         (Input_Paths, Output_Path, Entry_Names, Seven_Zip_Deflate_Method,
-         Auto, Level, True, False, Status);
+         Auto, Level, True, False, "", Status);
    end Seven_Zip_Deflate_Files;
 
    procedure Seven_Zip_Deflate_Files
@@ -10459,7 +10504,7 @@ package body Zlib is
    begin
       Seven_Zip_Compressed_Files_Internal
         (Input_Paths, Output_Path, Entry_Names, Seven_Zip_BZip2_Method,
-         Auto, Default_Level, False, False, Status);
+         Auto, Default_Level, False, False, "", Status);
    end Seven_Zip_BZip2_Files;
 
    procedure Seven_Zip_LZMA_Files
@@ -10470,7 +10515,7 @@ package body Zlib is
    begin
       Seven_Zip_Compressed_Files_Internal
         (Input_Paths, Output_Path, Entry_Names, Seven_Zip_LZMA_Method,
-         Auto, Default_Level, False, False, Status);
+         Auto, Default_Level, False, False, "", Status);
    end Seven_Zip_LZMA_Files;
 
    procedure Seven_Zip_LZMA2_Files
@@ -10481,7 +10526,7 @@ package body Zlib is
    begin
       Seven_Zip_Compressed_Files_Internal
         (Input_Paths, Output_Path, Entry_Names, Seven_Zip_LZMA2_Method,
-         Auto, Default_Level, False, False, Status);
+         Auto, Default_Level, False, False, "", Status);
    end Seven_Zip_LZMA2_Files;
 
    procedure Seven_Zip_PPMd_Files
@@ -10492,7 +10537,7 @@ package body Zlib is
    begin
       Seven_Zip_Compressed_Files_Internal
         (Input_Paths, Output_Path, Entry_Names, Seven_Zip_PPMd_Method,
-         Auto, Default_Level, False, False, Status);
+         Auto, Default_Level, False, False, "", Status);
    end Seven_Zip_PPMd_Files;
 
    procedure Seven_Zip_LZMA_Solid_Files
@@ -10503,7 +10548,7 @@ package body Zlib is
    begin
       Seven_Zip_Compressed_Files_Internal
         (Input_Paths, Output_Path, Entry_Names, Seven_Zip_LZMA_Method,
-         Auto, Default_Level, False, True, Status);
+         Auto, Default_Level, False, True, "", Status);
    end Seven_Zip_LZMA_Solid_Files;
 
    procedure Seven_Zip_LZMA2_Solid_Files
@@ -10514,7 +10559,7 @@ package body Zlib is
    begin
       Seven_Zip_Compressed_Files_Internal
         (Input_Paths, Output_Path, Entry_Names, Seven_Zip_LZMA2_Method,
-         Auto, Default_Level, False, True, Status);
+         Auto, Default_Level, False, True, "", Status);
    end Seven_Zip_LZMA2_Solid_Files;
 
    procedure Seven_Zip_PPMd_Solid_Files
@@ -10525,8 +10570,20 @@ package body Zlib is
    begin
       Seven_Zip_Compressed_Files_Internal
         (Input_Paths, Output_Path, Entry_Names, Seven_Zip_PPMd_Method,
-         Auto, Default_Level, False, True, Status);
+         Auto, Default_Level, False, True, "", Status);
    end Seven_Zip_PPMd_Solid_Files;
+
+   procedure Seven_Zip_LZMA_Encrypted_Files
+     (Input_Paths : Text_Array;
+      Output_Path : String;
+      Entry_Names : Text_Array;
+      Password    : String;
+      Status      : out Status_Code) is
+   begin
+      Seven_Zip_Compressed_Files_Internal
+        (Input_Paths, Output_Path, Entry_Names, Seven_Zip_LZMA_Method,
+         Auto, Default_Level, False, True, Password, Status);
+   end Seven_Zip_LZMA_Encrypted_Files;
 
    function Extract_Seven_Zip_Entry
      (Archive_Image : Byte_Array;
