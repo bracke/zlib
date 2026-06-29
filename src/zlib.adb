@@ -5683,6 +5683,307 @@ package body Zlib is
       end if;
    end ZIP_Method_Id;
 
+   --  Locate the central directory: scan back for the EOCD record (0x06054B50)
+   --  and, when its fields are ZIP64-escaped, follow the ZIP64 locator to the
+   --  ZIP64 EOCD. Returns the first CD record position and the entry count.
+   function ZIP_Find_Central
+     (Archive  : Byte_Array;
+      CD_First : out Natural;
+      CD_Count : out Natural) return Boolean
+   is
+      Last : constant Natural := Archive'Last;
+   begin
+      CD_First := 0;
+      CD_Count := 0;
+      if Archive'Length < 22 then
+         return False;
+      end if;
+      for P in reverse Archive'First .. Last - 21 loop
+         if ZIP_U32_At (Archive, P) = 16#0605_4B50# then
+            declare
+               Count16 : constant Interfaces.Unsigned_16 :=
+                 ZIP_U16_At (Archive, P + 10);
+               Off32   : constant Interfaces.Unsigned_32 :=
+                 ZIP_U32_At (Archive, P + 16);
+            begin
+               if (Count16 = 16#FFFF# or else Off32 = 16#FFFF_FFFF#)
+                 and then P - 20 >= Archive'First
+                 and then ZIP_U32_At (Archive, P - 20) = 16#0706_4B50#
+               then
+                  declare
+                     Z64_Off : constant Interfaces.Unsigned_64 :=
+                       ZIP_U64_At (Archive, P - 20 + 8);
+                  begin
+                     if Z64_Off <= Interfaces.Unsigned_64 (Natural'Last) then
+                        declare
+                           Z64 : constant Natural :=
+                             Archive'First + Natural (Z64_Off);
+                        begin
+                           if Z64 >= Archive'First
+                             and then Z64 + 55 <= Last
+                             and then ZIP_U32_At (Archive, Z64) = 16#0606_4B50#
+                           then
+                              if ZIP_U64_At (Archive, Z64 + 32) <=
+                                   Interfaces.Unsigned_64 (Natural'Last)
+                                and then ZIP_U64_At (Archive, Z64 + 48) <=
+                                  Interfaces.Unsigned_64 (Natural'Last)
+                              then
+                                 CD_Count :=
+                                   Natural (ZIP_U64_At (Archive, Z64 + 32));
+                                 CD_First :=
+                                   Archive'First +
+                                   Natural (ZIP_U64_At (Archive, Z64 + 48));
+                                 return CD_First <= Last + 1;
+                              end if;
+                           end if;
+                        end;
+                     end if;
+                  end;
+               end if;
+               CD_Count := Natural (Count16);
+               CD_First := Archive'First + Natural (Off32);
+               return CD_First <= Last + 1;
+            end;
+         end if;
+      end loop;
+      return False;
+   end ZIP_Find_Central;
+
+   function List_ZIP_Entries
+     (Archive_Image : Byte_Array;
+      Status        : out Status_Code) return Archive_Entry_Array
+   is
+      No       : constant Archive_Entry_Array (1 .. 0) :=
+        [others => (others => <>)];
+      CD_First : Natural := 0;
+      CD_Count : Natural := 0;
+   begin
+      Status := Invalid_Header;
+      if not ZIP_Find_Central (Archive_Image, CD_First, CD_Count) then
+         return No;
+      end if;
+
+      declare
+         Result : Archive_Entry_Array (1 .. CD_Count);
+         Pos    : Natural := CD_First;
+      begin
+         for I in 1 .. CD_Count loop
+            if Pos < Archive_Image'First
+              or else Pos + 45 > Archive_Image'Last
+              or else ZIP_U32_At (Archive_Image, Pos) /= 16#0201_4B50#
+            then
+               return No;
+            end if;
+            declare
+               Method   : constant Interfaces.Unsigned_16 :=
+                 ZIP_U16_At (Archive_Image, Pos + 10);
+               Crc      : constant Interfaces.Unsigned_32 :=
+                 ZIP_U32_At (Archive_Image, Pos + 16);
+               Comp_32  : constant Interfaces.Unsigned_32 :=
+                 ZIP_U32_At (Archive_Image, Pos + 20);
+               Unc_32   : constant Interfaces.Unsigned_32 :=
+                 ZIP_U32_At (Archive_Image, Pos + 24);
+               Name_Len : constant Natural :=
+                 Natural (ZIP_U16_At (Archive_Image, Pos + 28));
+               Extra_Len : constant Natural :=
+                 Natural (ZIP_U16_At (Archive_Image, Pos + 30));
+               Cmt_Len  : constant Natural :=
+                 Natural (ZIP_U16_At (Archive_Image, Pos + 32));
+               Off_32   : constant Interfaces.Unsigned_32 :=
+                 ZIP_U32_At (Archive_Image, Pos + 42);
+               Name_First : constant Natural := Pos + 46;
+               Comp, Unc, Off : Interfaces.Unsigned_64 := 0;
+            begin
+               if Name_First + Name_Len + Extra_Len + Cmt_Len - 1 >
+                    Archive_Image'Last
+               then
+                  return No;
+               end if;
+               if not Resolve_ZIP64_Central_Fields
+                 (Archive_Image, Name_First + Name_Len, Extra_Len,
+                  Comp_32, Unc_32, Off_32, Comp, Unc, Off)
+               then
+                  Comp := Interfaces.Unsigned_64 (Comp_32);
+                  Unc  := Interfaces.Unsigned_64 (Unc_32);
+               end if;
+               declare
+                  Name_Str : String (1 .. Name_Len);
+               begin
+                  for J in 1 .. Name_Len loop
+                     Name_Str (J) :=
+                       Character'Val
+                         (Natural (Archive_Image (Name_First + J - 1)));
+                  end loop;
+                  Result (I) :=
+                    (Name              =>
+                       US.To_Unbounded_String (Name_Str),
+                     Is_Directory      =>
+                       Name_Len > 0 and then Name_Str (Name_Len) = '/',
+                     Compression       => Method,
+                     Uncompressed_Size => Unc,
+                     Compressed_Size   => Comp,
+                     CRC_32            => Crc);
+               end;
+               Pos := Name_First + Name_Len + Extra_Len + Cmt_Len;
+            end;
+         end loop;
+         Status := Ok;
+         return Result;
+      end;
+   exception
+      when others =>
+         Status := Invalid_Header;
+         return No;
+   end List_ZIP_Entries;
+
+   function Extract_ZIP
+     (Archive_Image : Byte_Array;
+      Entry_Name    : String;
+      Status        : out Status_Code) return Byte_Array
+   is
+      Empty    : constant Byte_Array (1 .. 0) := [others => 0];
+      CD_First : Natural := 0;
+      CD_Count : Natural := 0;
+      Pos      : Natural := 0;
+   begin
+      Status := Unsupported_Method;
+      if Entry_Name'Length = 0
+        or else not ZIP_Find_Central (Archive_Image, CD_First, CD_Count)
+      then
+         Status := Invalid_Header;
+         return Empty;
+      end if;
+
+      Pos := CD_First;
+      for I in 1 .. CD_Count loop
+         exit when Pos + 45 > Archive_Image'Last
+           or else ZIP_U32_At (Archive_Image, Pos) /= 16#0201_4B50#;
+         declare
+            Flags    : constant Interfaces.Unsigned_16 :=
+              ZIP_U16_At (Archive_Image, Pos + 8);
+            Method   : constant Interfaces.Unsigned_16 :=
+              ZIP_U16_At (Archive_Image, Pos + 10);
+            Crc      : constant Interfaces.Unsigned_32 :=
+              ZIP_U32_At (Archive_Image, Pos + 16);
+            Comp_32  : constant Interfaces.Unsigned_32 :=
+              ZIP_U32_At (Archive_Image, Pos + 20);
+            Unc_32   : constant Interfaces.Unsigned_32 :=
+              ZIP_U32_At (Archive_Image, Pos + 24);
+            Name_Len : constant Natural :=
+              Natural (ZIP_U16_At (Archive_Image, Pos + 28));
+            Extra_Len : constant Natural :=
+              Natural (ZIP_U16_At (Archive_Image, Pos + 30));
+            Cmt_Len  : constant Natural :=
+              Natural (ZIP_U16_At (Archive_Image, Pos + 32));
+            Off_32   : constant Interfaces.Unsigned_32 :=
+              ZIP_U32_At (Archive_Image, Pos + 42);
+            Name_First : constant Natural := Pos + 46;
+         begin
+            exit when Name_First + Name_Len + Extra_Len + Cmt_Len - 1 >
+              Archive_Image'Last;
+
+            if ZIP_Name_Equals
+              (Archive_Image, Name_First, Name_Len, Entry_Name)
+            then
+               if (Flags and 1) /= 0 then
+                  Status := Unsupported_Method;   --  encrypted
+                  return Empty;
+               end if;
+               if Method /= 0 and then Method /= 8 then
+                  --  Non-Deflate methods go through the codec bridge.
+                  return Extract_ZIP_External_Entry
+                    (Archive_Image, "", Entry_Name, "", Status);
+               end if;
+
+               declare
+                  Comp, Unc, Off : Interfaces.Unsigned_64 := 0;
+               begin
+                  if not Resolve_ZIP64_Central_Fields
+                    (Archive_Image, Name_First + Name_Len, Extra_Len,
+                     Comp_32, Unc_32, Off_32, Comp, Unc, Off)
+                  then
+                     Comp := Interfaces.Unsigned_64 (Comp_32);
+                     Unc  := Interfaces.Unsigned_64 (Unc_32);
+                     Off  := Interfaces.Unsigned_64 (Off_32);
+                  end if;
+                  if Off > Interfaces.Unsigned_64 (Natural'Last)
+                    or else Comp > Interfaces.Unsigned_64 (Natural'Last)
+                    or else Unc > Interfaces.Unsigned_64 (Natural'Last)
+                  then
+                     Status := Unsupported_Method;
+                     return Empty;
+                  end if;
+
+                  declare
+                     Local : constant Natural :=
+                       Archive_Image'First + Natural (Off);
+                  begin
+                     if Local < Archive_Image'First
+                       or else Local + 29 > Archive_Image'Last
+                       or else ZIP_U32_At (Archive_Image, Local) /=
+                         16#0403_4B50#
+                     then
+                        Status := Unexpected_End_Of_Input;
+                        return Empty;
+                     end if;
+                     declare
+                        L_Name : constant Natural :=
+                          Natural (ZIP_U16_At (Archive_Image, Local + 26));
+                        L_Extra : constant Natural :=
+                          Natural (ZIP_U16_At (Archive_Image, Local + 28));
+                        Data_First : constant Natural :=
+                          Local + 30 + L_Name + L_Extra;
+                        Comp_Len   : constant Natural := Natural (Comp);
+                        Unc_Len    : constant Natural := Natural (Unc);
+                     begin
+                        if Data_First > Archive_Image'Last + 1
+                          or else (Comp_Len > 0
+                                   and then Comp_Len - 1 >
+                                     Archive_Image'Last - Data_First)
+                        then
+                           Status := Unexpected_End_Of_Input;
+                           return Empty;
+                        end if;
+                        declare
+                           Payload : constant Byte_Array :=
+                             (if Comp_Len = 0 then Empty
+                              else Archive_Image
+                                     (Data_First ..
+                                      Data_First + Comp_Len - 1));
+                           Dec_Status : Status_Code := Ok;
+                           Plain : constant Byte_Array :=
+                             (if Method = 0 then Payload
+                              else Inflate_Raw (Payload, Dec_Status));
+                        begin
+                           if Method = 8 and then Dec_Status /= Ok then
+                              Status := Dec_Status;
+                              return Empty;
+                           end if;
+                           if Plain'Length /= Unc_Len
+                             or else CRC32 (Plain) /= Crc
+                           then
+                              Status := Invalid_Checksum;
+                              return Empty;
+                           end if;
+                           Status := Ok;
+                           return Plain;
+                        end;
+                     end;
+                  end;
+               end;
+            end if;
+            Pos := Name_First + Name_Len + Extra_Len + Cmt_Len;
+         end;
+      end loop;
+
+      Status := Unsupported_Method;
+      return Empty;
+   exception
+      when others =>
+         Status := Unsupported_Method;
+         return Empty;
+   end Extract_ZIP;
+
    function Compress_ZIP_Native_BZip2_File
      (Input_Path        : String;
       Method            : out Interfaces.Unsigned_16;

@@ -11346,6 +11346,45 @@ package body Zlib_Seven_Zip_Tests is
       end;
    end Test_BCJ2_Encode_Decode_Roundtrip;
 
+   procedure Test_ZIP_List_And_Extract
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Data   : Zlib.Byte_Array (1 .. 400);
+      Status : Zlib.Status_Code := Zlib.Unsupported_Method;
+   begin
+      for I in Data'Range loop
+         Data (I) := Zlib.Byte ((I * 3) mod 256);
+      end loop;
+      declare
+         Archive : constant Zlib.Byte_Array :=
+           Zlib.ZIP (Data, "docs/payload.bin", Zlib.Auto, Status);
+      begin
+         Assert (Status = Zlib.Ok, "ZIP archive built");
+         declare
+            LStatus : Zlib.Status_Code := Zlib.Unsupported_Method;
+            Entries : constant Zlib.Archive_Entry_Array :=
+              Zlib.List_ZIP_Entries (Archive, LStatus);
+         begin
+            Assert
+              (LStatus = Zlib.Ok
+               and then Entries'Length = 1
+               and then not Entries (1).Is_Directory
+               and then Entries (1).Uncompressed_Size = 400,
+               "ZIP catalogue lists the single entry with its size");
+         end;
+         declare
+            XStatus : Zlib.Status_Code := Zlib.Unsupported_Method;
+            Out_B   : constant Zlib.Byte_Array :=
+              Zlib.Extract_ZIP (Archive, "docs/payload.bin", XStatus);
+         begin
+            Assert
+              (XStatus = Zlib.Ok and then Out_B = Data,
+               "ZIP entry extracts and round-trips");
+         end;
+      end;
+   end Test_ZIP_List_And_Extract;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
@@ -11360,6 +11399,9 @@ package body Zlib_Seven_Zip_Tests is
       Register_Routine
         (T, Test_BCJ2_Encode_Decode_Roundtrip'Access,
          "native 7z BCJ2 encode/decode round-trip");
+      Register_Routine
+        (T, Test_ZIP_List_And_Extract'Access,
+         "ZIP central-directory catalogue and Deflate extraction");
       Register_Routine
         (T, Test_Stored_Header_Structure'Access,
          "native stored 7z header structure and CRCs");

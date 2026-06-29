@@ -751,6 +751,47 @@ package Zlib is
    --  @param Force_ZIP64 force ZIP64 metadata emission
    --  @param Status set to Ok on success, otherwise a deterministic failure code
 
+   ----------------------------------------------------------------------------
+   --  Archive catalog and ZIP extraction
+   ----------------------------------------------------------------------------
+
+   type Archive_Entry is record
+      Name              : Ada.Strings.Unbounded.Unbounded_String;
+      Is_Directory      : Boolean := False;
+      Compression       : Interfaces.Unsigned_16 := 0;
+      Uncompressed_Size : Interfaces.Unsigned_64 := 0;
+      Compressed_Size   : Interfaces.Unsigned_64 := 0;
+      CRC_32            : Interfaces.Unsigned_32 := 0;
+   end record;
+   --  One catalogued archive member, shared by the ZIP and 7z listing APIs.
+   --  Compression is the raw ZIP method id (0 Stored, 8 Deflate, ...) for ZIP
+   --  entries and 0 for 7z entries (whose coder is folder-level, not per file).
+
+   type Archive_Entry_Array is array (Positive range <>) of Archive_Entry;
+   --  A catalogue of archive members, in stored order.
+
+   function List_ZIP_Entries
+     (Archive_Image : Byte_Array;
+      Status        : out Status_Code) return Archive_Entry_Array;
+   --  Catalogue every member of a ZIP archive from its central directory
+   --  (ZIP32 and ZIP64), without decompressing payloads.
+   --  @param Archive_Image complete ZIP archive image
+   --  @param Status Ok on success, otherwise a deterministic failure code
+   --  @return one Archive_Entry per central-directory record when Status is Ok
+
+   function Extract_ZIP
+     (Archive_Image : Byte_Array;
+      Entry_Name    : String;
+      Status        : out Status_Code) return Byte_Array;
+   --  Extract one ZIP entry by name. Stored (method 0) and Deflate (method 8)
+   --  are decoded in-process; other methods are delegated to the codec bridge
+   --  (Extract_ZIP_External_Entry). Encrypted entries fail closed. The
+   --  uncompressed CRC32 is verified.
+   --  @param Archive_Image complete ZIP archive image
+   --  @param Entry_Name central-directory entry name to extract
+   --  @param Status Ok on success, otherwise a deterministic failure code
+   --  @return extracted payload when Status is Ok
+
    type Filter_Type is limited private;
    --  Streaming inflate filter state. The lifecycle contract is:
    --  Closed before initialization, Open after Inflate_Init, Failed after a
