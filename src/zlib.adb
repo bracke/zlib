@@ -10585,6 +10585,30 @@ package body Zlib is
          Auto, Default_Level, False, True, Password, Status);
    end Seven_Zip_LZMA_Encrypted_Files;
 
+   procedure Seven_Zip_LZMA2_Encrypted_Files
+     (Input_Paths : Text_Array;
+      Output_Path : String;
+      Entry_Names : Text_Array;
+      Password    : String;
+      Status      : out Status_Code) is
+   begin
+      Seven_Zip_Compressed_Files_Internal
+        (Input_Paths, Output_Path, Entry_Names, Seven_Zip_LZMA2_Method,
+         Auto, Default_Level, False, True, Password, Status);
+   end Seven_Zip_LZMA2_Encrypted_Files;
+
+   procedure Seven_Zip_PPMd_Encrypted_Files
+     (Input_Paths : Text_Array;
+      Output_Path : String;
+      Entry_Names : Text_Array;
+      Password    : String;
+      Status      : out Status_Code) is
+   begin
+      Seven_Zip_Compressed_Files_Internal
+        (Input_Paths, Output_Path, Entry_Names, Seven_Zip_PPMd_Method,
+         Auto, Default_Level, False, True, Password, Status);
+   end Seven_Zip_PPMd_Encrypted_Files;
+
    function Extract_Seven_Zip_Entry
      (Archive_Image : Byte_Array;
       Entry_Name    : String;
