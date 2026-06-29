@@ -233,7 +233,7 @@ Remaining (refinements, not blocking): a CSPRNG IV (currently data-derived),
 multi-file/solid encrypted *writing*, and encrypted-header *writing*
 (`mhe=on` output).
 
-### M7 — Multi-volume (split) archives
+### M7 — Multi-volume (split) archives — DONE
 
 - Read/write `.7z.001`, `.7z.002`, … splitting the stream at volume boundaries.
 - Tests: round-trip across volume boundaries; read stock multi-volume sets.
