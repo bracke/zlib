@@ -1807,6 +1807,20 @@ package Zlib is
    --  @param Status Ok on success, otherwise a deterministic failure code
    --  @return extracted payload when Status is Ok
 
+   function Encrypt_Seven_Zip_Header
+     (Archive  : Byte_Array;
+      Password : String;
+      Status   : out Status_Code) return Byte_Array;
+   --  Re-wrap any .7z image so its header is AES-256 encrypted (7z "mhe=on"):
+   --  the plain header is LZMA-compressed then AES-encrypted into a
+   --  kEncodedHeader [AES -> LZMA] folder, hiding file names and structure.
+   --  Composes with every writer (e.g. Seven_Zip_LZMA_Encrypted output).
+   --  Stock 7z and Extract_Seven_Zip (with the password) read the result.
+   --  @param Archive a complete .7z image produced by one of the writers
+   --  @param Password the archive password (also used for the data, by convention)
+   --  @param Status set to Ok on success, otherwise a deterministic failure code
+   --  @return the .7z image with an encrypted header when Status is Ok
+
    function Extract_Seven_Zip_Metadata
      (Archive_Image : Byte_Array;
       Entry_Name    : String;

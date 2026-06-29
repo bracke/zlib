@@ -14227,6 +14227,139 @@ package body Zlib is
       end if;
    end Extract_Seven_Zip_Volumes;
 
+   function Encrypt_Seven_Zip_Header
+     (Archive  : Byte_Array;
+      Password : String;
+      Status   : out Status_Code) return Byte_Array
+   is
+      Empty : constant Byte_Array (1 .. 0) := [others => 0];
+
+      function U64_At (Off : Natural) return Interfaces.Unsigned_64 is
+         R : Interfaces.Unsigned_64 := 0;
+      begin
+         for I in 0 .. 7 loop
+            R := R + Interfaces.Shift_Left
+                       (Interfaces.Unsigned_64
+                          (Archive (Archive'First + Off + I)), 8 * I);
+         end loop;
+         return R;
+      end U64_At;
+   begin
+      Status := Unsupported_Method;
+      if Archive'Length < 32
+        or else Archive (Archive'First) /= 16#37#
+        or else Archive (Archive'First + 1) /= 16#7A#
+      then
+         return Empty;
+      end if;
+
+      declare
+         NHO  : constant Natural := Natural (U64_At (12));
+         NHS  : constant Natural := Natural (U64_At (20));
+         Base : constant Natural := Archive'First + 32;
+      begin
+         if NHS = 0 or else Base + NHO + NHS - 1 > Archive'Last then
+            return Empty;
+         end if;
+
+         declare
+            Main_Pack : constant Byte_Array := Archive (Base .. Base + NHO - 1);
+            Plain_Hdr : constant Byte_Array :=
+              Archive (Base + NHO .. Base + NHO + NHS - 1);
+            HC  : constant Byte_Array := LZMA_Encode_Bounded (Plain_Hdr);
+            IV  : constant Byte_Array := Zlib.Seven_Zip_AES.Random_IV;
+            Key : constant Byte_Array :=
+              Zlib.Seven_Zip_AES.Derive_Key (Password, Empty, 19);
+            HE  : constant Byte_Array :=
+              Zlib.Seven_Zip_AES.Encrypt_CBC
+                (Key, IV, Zlib.Seven_Zip_AES.Pad_To_Block (HC));
+            ESI : Byte_Vectors.Vector;
+         begin
+            if HE'Length = 0 then
+               return Empty;
+            end if;
+
+            --  kEncodedHeader: a StreamsInfo describing the [AES -> LZMA] folder
+            --  whose decode yields the real (plain) header bytes.
+            ESI.Append (16#17#); --  kEncodedHeader
+            ESI.Append (16#06#); --  PackInfo
+            Append_Seven_Zip_Number (ESI, Interfaces.Unsigned_64 (NHO));
+            Append_Seven_Zip_Number (ESI, 1);
+            ESI.Append (16#09#); --  Size
+            Append_Seven_Zip_Number (ESI, Interfaces.Unsigned_64 (HE'Length));
+            ESI.Append (16#00#); --  end PackInfo
+            ESI.Append (16#07#); --  UnPackInfo
+            ESI.Append (16#0B#); --  Folder
+            Append_Seven_Zip_Number (ESI, 1);
+            ESI.Append (16#00#); --  external
+            Append_Seven_Zip_Number (ESI, 2);
+            ESI.Append (16#24#);
+            ESI.Append (16#06#);
+            ESI.Append (16#F1#);
+            ESI.Append (16#07#);
+            ESI.Append (16#01#);
+            Append_Seven_Zip_Number (ESI, 18);
+            ESI.Append (16#53#);
+            ESI.Append (16#0F#);
+            for B of IV loop
+               ESI.Append (B);
+            end loop;
+            Append_Seven_Zip_Coder (ESI, Seven_Zip_LZMA_Method);
+            Append_Seven_Zip_Number (ESI, 1);  --  bind In=1 (LZMA.in)
+            Append_Seven_Zip_Number (ESI, 0);  --  bind Out=0 (AES.out)
+            ESI.Append (16#0C#); --  CodersUnPackSize
+            Append_Seven_Zip_Number (ESI, Interfaces.Unsigned_64 (HC'Length));
+            Append_Seven_Zip_Number
+              (ESI, Interfaces.Unsigned_64 (Plain_Hdr'Length));
+            ESI.Append (16#00#); --  end UnPackInfo
+            ESI.Append (16#00#); --  end StreamsInfo
+
+            declare
+               ESI_Image : constant Byte_Array := To_Byte_Array (ESI);
+               Start_Header : Byte_Vectors.Vector;
+            begin
+               Append_U64_LE
+                 (Start_Header,
+                  Interfaces.Unsigned_64 (NHO) +
+                  Interfaces.Unsigned_64 (HE'Length));
+               Append_U64_LE
+                 (Start_Header, Interfaces.Unsigned_64 (ESI_Image'Length));
+               Append_U32_LE
+                 (Start_Header, Seven_Zip_Header_CRC (ESI_Image));
+
+               declare
+                  SH_Image : constant Byte_Array := To_Byte_Array (Start_Header);
+                  Out_A    : Byte_Vectors.Vector;
+               begin
+                  Out_A.Append (16#37#);
+                  Out_A.Append (16#7A#);
+                  Out_A.Append (16#BC#);
+                  Out_A.Append (16#AF#);
+                  Out_A.Append (16#27#);
+                  Out_A.Append (16#1C#);
+                  Out_A.Append (0);
+                  Out_A.Append (4);
+                  Append_U32_LE (Out_A, Seven_Zip_Header_CRC (SH_Image));
+                  Out_A.Append_Vector (Start_Header);
+                  for B of Main_Pack loop
+                     Out_A.Append (B);
+                  end loop;
+                  for B of HE loop
+                     Out_A.Append (B);
+                  end loop;
+                  Out_A.Append_Vector (ESI);
+                  Status := Ok;
+                  return To_Byte_Array (Out_A);
+               end;
+            end;
+         end;
+      end;
+   exception
+      when others =>
+         Status := Unsupported_Method;
+         return Empty;
+   end Encrypt_Seven_Zip_Header;
+
    function Extract_Seven_Zip_Metadata
      (Archive_Image : Byte_Array;
       Entry_Name    : String;
