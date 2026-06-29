@@ -11385,6 +11385,36 @@ package body Zlib_Seven_Zip_Tests is
       end;
    end Test_ZIP_List_And_Extract;
 
+   procedure Test_Seven_Zip_List
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Data   : Zlib.Byte_Array (1 .. 250);
+      Status : Zlib.Status_Code := Zlib.Unsupported_Method;
+   begin
+      for I in Data'Range loop
+         Data (I) := Zlib.Byte ((I * 5) mod 256);
+      end loop;
+      declare
+         Archive : constant Zlib.Byte_Array :=
+           Zlib.Seven_Zip_LZMA (Data, "folder/item.dat", Status);
+      begin
+         Assert (Status = Zlib.Ok, "7z archive built");
+         declare
+            LStatus : Zlib.Status_Code := Zlib.Unsupported_Method;
+            Entries : constant Zlib.Archive_Entry_Array :=
+              Zlib.List_Seven_Zip_Entries (Archive, LStatus);
+         begin
+            Assert
+              (LStatus = Zlib.Ok
+               and then Entries'Length = 1
+               and then not Entries (1).Is_Directory
+               and then Entries (1).Uncompressed_Size = 250,
+               "7z catalogue lists the entry with its uncompressed size");
+         end;
+      end;
+   end Test_Seven_Zip_List;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
@@ -11402,6 +11432,9 @@ package body Zlib_Seven_Zip_Tests is
       Register_Routine
         (T, Test_ZIP_List_And_Extract'Access,
          "ZIP central-directory catalogue and Deflate extraction");
+      Register_Routine
+        (T, Test_Seven_Zip_List'Access,
+         "7z FilesInfo catalogue with per-entry sizes");
       Register_Routine
         (T, Test_Stored_Header_Structure'Access,
          "native stored 7z header structure and CRCs");

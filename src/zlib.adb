@@ -15240,6 +15240,694 @@ package body Zlib is
          return Empty;
    end Encrypt_Seven_Zip_Header;
 
+   --  Catalogue every member of a 7z archive: decode the (possibly
+   --  LZMA/Copy/AES-encoded) header, then walk the folder, SubStreamsInfo and
+   --  FilesInfo structures to recover names, directory flags and per-file
+   --  uncompressed sizes/CRCs.
+   function List_Seven_Zip_Entries
+     (Archive_Image : Byte_Array;
+      Status        : out Status_Code) return Archive_Entry_Array
+   is
+      No : constant Archive_Entry_Array (1 .. 0) :=
+        [others => (others => <>)];
+      No_Bytes : constant Byte_Array (1 .. 0) := [others => 0];
+
+      function U64_At (Off : Natural) return Interfaces.Unsigned_64 is
+         R : Interfaces.Unsigned_64 := 0;
+      begin
+         for I in 0 .. 7 loop
+            R := R + Interfaces.Shift_Left
+                       (Interfaces.Unsigned_64
+                          (Archive_Image (Archive_Image'First + Off + I)),
+                        8 * I);
+         end loop;
+         return R;
+      end U64_At;
+
+      --  Decode the next-header bytes into a plain (kHeader 0x01) image.
+      function Plain_Header return Byte_Array is
+         Base : constant Natural := Archive_Image'First + 32;
+         NHO  : constant Natural := Natural (U64_At (12));
+         NHS  : constant Natural := Natural (U64_At (20));
+      begin
+         if NHS = 0 or else Base + NHO + NHS - 1 > Archive_Image'Last then
+            return No_Bytes;
+         end if;
+         declare
+            H : constant Byte_Array :=
+              Archive_Image (Base + NHO .. Base + NHO + NHS - 1);
+         begin
+            if H (H'First) = 16#01# then
+               return H;
+            elsif H (H'First) /= 16#17# then
+               return No_Bytes;
+            end if;
+
+            --  Encoded header: parse its StreamsInfo (PackPos/PackSize and a
+            --  one- or two-coder folder), decode, and return the plain header.
+            declare
+               P         : Natural := H'First;
+               V         : Interfaces.Unsigned_64 := 0;
+               Pack_Pos  : Interfaces.Unsigned_64 := 0;
+               Pack_Size : Interfaces.Unsigned_64 := 0;
+               B         : Byte := 0;
+               Is_AES    : Boolean := False;
+               Is_LZMA   : Boolean := False;
+               Is_Copy   : Boolean := False;
+               Num_Cod   : Interfaces.Unsigned_64 := 0;
+               LZMA_P    : Seven_Zip_LZMA_Props := [others => 0];
+               Cycles    : Natural := 0;
+               Salt_Len  : Natural := 0;
+               IV_Len    : Natural := 0;
+               Salt      : Byte_Array (1 .. 16) := [others => 0];
+               IV        : Byte_Array (1 .. 16) := [others => 0];
+               HC_Size   : Interfaces.Unsigned_64 := 0;
+               Hdr_Size  : Interfaces.Unsigned_64 := 0;
+            begin
+               P := P + 1;  --  consume 0x17
+               if P <= H'Last and then H (P) = 16#04# then
+                  P := P + 1;
+               end if;
+               if not Seven_Zip_Expect_Byte (H, P, H'Last, 16#06#)
+                 or else not Read_Seven_Zip_Number (H, P, H'Last, Pack_Pos)
+                 or else not Read_Seven_Zip_Number (H, P, H'Last, V)
+                 or else V /= 1
+                 or else not Seven_Zip_Expect_Byte (H, P, H'Last, 16#09#)
+                 or else not Read_Seven_Zip_Number (H, P, H'Last, Pack_Size)
+               then
+                  return No_Bytes;
+               end if;
+               if P <= H'Last and then H (P) = 16#0A# then
+                  P := P + 1;
+                  if not Seven_Zip_Expect_Byte (H, P, H'Last, 1)
+                    or else not Seven_Zip_Has_Bytes (P, H'Last, 4)
+                  then
+                     return No_Bytes;
+                  end if;
+                  P := P + 4;
+               end if;
+               if not Seven_Zip_Expect_Byte (H, P, H'Last, 0)
+                 or else not Seven_Zip_Expect_Byte (H, P, H'Last, 16#07#)
+                 or else not Seven_Zip_Expect_Byte (H, P, H'Last, 16#0B#)
+                 or else not Read_Seven_Zip_Number (H, P, H'Last, V)
+                 or else V /= 1
+                 or else not Seven_Zip_Expect_Byte (H, P, H'Last, 0)
+                 or else not Read_Seven_Zip_Number (H, P, H'Last, Num_Cod)
+                 or else Num_Cod not in 1 | 2
+               then
+                  return No_Bytes;
+               end if;
+
+               --  First coder.
+               if not Seven_Zip_Read_Byte (H, P, H'Last, B) then
+                  return No_Bytes;
+               end if;
+               if (B and 16#0F#) = 1 and then B = 16#01# then
+                  if not Seven_Zip_Expect_Byte (H, P, H'Last, 0) then
+                     return No_Bytes;
+                  end if;
+                  Is_Copy := True;
+               elsif (B and 16#0F#) = 3
+                 and then Seven_Zip_Expect_Byte (H, P, H'Last, 16#03#)
+                 and then Seven_Zip_Expect_Byte (H, P, H'Last, 16#01#)
+                 and then Seven_Zip_Expect_Byte (H, P, H'Last, 16#01#)
+                 and then Seven_Zip_Expect_Byte (H, P, H'Last, 5)
+               then
+                  for J in LZMA_P'Range loop
+                     if not Seven_Zip_Read_Byte (H, P, H'Last, LZMA_P (J)) then
+                        return No_Bytes;
+                     end if;
+                  end loop;
+                  Is_LZMA := True;
+               elsif (B and 16#0F#) = 4
+                 and then Seven_Zip_Expect_Byte (H, P, H'Last, 16#06#)
+                 and then Seven_Zip_Expect_Byte (H, P, H'Last, 16#F1#)
+                 and then Seven_Zip_Expect_Byte (H, P, H'Last, 16#07#)
+                 and then Seven_Zip_Expect_Byte (H, P, H'Last, 16#01#)
+               then
+                  Is_AES := True;
+                  declare
+                     Prop_Size : Interfaces.Unsigned_64 := 0;
+                  begin
+                     if not Read_Seven_Zip_Number (H, P, H'Last, Prop_Size)
+                       or else Prop_Size < 1
+                       or else not Seven_Zip_Has_Bytes
+                         (P, H'Last, Natural (Prop_Size))
+                     then
+                        return No_Bytes;
+                     end if;
+                     declare
+                        PB : Byte_Array (1 .. Natural (Prop_Size));
+                        B0, B1, PP : Natural := 0;
+                     begin
+                        for J in PB'Range loop
+                           PB (J) := H (P);
+                           P := P + 1;
+                        end loop;
+                        B0 := Natural (PB (1));
+                        Cycles := B0 mod 64;
+                        if (B0 / 64) /= 0 and then Natural (Prop_Size) >= 2 then
+                           B1 := Natural (PB (2));
+                           PP := 3;
+                        else
+                           PP := 2;
+                        end if;
+                        Salt_Len := ((B0 / 128) mod 2) + (B1 / 16);
+                        IV_Len := ((B0 / 64) mod 2) + (B1 mod 16);
+                        if Salt_Len > 16 or else IV_Len > 16
+                          or else Natural (Prop_Size) <
+                            (PP - 1) + Salt_Len + IV_Len
+                        then
+                           return No_Bytes;
+                        end if;
+                        for J in 1 .. Salt_Len loop
+                           Salt (J) := PB (PP + J - 1);
+                        end loop;
+                        for J in 1 .. IV_Len loop
+                           IV (J) := PB (PP + Salt_Len + J - 1);
+                        end loop;
+                     end;
+                  end;
+               else
+                  return No_Bytes;
+               end if;
+
+               if Num_Cod = 2 then
+                  --  Second coder is LZMA (AES + LZMA header chain).
+                  if not Seven_Zip_Expect_Byte (H, P, H'Last, 16#23#)
+                    or else not Seven_Zip_Expect_Byte (H, P, H'Last, 16#03#)
+                    or else not Seven_Zip_Expect_Byte (H, P, H'Last, 16#01#)
+                    or else not Seven_Zip_Expect_Byte (H, P, H'Last, 16#01#)
+                    or else not Seven_Zip_Expect_Byte (H, P, H'Last, 5)
+                  then
+                     return No_Bytes;
+                  end if;
+                  for J in LZMA_P'Range loop
+                     if not Seven_Zip_Read_Byte (H, P, H'Last, LZMA_P (J)) then
+                        return No_Bytes;
+                     end if;
+                  end loop;
+                  Is_LZMA := True;
+                  if not Read_Seven_Zip_Number (H, P, H'Last, V) or else V /= 1
+                    or else not Read_Seven_Zip_Number (H, P, H'Last, V)
+                    or else V /= 0
+                  then
+                     return No_Bytes;
+                  end if;
+               end if;
+
+               if not Seven_Zip_Expect_Byte (H, P, H'Last, 16#0C#)
+                 or else not Read_Seven_Zip_Number (H, P, H'Last, HC_Size)
+               then
+                  return No_Bytes;
+               end if;
+               if Num_Cod = 2 then
+                  if not Read_Seven_Zip_Number (H, P, H'Last, Hdr_Size) then
+                     return No_Bytes;
+                  end if;
+               else
+                  Hdr_Size := HC_Size;
+               end if;
+
+               if Pack_Pos > Interfaces.Unsigned_64 (Natural'Last)
+                 or else Pack_Size > Interfaces.Unsigned_64 (Natural'Last)
+                 or else Base + Natural (Pack_Pos) + Natural (Pack_Size) - 1 >
+                   Archive_Image'Last
+               then
+                  return No_Bytes;
+               end if;
+
+               declare
+                  Pack : constant Byte_Array :=
+                    Archive_Image
+                      (Base + Natural (Pack_Pos) ..
+                       Base + Natural (Pack_Pos) + Natural (Pack_Size) - 1);
+                  DS   : Status_Code := Ok;
+               begin
+                  if Is_AES then
+                     if US.Length (Active_Seven_Zip_Password) = 0 then
+                        return No_Bytes;
+                     end if;
+                     declare
+                        Dec : constant Byte_Array :=
+                          Zlib.Seven_Zip_AES.Decrypt_CBC
+                            (Zlib.Seven_Zip_AES.Derive_Key
+                               (US.To_String (Active_Seven_Zip_Password),
+                                Salt (1 .. Salt_Len), Cycles),
+                             IV, Pack);
+                     begin
+                        if Natural (HC_Size) > Dec'Length then
+                           return No_Bytes;
+                        end if;
+                        if Num_Cod = 2 then
+                           return LZMA_Decode_Raw_Encoded_Header
+                             (Dec (Dec'First .. Dec'First + Natural (HC_Size) - 1),
+                              LZMA_P, Natural (Hdr_Size), DS);
+                        else
+                           return Dec (Dec'First ..
+                                       Dec'First + Natural (HC_Size) - 1);
+                        end if;
+                     end;
+                  elsif Is_LZMA then
+                     return LZMA_Decode_Raw_Encoded_Header
+                       (Pack, LZMA_P, Natural (Hdr_Size), DS);
+                  elsif Is_Copy then
+                     return Pack;
+                  else
+                     return No_Bytes;
+                  end if;
+               end;
+            end;
+         end;
+      end Plain_Header;
+
+      Header : constant Byte_Array := Plain_Header;
+   begin
+      Status := Unsupported_Method;
+      if Archive_Image'Length < 32
+        or else Archive_Image (Archive_Image'First) /= 16#37#
+        or else Archive_Image (Archive_Image'First + 1) /= 16#7A#
+      then
+         Status := Invalid_Header;
+         return No;
+      end if;
+      if Header'Length = 0 or else Header (Header'First) /= 16#01# then
+         Status := Unsupported_Method;
+         return No;
+      end if;
+
+      --  Walk the plain header. Collect substream sizes/CRCs and file records.
+      declare
+         P : Natural := Header'First + 1;  --  past kHeader
+
+         Max_Sub : constant Natural := 4096;
+         Sub_Size : array (1 .. Max_Sub) of Interfaces.Unsigned_64 :=
+           [others => 0];
+         Sub_CRC  : array (1 .. Max_Sub) of Interfaces.Unsigned_32 :=
+           [others => 0];
+         Sub_Count : Natural := 0;
+
+         Max_Fold : constant Natural := 4096;
+         Folder_Size  : array (1 .. Max_Fold) of Interfaces.Unsigned_64 :=
+           [others => 0];
+         Folder_CRC_Def : array (1 .. Max_Fold) of Boolean := [others => False];
+         Num_Folders : Natural := 0;
+
+         procedure Skip_Number is
+            Dummy : Interfaces.Unsigned_64 := 0;
+            Ok_N  : constant Boolean :=
+              Read_Seven_Zip_Number (Header, P, Header'Last, Dummy);
+         begin
+            if not Ok_N then
+               raise Constraint_Error;
+            end if;
+         end Skip_Number;
+
+         function Num return Interfaces.Unsigned_64 is
+            R : Interfaces.Unsigned_64 := 0;
+         begin
+            if not Read_Seven_Zip_Number (Header, P, Header'Last, R) then
+               raise Constraint_Error;
+            end if;
+            return R;
+         end Num;
+      begin
+         --  Optional MainStreamsInfo.
+         if P <= Header'Last and then Header (P) = 16#04# then
+            P := P + 1;
+            --  PackInfo (0x06): skip to its kEnd.
+            if P <= Header'Last and then Header (P) = 16#06# then
+               P := P + 1;
+               Skip_Number;          --  pack pos
+               declare
+                  NP : constant Natural := Natural (Num);  --  num pack streams
+               begin
+                  loop
+                     exit when P > Header'Last or else Header (P) = 0;
+                     if Header (P) = 16#09# then
+                        P := P + 1;
+                        for K in 1 .. NP loop
+                           Skip_Number;
+                        end loop;
+                     elsif Header (P) = 16#0A# then
+                        P := P + 1;
+                        --  digests: AllDefined byte + CRCs
+                        declare
+                           All_Def : constant Byte := Header (P);
+                        begin
+                           P := P + 1;
+                           for K in 1 .. NP loop
+                              if All_Def /= 0 then
+                                 P := P + 4;
+                              end if;
+                           end loop;
+                        end;
+                     else
+                        exit;
+                     end if;
+                  end loop;
+               end;
+               if P <= Header'Last and then Header (P) = 0 then
+                  P := P + 1;
+               end if;
+            end if;
+
+            --  UnPackInfo (0x07).
+            if P <= Header'Last and then Header (P) = 16#07# then
+               P := P + 1;
+               if P <= Header'Last and then Header (P) = 16#0B# then
+                  P := P + 1;
+                  Num_Folders := Natural (Num);
+                  declare
+                     External : constant Byte := Header (P);
+                  begin
+                     P := P + 1;
+                     if External /= 0 then
+                        Status := Unsupported_Method;
+                        return No;
+                     end if;
+                  end;
+                  --  Parse each folder's coders to learn its out-stream count.
+                  declare
+                     Out_Per : array (1 .. Max_Fold) of Natural :=
+                       [others => 1];
+                  begin
+                     for F in 1 .. Num_Folders loop
+                        declare
+                           NC : constant Natural := Natural (Num);
+                           Tot_In, Tot_Out : Natural := 0;
+                        begin
+                           for C in 1 .. NC loop
+                              declare
+                                 Flag : constant Byte := Header (P);
+                                 ID_Sz : constant Natural :=
+                                   Natural (Flag and 16#0F#);
+                              begin
+                                 P := P + 1 + ID_Sz;
+                                 if (Flag and 16#10#) /= 0 then
+                                    Tot_In := Tot_In + Natural (Num);
+                                    Tot_Out := Tot_Out + Natural (Num);
+                                 else
+                                    Tot_In := Tot_In + 1;
+                                    Tot_Out := Tot_Out + 1;
+                                 end if;
+                                 if (Flag and 16#20#) /= 0 then
+                                    declare
+                                       PS : constant Natural := Natural (Num);
+                                    begin
+                                       P := P + PS;
+                                    end;
+                                 end if;
+                              end;
+                           end loop;
+                           if F <= Max_Fold then
+                              Out_Per (F) := Tot_Out;
+                           end if;
+                           --  Bind pairs (Tot_Out - 1) then packed indices.
+                           for K in 1 .. Tot_Out - 1 loop
+                              Skip_Number;  --  in index
+                              Skip_Number;  --  out index
+                           end loop;
+                           declare
+                              NPacked : constant Natural :=
+                                Tot_In - (Tot_Out - 1);
+                           begin
+                              if NPacked > 1 then
+                                 for K in 1 .. NPacked loop
+                                    Skip_Number;
+                                 end loop;
+                              end if;
+                           end;
+                        end;
+                     end loop;
+                     --  CodersUnPackSize (0x0C): one size per out stream of
+                     --  every folder; the folder size is its last out stream.
+                     if not Seven_Zip_Expect_Byte (Header, P, Header'Last, 16#0C#)
+                     then
+                        Status := Unsupported_Method;
+                        return No;
+                     end if;
+                     for F in 1 .. Num_Folders loop
+                        declare
+                           Last_Size : Interfaces.Unsigned_64 := 0;
+                        begin
+                           for K in 1 .. Out_Per (F) loop
+                              Last_Size := Num;
+                           end loop;
+                           if F <= Max_Fold then
+                              Folder_Size (F) := Last_Size;
+                           end if;
+                        end;
+                     end loop;
+                  end;
+                  --  Optional folder CRCs (0x0A).
+                  if P <= Header'Last and then Header (P) = 16#0A# then
+                     P := P + 1;
+                     declare
+                        All_Def : constant Byte := Header (P);
+                     begin
+                        P := P + 1;
+                        for F in 1 .. Num_Folders loop
+                           if All_Def /= 0 then
+                              if F <= Max_Fold then
+                                 Folder_CRC_Def (F) := True;
+                              end if;
+                              P := P + 4;
+                           end if;
+                        end loop;
+                     end;
+                  end if;
+                  if P <= Header'Last and then Header (P) = 0 then
+                     P := P + 1;  --  end UnPackInfo
+                  end if;
+               end if;
+            end if;
+
+            --  Per-folder substream counts default to 1.
+            declare
+               Streams_Per : array (1 .. Max_Fold) of Natural :=
+                 [others => 1];
+            begin
+               if P <= Header'Last and then Header (P) = 16#08# then
+                  P := P + 1;  --  SubStreamsInfo
+                  if P <= Header'Last and then Header (P) = 16#0D# then
+                     P := P + 1;
+                     for F in 1 .. Num_Folders loop
+                        Streams_Per (F) := Natural (Num);
+                     end loop;
+                  end if;
+                  --  Sizes (0x09): for folders with >1 stream, all but last.
+                  if P <= Header'Last and then Header (P) = 16#09# then
+                     P := P + 1;
+                     for F in 1 .. Num_Folders loop
+                        declare
+                           Sum : Interfaces.Unsigned_64 := 0;
+                        begin
+                           for K in 1 .. Streams_Per (F) - 1 loop
+                              declare
+                                 S : constant Interfaces.Unsigned_64 := Num;
+                              begin
+                                 Sum := Sum + S;
+                                 Sub_Count := Sub_Count + 1;
+                                 if Sub_Count <= Max_Sub then
+                                    Sub_Size (Sub_Count) := S;
+                                 end if;
+                              end;
+                           end loop;
+                           Sub_Count := Sub_Count + 1;  --  last stream
+                           if Sub_Count <= Max_Sub then
+                              Sub_Size (Sub_Count) :=
+                                (if Folder_Size (F) >= Sum
+                                 then Folder_Size (F) - Sum else 0);
+                           end if;
+                        end;
+                     end loop;
+                  else
+                     --  No explicit sizes: each folder is one substream.
+                     for F in 1 .. Num_Folders loop
+                        for K in 1 .. Streams_Per (F) loop
+                           Sub_Count := Sub_Count + 1;
+                           if Sub_Count <= Max_Sub and then K = 1 then
+                              Sub_Size (Sub_Count) := Folder_Size (F);
+                           end if;
+                        end loop;
+                     end loop;
+                  end if;
+                  --  CRCs (0x0A): digests for streams lacking a folder CRC.
+                  if P <= Header'Last and then Header (P) = 16#0A# then
+                     P := P + 1;
+                     declare
+                        All_Def : constant Byte := Header (P);
+                     begin
+                        P := P + 1;
+                        for I in 1 .. Sub_Count loop
+                           if All_Def /= 0 then
+                              if Seven_Zip_Has_Bytes (P, Header'Last, 4) then
+                                 Sub_CRC (I) := Seven_Zip_U32_At (Header, P);
+                                 P := P + 4;
+                              end if;
+                           end if;
+                        end loop;
+                     end;
+                  end if;
+                  --  consume to SubStreamsInfo kEnd
+                  while P <= Header'Last and then Header (P) /= 0 loop
+                     P := P + 1;
+                  end loop;
+                  if P <= Header'Last then
+                     P := P + 1;
+                  end if;
+               else
+                  --  No SubStreamsInfo: one substream per folder.
+                  for F in 1 .. Num_Folders loop
+                     Sub_Count := Sub_Count + 1;
+                     if Sub_Count <= Max_Sub then
+                        Sub_Size (Sub_Count) := Folder_Size (F);
+                     end if;
+                  end loop;
+               end if;
+            end;
+
+            if P <= Header'Last and then Header (P) = 0 then
+               P := P + 1;  --  end MainStreamsInfo
+            end if;
+         end if;
+
+         --  FilesInfo (0x05).
+         if P > Header'Last or else Header (P) /= 16#05# then
+            Status := Unsupported_Method;
+            return No;
+         end if;
+         P := P + 1;
+         declare
+            File_Count : constant Natural := Natural (Num);
+            Has_Stream : array (1 .. Natural'Max (File_Count, 1)) of Boolean :=
+              [others => True];
+            Is_Dir     : array (1 .. Natural'Max (File_Count, 1)) of Boolean :=
+              [others => False];
+            Names      : array (1 .. Natural'Max (File_Count, 1)) of
+              US.Unbounded_String := [others => US.Null_Unbounded_String];
+            Empty_Seen : Natural := 0;
+         begin
+            if File_Count = 0 or else File_Count > Max_Sub then
+               Status := Unsupported_Method;
+               return No;
+            end if;
+            --  Property loop.
+            loop
+               exit when P > Header'Last or else Header (P) = 0;
+               declare
+                  Prop_Id   : constant Byte := Header (P);
+                  Prop_Size : Interfaces.Unsigned_64 := 0;
+               begin
+                  P := P + 1;
+                  if not Read_Seven_Zip_Number (Header, P, Header'Last, Prop_Size)
+                  then
+                     Status := Unsupported_Method;
+                     return No;
+                  end if;
+                  declare
+                     Prop_First : constant Natural := P;
+                     Prop_Last  : constant Natural :=
+                       P + Natural (Prop_Size) - 1;
+                  begin
+                     if Prop_Last > Header'Last then
+                        Status := Unsupported_Method;
+                        return No;
+                     end if;
+                     case Prop_Id is
+                        when 16#0E# =>  --  kEmptyStream
+                           for I in 1 .. File_Count loop
+                              if Seven_Zip_Bit_Is_Set (Header, Prop_First, I) then
+                                 Has_Stream (I) := False;
+                                 Is_Dir (I) := True;
+                              end if;
+                           end loop;
+                        when 16#0F# =>  --  kEmptyFile
+                           Empty_Seen := 0;
+                           for I in 1 .. File_Count loop
+                              if not Has_Stream (I) then
+                                 Empty_Seen := Empty_Seen + 1;
+                                 if Seven_Zip_Bit_Is_Set
+                                   (Header, Prop_First, Empty_Seen)
+                                 then
+                                    Is_Dir (I) := False;  --  empty file
+                                 end if;
+                              end if;
+                           end loop;
+                        when 16#11# =>  --  kName
+                           declare
+                              NP : Natural := Prop_First + 1;  --  skip external
+                              FI : Natural := 1;
+                           begin
+                              while NP + 1 <= Prop_Last and then FI <= File_Count
+                              loop
+                                 declare
+                                    S : US.Unbounded_String :=
+                                      US.Null_Unbounded_String;
+                                 begin
+                                    while NP + 1 <= Prop_Last
+                                      and then not (Header (NP) = 0
+                                                    and then Header (NP + 1) = 0)
+                                    loop
+                                       US.Append
+                                         (S,
+                                          Character'Val
+                                            (Natural (Header (NP)) +
+                                             Natural (Header (NP + 1)) * 256));
+                                       NP := NP + 2;
+                                    end loop;
+                                    Names (FI) := S;
+                                    NP := NP + 2;
+                                    FI := FI + 1;
+                                 end;
+                              end loop;
+                           end;
+                        when others =>
+                           null;  --  MTime/Attributes/etc. not needed here
+                     end case;
+                     P := Prop_Last + 1;
+                  end;
+               end;
+            end loop;
+
+            --  Build the catalogue, mapping streamed files to substreams.
+            return Result : Archive_Entry_Array (1 .. File_Count) do
+               declare
+                  Sub_Idx : Natural := 0;
+               begin
+                  for I in 1 .. File_Count loop
+                     declare
+                        USz : Interfaces.Unsigned_64 := 0;
+                        Crc : Interfaces.Unsigned_32 := 0;
+                     begin
+                        if Has_Stream (I) then
+                           Sub_Idx := Sub_Idx + 1;
+                           if Sub_Idx <= Sub_Count then
+                              USz := Sub_Size (Sub_Idx);
+                              Crc := Sub_CRC (Sub_Idx);
+                           end if;
+                        end if;
+                        Result (I) :=
+                          (Name              => Names (I),
+                           Is_Directory      => Is_Dir (I),
+                           Compression       => 0,
+                           Uncompressed_Size => USz,
+                           Compressed_Size   => 0,
+                           CRC_32            => Crc);
+                     end;
+                  end loop;
+                  Status := Ok;
+               end;
+            end return;
+         end;
+      end;
+   exception
+      when others =>
+         Status := Unsupported_Method;
+         return No;
+   end List_Seven_Zip_Entries;
+
    function Extract_Seven_Zip_Metadata
      (Archive_Image : Byte_Array;
       Entry_Name    : String;

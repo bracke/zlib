@@ -779,6 +779,18 @@ package Zlib is
    --  @param Status Ok on success, otherwise a deterministic failure code
    --  @return one Archive_Entry per central-directory record when Status is Ok
 
+   function List_Seven_Zip_Entries
+     (Archive_Image : Byte_Array;
+      Status        : out Status_Code) return Archive_Entry_Array;
+   --  Catalogue every member of a .7z archive: decode the header (plain, or
+   --  LZMA/Copy/AES-encoded — set the password via the Extract_Seven_Zip
+   --  password overload's mechanism for AES headers) and recover each file's
+   --  name, directory flag, uncompressed size and CRC32. Compression is left 0
+   --  (7z coders are folder-level, not per file).
+   --  @param Archive_Image complete .7z archive image
+   --  @param Status Ok on success, otherwise a deterministic failure code
+   --  @return one Archive_Entry per file when Status is Ok
+
    function Extract_ZIP
      (Archive_Image : Byte_Array;
       Entry_Name    : String;
