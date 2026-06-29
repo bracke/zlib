@@ -76,14 +76,16 @@ Delivered and validated against stock 7-Zip in both directions:
 - a competitive LZMA/LZMA2 encoder with optimal (price-based) parsing;
 - multi-volume (split) archives, read and write.
 
+The BCJ2 encoder (`Seven_Zip_BCJ2`) is also done — the last decode-only codec —
+producing stored `-m0=BCJ2` archives stock 7z reads.
+
 Remaining 7z work:
 
 - **RISC-V** branch filter — deferred until a 7-Zip 24.x+ is available to
   cross-validate against (the algorithm is in 24.x; 23.01 cannot verify it);
-- a public **writer for non-encrypted filtered archives** (e.g. `BCJ + LZMA`);
-  the decode side and the multi-coder writer machinery already exist;
-- a **BCJ2 encoder** (BCJ2 decode is supported; encode is the last decode-only
-  codec).
+- a public **writer for non-encrypted *compressed* filtered archives** (e.g.
+  `BCJ + LZMA`, `BCJ2 + LZMA`); the decode side and the multi-coder writer
+  machinery already exist, so this is wiring rather than new codecs.
 
 ## Other future work
 
