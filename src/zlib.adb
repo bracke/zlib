@@ -14082,6 +14082,127 @@ package body Zlib is
       end return;
    end Extract_Seven_Zip;
 
+   --  Multi-volume (split) .7z: the archive byte-stream cut into fixed-size
+   --  volumes name.001, name.002, ...; concatenating them reproduces the .7z.
+
+   function Seven_Zip_Volume_Suffix (N : Positive) return String is
+      Img : constant String := N'Image;
+      Dig : constant String := Img (Img'First + 1 .. Img'Last);  --  drop sign
+   begin
+      if Dig'Length >= 3 then
+         return Dig;
+      elsif Dig'Length = 2 then
+         return "0" & Dig;
+      else
+         return "00" & Dig;
+      end if;
+   end Seven_Zip_Volume_Suffix;
+
+   function Read_Seven_Zip_Volumes
+     (First_Volume_Path : String;
+      Status            : out Status_Code) return Byte_Array
+   is
+      Result : Byte_Vectors.Vector;
+      Dot    : Natural := 0;
+   begin
+      Status := Input_File_Error;
+      for I in reverse First_Volume_Path'Range loop
+         if First_Volume_Path (I) = '.' then
+            Dot := I;
+            exit;
+         end if;
+      end loop;
+      if Dot = 0 then
+         return [1 .. 0 => 0];
+      end if;
+
+      declare
+         Base : constant String :=
+           First_Volume_Path (First_Volume_Path'First .. Dot - 1);
+         N    : Positive := 1;
+      begin
+         loop
+            declare
+               VP : constant String :=
+                 Base & "." & Seven_Zip_Volume_Suffix (N);
+            begin
+               exit when not Ada.Directories.Exists (VP);
+               declare
+                  RS : Status_Code := Ok;
+                  B  : constant Byte_Array := Read_File (VP, RS);
+               begin
+                  if RS /= Ok then
+                     Status := RS;
+                     return [1 .. 0 => 0];
+                  end if;
+                  for X of B loop
+                     Result.Append (X);
+                  end loop;
+               end;
+            end;
+            N := N + 1;
+         end loop;
+      end;
+
+      if Result.Is_Empty then
+         return [1 .. 0 => 0];
+      end if;
+      Status := Ok;
+      return To_Byte_Array (Result);
+   end Read_Seven_Zip_Volumes;
+
+   procedure Write_Seven_Zip_Volumes
+     (Archive     : Byte_Array;
+      Base_Path   : String;
+      Volume_Size : Positive;
+      Status      : out Status_Code)
+   is
+      N   : Positive := 1;
+      Pos : Natural := Archive'First;
+   begin
+      Status := Ok;
+      if Archive'Length = 0 then
+         Status := Output_File_Error;
+         return;
+      end if;
+      while Pos <= Archive'Last loop
+         declare
+            Last : constant Natural :=
+              Natural'Min (Pos + Volume_Size - 1, Archive'Last);
+            VP   : constant String :=
+              Base_Path & "." & Seven_Zip_Volume_Suffix (N);
+            WS   : Status_Code := Ok;
+         begin
+            Write_File (VP, Archive (Pos .. Last), WS);
+            if WS /= Ok then
+               Status := WS;
+               return;
+            end if;
+            Pos := Last + 1;
+            N := N + 1;
+         end;
+      end loop;
+   end Write_Seven_Zip_Volumes;
+
+   function Extract_Seven_Zip_Volumes
+     (First_Volume_Path : String;
+      Entry_Name        : String;
+      Password          : String;
+      Status            : out Status_Code) return Byte_Array
+   is
+      Joined : constant Byte_Array :=
+        Read_Seven_Zip_Volumes (First_Volume_Path, Status);
+   begin
+      if Status /= Ok then
+         return [1 .. 0 => 0];
+      end if;
+      if Password = "" then
+         return Extract_Seven_Zip (Joined, Entry_Name, Status);
+      else
+         return Extract_Seven_Zip (Joined, Entry_Name, Password, Status);
+      end if;
+   end Extract_Seven_Zip_Volumes;
+
    function Extract_Seven_Zip_Metadata
      (Archive_Image : Byte_Array;
       Entry_Name    : String;

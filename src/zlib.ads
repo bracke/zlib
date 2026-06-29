@@ -1744,6 +1744,41 @@ package Zlib is
    --  @param Status set to Ok on success, otherwise a deterministic failure code
    --  @return extracted payload when Status is Ok
 
+   function Read_Seven_Zip_Volumes
+     (First_Volume_Path : String;
+      Status            : out Status_Code) return Byte_Array;
+   --  Join a multi-volume .7z: read First_Volume_Path (e.g. "a.7z.001") and
+   --  successive volumes (.002, .003, ...) and return the concatenated archive
+   --  image, ready for Extract_Seven_Zip.
+   --  @param First_Volume_Path path of the first volume (suffix ".001")
+   --  @param Status Ok on success, otherwise a deterministic failure code
+   --  @return the reassembled .7z image when Status is Ok
+
+   procedure Write_Seven_Zip_Volumes
+     (Archive     : Byte_Array;
+      Base_Path   : String;
+      Volume_Size : Positive;
+      Status      : out Status_Code);
+   --  Split a .7z archive image into fixed-size volumes Base_Path & ".001",
+   --  ".002", ... (the 7z multi-volume layout that stock 7z reads).
+   --  @param Archive the complete .7z image
+   --  @param Base_Path output base path (e.g. "out.7z"); volumes append .NNN
+   --  @param Volume_Size maximum bytes per volume
+   --  @param Status Ok on success, otherwise a deterministic failure code
+
+   function Extract_Seven_Zip_Volumes
+     (First_Volume_Path : String;
+      Entry_Name        : String;
+      Password          : String;
+      Status            : out Status_Code) return Byte_Array;
+   --  Join the volumes starting at First_Volume_Path and extract Entry_Name.
+   --  Pass "" as Password for unencrypted archives.
+   --  @param First_Volume_Path path of the first volume (suffix ".001")
+   --  @param Entry_Name expected archive entry name
+   --  @param Password archive password, or "" if not encrypted
+   --  @param Status Ok on success, otherwise a deterministic failure code
+   --  @return extracted payload when Status is Ok
+
    function Extract_Seven_Zip_Metadata
      (Archive_Image : Byte_Array;
       Entry_Name    : String;
