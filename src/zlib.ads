@@ -1745,6 +1745,18 @@ package Zlib is
    --  @param Status set to Ok on success, otherwise a deterministic failure code
    --  @return extracted payload when Status is Ok
 
+   function Seven_Zip_BCJ2
+     (Input      : Byte_Array;
+      Entry_Name : String;
+      Status     : out Status_Code) return Byte_Array;
+   --  Encode Input as a one-file .7z using the BCJ2 x86 branch filter
+   --  (method 0303011B), stored uncompressed as the four BCJ2 streams, exactly
+   --  as stock "7z a -m0=BCJ2". Read back by stock 7z and by Extract_Seven_Zip.
+   --  @param Input uncompressed file payload (typically x86 machine code)
+   --  @param Entry_Name archive entry name, without NUL characters
+   --  @param Status set to Ok on success, otherwise a deterministic failure code
+   --  @return .7z archive image when Status is Ok
+
    function Seven_Zip_LZMA_Encrypted
      (Input      : Byte_Array;
       Entry_Name : String;

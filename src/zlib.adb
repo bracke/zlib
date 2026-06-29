@@ -7704,6 +7704,165 @@ package body Zlib is
       return Output;
    end Seven_Zip_BCJ2_Decode;
 
+   --  Inverse of Seven_Zip_BCJ2_Decode: split x86 code into the four BCJ2
+   --  streams (main, call, jump, range-coded control). Converts an E8/E9/0F8x
+   --  branch when its 4-byte displacement's high byte passes the x86 BCJ test
+   --  (0x00 or 0xFF); the decision is range-coded so any policy round-trips.
+   procedure Seven_Zip_BCJ2_Encode
+     (Input : Byte_Array;
+      Main  : out Byte_Vectors.Vector;
+      Call  : out Byte_Vectors.Vector;
+      Jump  : out Byte_Vectors.Vector;
+      RC    : out Byte_Vectors.Vector)
+   is
+      subtype Prob_Index is Natural range 0 .. 257;
+      type Prob_Array is array (Prob_Index) of Interfaces.Unsigned_32;
+
+      Top_Value       : constant Interfaces.Unsigned_32 := 16#0100_0000#;
+      Bit_Model_Total : constant Interfaces.Unsigned_32 := 2048;
+      Move_Bits       : constant Natural := 5;
+
+      Probs      : Prob_Array := [others => 1024];
+      Rng        : Interfaces.Unsigned_32 := Interfaces.Unsigned_32'Last;
+      Low        : Interfaces.Unsigned_64 := 0;
+      Cache      : Byte := 0;
+      Cache_Size : Interfaces.Unsigned_64 := 1;
+
+      Total : constant Natural := Input'Length;
+      IP    : Interfaces.Unsigned_32 := 0;
+      V     : Interfaces.Unsigned_32 := 0;
+      I     : Natural := Input'First;
+
+      function Candidate (Value : Interfaces.Unsigned_32) return Boolean is
+         B : constant Interfaces.Unsigned_32 := Value and 16#FF#;
+      begin
+         return ((B + 16#18#) and 16#FE#) = 0
+           or else ((Value - 16#0F00_0080#) and 16#FFFFFFF0#) = 0;
+      end Candidate;
+
+      function Prob_For (Value : Interfaces.Unsigned_32) return Prob_Index is
+         C    : constant Interfaces.Unsigned_32 :=
+           Interfaces.Shift_Right (Value + 16#17#, 6) and 1;
+         High : constant Interfaces.Unsigned_32 :=
+           Interfaces.Shift_Right (Value, 24) and 16#FF#;
+         Lo   : constant Interfaces.Unsigned_32 :=
+           Interfaces.Shift_Right (Value, 5) and 1;
+      begin
+         return Prob_Index (((0 - C) and High) + C + Lo);
+      end Prob_For;
+
+      function Jump_Stream_For (Value : Interfaces.Unsigned_32) return Natural is
+        (Natural (Interfaces.Shift_Right (Value + 16#57#, 6) and 1));
+
+      procedure Shift_Low is
+      begin
+         if Low < 16#FF00_0000#
+           or else Low > 16#FFFF_FFFF#
+         then
+            declare
+               Temp : Byte := Cache;
+            begin
+               loop
+                  RC.Append
+                    (Byte ((Interfaces.Unsigned_64 (Temp) +
+                            Interfaces.Shift_Right (Low, 32)) and 16#FF#));
+                  Temp := 16#FF#;
+                  Cache_Size := Cache_Size - 1;
+                  exit when Cache_Size = 0;
+               end loop;
+               Cache :=
+                 Byte (Interfaces.Shift_Right (Low, 24) and 16#FF#);
+            end;
+         end if;
+         Cache_Size := Cache_Size + 1;
+         Low := Interfaces.Shift_Left (Low and 16#00FF_FFFF#, 8);
+      end Shift_Low;
+
+      procedure Encode_Bit (Idx : Prob_Index; Bit : Natural) is
+         Prob  : constant Interfaces.Unsigned_32 := Probs (Idx);
+         Bound : constant Interfaces.Unsigned_32 :=
+           Interfaces.Shift_Right (Rng, 11) * Prob;
+      begin
+         if Bit = 0 then
+            Rng := Bound;
+            Probs (Idx) :=
+              Prob + Interfaces.Shift_Right (Bit_Model_Total - Prob, Move_Bits);
+         else
+            Low := Low + Interfaces.Unsigned_64 (Bound);
+            Rng := Rng - Bound;
+            Probs (Idx) := Prob - Interfaces.Shift_Right (Prob, Move_Bits);
+         end if;
+         if Rng < Top_Value then
+            Rng := Interfaces.Shift_Left (Rng, 8);
+            Shift_Low;
+         end if;
+      end Encode_Bit;
+
+      procedure Append_BE32
+        (To : in out Byte_Vectors.Vector; Value : Interfaces.Unsigned_32) is
+      begin
+         To.Append (Byte (Interfaces.Shift_Right (Value, 24) and 16#FF#));
+         To.Append (Byte (Interfaces.Shift_Right (Value, 16) and 16#FF#));
+         To.Append (Byte (Interfaces.Shift_Right (Value, 8) and 16#FF#));
+         To.Append (Byte (Value and 16#FF#));
+      end Append_BE32;
+   begin
+      while I <= Input'Last loop
+         declare
+            B : constant Byte := Input (I);
+         begin
+            I := I + 1;
+            Main.Append (B);
+            IP := IP + 1;
+            V := Interfaces.Shift_Left (V, 24) or Interfaces.Unsigned_32 (B);
+         end;
+
+         if Natural (IP) < Total and then Candidate (V) then
+            declare
+               P_Idx   : constant Prob_Index := Prob_For (V);
+               Convert : Boolean := False;
+               Rel     : Interfaces.Unsigned_32 := 0;
+            begin
+               --  Need 4 displacement bytes to convert.
+               if I + 3 <= Input'Last then
+                  Rel :=
+                    Interfaces.Unsigned_32 (Input (I))
+                    or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_32 (Input (I + 1)), 8)
+                    or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_32 (Input (I + 2)), 16)
+                    or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_32 (Input (I + 3)), 24);
+                  Convert := Input (I + 3) = 0 or else Input (I + 3) = 16#FF#;
+               end if;
+
+               if Convert then
+                  Encode_Bit (P_Idx, 1);
+                  declare
+                     Abs_Addr : constant Interfaces.Unsigned_32 :=
+                       Rel + IP + 4;
+                  begin
+                     if Jump_Stream_For (V) = 0 then
+                        Append_BE32 (Call, Abs_Addr);
+                     else
+                        Append_BE32 (Jump, Abs_Addr);
+                     end if;
+                  end;
+                  I := I + 4;
+                  IP := IP + 4;
+                  V := Interfaces.Shift_Right (Rel, 24);
+               else
+                  Encode_Bit (P_Idx, 0);
+               end if;
+            end;
+         end if;
+      end loop;
+
+      for K in 1 .. 5 loop
+         Shift_Low;
+      end loop;
+   end Seven_Zip_BCJ2_Encode;
+
    function BZip2_Compress (Plain : Byte_Array; Status : out Status_Code)
                             return Byte_Array
    is
@@ -8925,6 +9084,145 @@ package body Zlib is
          Status := Unsupported_Method;
          return Empty;
    end Seven_Zip_LZMA_Encrypted;
+
+   --  Build a one-file .7z whose data is BCJ2-filtered (method 0303011B): a
+   --  single BCJ2 coder with four packed streams (main, call, jump, range),
+   --  stored uncompressed, exactly as stock "7z a -m0=BCJ2" lays it out.
+   function Seven_Zip_BCJ2
+     (Input      : Byte_Array;
+      Entry_Name : String;
+      Status     : out Status_Code) return Byte_Array
+   is
+      Empty : constant Byte_Array (1 .. 0) := [others => 0];
+   begin
+      Status := Unsupported_Method;
+      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
+         return Empty;
+      end if;
+
+      declare
+         Main_V, Call_V, Jump_V, RC_V : Byte_Vectors.Vector;
+      begin
+         Seven_Zip_BCJ2_Encode (Input, Main_V, Call_V, Jump_V, RC_V);
+         declare
+            Main_B : constant Byte_Array := To_Byte_Array (Main_V);
+            Call_B : constant Byte_Array := To_Byte_Array (Call_V);
+            Jump_B : constant Byte_Array := To_Byte_Array (Jump_V);
+            RC_B   : constant Byte_Array := To_Byte_Array (RC_V);
+            Unpacked_CRC : constant Interfaces.Unsigned_32 := CRC32 (Input);
+            Header     : Byte_Vectors.Vector;
+            Name_Field : Byte_Vectors.Vector;
+         begin
+            Header.Append (16#01#);
+            Header.Append (16#04#); --  MainStreamsInfo
+            Header.Append (16#06#); --  PackInfo
+            Append_Seven_Zip_Number (Header, 0);
+            Append_Seven_Zip_Number (Header, 4);  --  four packed streams
+            Header.Append (16#09#); --  Size
+            Append_Seven_Zip_Number
+              (Header, Interfaces.Unsigned_64 (Main_B'Length));
+            Append_Seven_Zip_Number
+              (Header, Interfaces.Unsigned_64 (Call_B'Length));
+            Append_Seven_Zip_Number
+              (Header, Interfaces.Unsigned_64 (Jump_B'Length));
+            Append_Seven_Zip_Number
+              (Header, Interfaces.Unsigned_64 (RC_B'Length));
+            Header.Append (16#00#); --  end PackInfo
+
+            Header.Append (16#07#); --  UnPackInfo
+            Header.Append (16#0B#); --  Folder
+            Append_Seven_Zip_Number (Header, 1);  --  one folder
+            Header.Append (16#00#);               --  external
+            Append_Seven_Zip_Number (Header, 1);  --  one coder
+            Header.Append (16#14#);  --  flag: idSize 4, complex coder
+            Header.Append (16#03#);
+            Header.Append (16#03#);
+            Header.Append (16#01#);
+            Header.Append (16#1B#);  --  BCJ2 id (0303011B)
+            Append_Seven_Zip_Number (Header, 4);  --  four in streams
+            Append_Seven_Zip_Number (Header, 1);  --  one out stream
+            --  No bind pairs (out-1 = 0); list the four packed-stream indices.
+            Append_Seven_Zip_Number (Header, 0);
+            Append_Seven_Zip_Number (Header, 1);
+            Append_Seven_Zip_Number (Header, 2);
+            Append_Seven_Zip_Number (Header, 3);
+            Header.Append (16#0C#); --  CodersUnPackSize
+            Append_Seven_Zip_Number
+              (Header, Interfaces.Unsigned_64 (Input'Length));
+            Header.Append (16#00#); --  end UnPackInfo
+
+            Header.Append (16#08#); --  SubStreamsInfo
+            Header.Append (16#0A#); --  CRC
+            Header.Append (1);
+            Append_U32_LE (Header, Unpacked_CRC);
+            Header.Append (16#00#); --  end SubStreamsInfo
+            Header.Append (16#00#); --  end MainStreamsInfo
+
+            Header.Append (16#05#); --  FilesInfo
+            Append_Seven_Zip_Number (Header, 1);
+            Header.Append (16#11#); --  Name
+            Name_Field.Append (0);
+            Append_UTF16LE_NT (Name_Field, Entry_Name);
+            Append_Seven_Zip_Number
+              (Header, Interfaces.Unsigned_64 (Name_Field.Length));
+            Header.Append_Vector (Name_Field);
+            Header.Append (16#00#);
+            Header.Append (16#00#);
+
+            declare
+               Pack_Len : constant Natural :=
+                 Main_B'Length + Call_B'Length + Jump_B'Length + RC_B'Length;
+               Header_Image : constant Byte_Array := To_Byte_Array (Header);
+               Header_CRC   : constant Interfaces.Unsigned_32 :=
+                 Seven_Zip_Header_CRC (Header_Image);
+               Start_Header : Byte_Vectors.Vector;
+            begin
+               Append_U64_LE
+                 (Start_Header, Interfaces.Unsigned_64 (Pack_Len));
+               Append_U64_LE
+                 (Start_Header, Interfaces.Unsigned_64 (Header_Image'Length));
+               Append_U32_LE (Start_Header, Header_CRC);
+               declare
+                  Start_Image : constant Byte_Array :=
+                    To_Byte_Array (Start_Header);
+                  Start_CRC   : constant Interfaces.Unsigned_32 :=
+                    Seven_Zip_Header_CRC (Start_Image);
+                  Archive     : Byte_Vectors.Vector;
+               begin
+                  Archive.Append (16#37#);
+                  Archive.Append (16#7A#);
+                  Archive.Append (16#BC#);
+                  Archive.Append (16#AF#);
+                  Archive.Append (16#27#);
+                  Archive.Append (16#1C#);
+                  Archive.Append (0);
+                  Archive.Append (4);
+                  Append_U32_LE (Archive, Start_CRC);
+                  Archive.Append_Vector (Start_Header);
+                  for B of Main_B loop
+                     Archive.Append (B);
+                  end loop;
+                  for B of Call_B loop
+                     Archive.Append (B);
+                  end loop;
+                  for B of Jump_B loop
+                     Archive.Append (B);
+                  end loop;
+                  for B of RC_B loop
+                     Archive.Append (B);
+                  end loop;
+                  Archive.Append_Vector (Header);
+                  Status := Ok;
+                  return To_Byte_Array (Archive);
+               end;
+            end;
+         end;
+      end;
+   exception
+      when others =>
+         Status := Unsupported_Method;
+         return Empty;
+   end Seven_Zip_BCJ2;
 
    procedure Append_Seven_Zip_File_Metadata
      (Header   : in out Byte_Vectors.Vector;

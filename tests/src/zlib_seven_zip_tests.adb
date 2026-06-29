@@ -11305,6 +11305,47 @@ package body Zlib_Seven_Zip_Tests is
       end;
    end Test_AES_Encrypted_Header_Roundtrip;
 
+   procedure Test_BCJ2_Encode_Decode_Roundtrip
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Data   : Zlib.Byte_Array (1 .. 600);
+      Status : Zlib.Status_Code := Zlib.Unsupported_Method;
+   begin
+      --  Synthetic x86-ish bytes with E8/E9 branch opcodes and 4-byte
+      --  displacements so the BCJ2 conversion path is exercised.
+      for I in Data'Range loop
+         Data (I) := Zlib.Byte ((I * 13 + 7) mod 256);
+      end loop;
+      for K in 0 .. 9 loop
+         Data (1 + K * 50) := 16#E8#;
+         Data (2 + K * 50) := 16#10#;
+         Data (3 + K * 50) := 16#00#;
+         Data (4 + K * 50) := 16#00#;
+         Data (5 + K * 50) := 16#00#;
+         Data (11 + K * 50) := 16#E9#;
+         Data (12 + K * 50) := 16#FF#;
+         Data (13 + K * 50) := 16#FF#;
+         Data (14 + K * 50) := 16#FF#;
+         Data (15 + K * 50) := 16#FF#;
+      end loop;
+      declare
+         Archive : constant Zlib.Byte_Array :=
+           Zlib.Seven_Zip_BCJ2 (Data, "code.bin", Status);
+      begin
+         Assert (Status = Zlib.Ok, "BCJ2 archive built");
+         declare
+            OStatus : Zlib.Status_Code := Zlib.Unsupported_Method;
+            Out_B   : constant Zlib.Byte_Array :=
+              Zlib.Extract_Seven_Zip (Archive, "code.bin", OStatus);
+         begin
+            Assert
+              (OStatus = Zlib.Ok and then Out_B = Data,
+               "BCJ2 round-trips through Extract_Seven_Zip");
+         end;
+      end;
+   end Test_BCJ2_Encode_Decode_Roundtrip;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
@@ -11316,6 +11357,9 @@ package body Zlib_Seven_Zip_Tests is
       Register_Routine
         (T, Test_AES_Encrypted_Header_Roundtrip'Access,
          "native 7z AES-256 encrypted-header (mhe) round-trip");
+      Register_Routine
+        (T, Test_BCJ2_Encode_Decode_Roundtrip'Access,
+         "native 7z BCJ2 encode/decode round-trip");
       Register_Routine
         (T, Test_Stored_Header_Structure'Access,
          "native stored 7z header structure and CRCs");
