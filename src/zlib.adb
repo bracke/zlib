@@ -12949,15 +12949,32 @@ package body Zlib is
                                        Status := Unsupported_Method;
                                        return Empty;
                                     end if;
-                                    return Finish_Decoded_Payload
-                                      (Zlib.Seven_Zip_AES.Decrypt_CBC
-                                         (Zlib.Seven_Zip_AES.Derive_Key
-                                            (US.To_String
-                                               (Active_Seven_Zip_Password),
-                                             Salt,
-                                             Folder_AES_Cycles
-                                               (Target_Folder_Index, C)),
-                                          IV, Payload));
+                                    declare
+                                       Decrypted : constant Byte_Array :=
+                                         Zlib.Seven_Zip_AES.Decrypt_CBC
+                                           (Zlib.Seven_Zip_AES.Derive_Key
+                                              (US.To_String
+                                                 (Active_Seven_Zip_Password),
+                                               Salt,
+                                               Folder_AES_Cycles
+                                                 (Target_Folder_Index, C)),
+                                            IV, Payload);
+                                       AES_Out : constant Natural :=
+                                         Natural
+                                           (Folder_Unpack_Sizes
+                                              (Target_Folder_Index, C));
+                                    begin
+                                       if AES_Out > Decrypted'Length then
+                                          Status := Invalid_Checksum;
+                                          return Empty;
+                                       end if;
+                                       --  Drop the AES block padding; the inner
+                                       --  coder gets exactly the AES output.
+                                       return Finish_Decoded_Payload
+                                         (Decrypted
+                                            (Decrypted'First ..
+                                             Decrypted'First + AES_Out - 1));
+                                    end;
                                  end;
 
                               when Seven_Zip_Deflate_Method =>
