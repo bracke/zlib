@@ -1115,10 +1115,10 @@ package body Zlib.PPMd7 is
          RD.Rng := Shift_Left (RD.Rng, 8);
          if RD.Rng < Top_Value then
             declare
-            B : constant U32 := Read_Byte (RD);
-         begin
-            RD.Code := Shift_Left (RD.Code, 8) or B;
-         end;
+               B : constant U32 := Read_Byte (RD);
+            begin
+               RD.Code := Shift_Left (RD.Code, 8) or B;
+            end;
             RD.Rng := Shift_Left (RD.Rng, 8);
          end if;
       end if;

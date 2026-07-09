@@ -1,3 +1,4 @@
+with Ada.Containers.Vectors;
 with Interfaces; use Interfaces;
 
 package body Zlib.Seven_Zip_Filters is
@@ -8,7 +9,22 @@ package body Zlib.Seven_Zip_Filters is
    procedure Convert_IA64 (B : in out Byte_Array; Encoding : Boolean);
    procedure Convert_X86 (B : in out Byte_Array; Encoding : Boolean);
    procedure Convert_ARM64 (B : in out Byte_Array; Encoding : Boolean);
+   procedure Convert_RISCV (B : in out Byte_Array; Encoding : Boolean);
    --  Forward declarations; bodies below.
+
+   package Byte_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Natural, Element_Type => Byte);
+
+   function To_Byte_Array (Data : Byte_Vectors.Vector) return Byte_Array is
+      Result : Byte_Array (1 .. Natural (Data.Length));
+      J      : Natural := Result'First;
+   begin
+      for B of Data loop
+         Result (J) := B;
+         J := J + 1;
+      end loop;
+      return Result;
+   end To_Byte_Array;
 
    --------------------
    -- Branch_Convert --
@@ -40,6 +56,9 @@ package body Zlib.Seven_Zip_Filters is
 
          when ARM64 =>
             Convert_ARM64 (B, Encoding);
+
+         when RISCV =>
+            Convert_RISCV (B, Encoding);
 
          when ARM =>
             --  4-byte BL (0xEB) instructions, target << 2, ip += 8.
@@ -211,6 +230,62 @@ package body Zlib.Seven_Zip_Filters is
          end loop;
       end return;
    end Branch_Convert;
+
+   -------------------
+   -- Convert_RISCV --
+   -------------------
+
+   procedure Convert_RISCV (B : in out Byte_Array; Encoding : Boolean) is
+      Len : constant Natural := B'Length;
+      I   : Natural := B'First;
+   begin
+      if Len < 4 then
+         return;
+      end if;
+
+      while I <= B'Last - 3 loop
+         declare
+            Inst : constant Unsigned_32 :=
+              Unsigned_32 (B (I))
+              or Shift_Left (Unsigned_32 (B (I + 1)), 8)
+              or Shift_Left (Unsigned_32 (B (I + 2)), 16)
+              or Shift_Left (Unsigned_32 (B (I + 3)), 24);
+         begin
+            if (Inst and 16#7F#) = 16#6F# then
+               declare
+                  Imm : Unsigned_32 :=
+                    Shift_Left (Shift_Right (Inst, 31) and 1, 20)
+                    or Shift_Left (Shift_Right (Inst, 21) and 16#3FF#, 1)
+                    or Shift_Left (Shift_Right (Inst, 20) and 1, 11)
+                    or (Inst and 16#000F_F000#);
+                  Dst      : Unsigned_32;
+                  Cur      : constant Unsigned_32 := Unsigned_32 (I);
+                  New_Inst : Unsigned_32;
+               begin
+                  if (Imm and 16#0010_0000#) /= 0 then
+                     Imm := Imm or 16#FFE0_0000#;
+                  end if;
+
+                  Dst := (if Encoding then Cur + Imm else Imm - Cur);
+                  Imm := Dst and 16#001F_FFFE#;
+                  New_Inst :=
+                    (Inst and 16#0000_0FFF#)
+                    or Shift_Left (Shift_Right (Imm, 20) and 1, 31)
+                    or Shift_Left (Shift_Right (Imm, 1) and 16#3FF#, 21)
+                    or Shift_Left (Shift_Right (Imm, 11) and 1, 20)
+                    or (Imm and 16#000F_F000#);
+
+                  B (I)     := Byte (New_Inst and 16#FF#);
+                  B (I + 1) := Byte (Shift_Right (New_Inst, 8) and 16#FF#);
+                  B (I + 2) := Byte (Shift_Right (New_Inst, 16) and 16#FF#);
+                  B (I + 3) := Byte (Shift_Right (New_Inst, 24) and 16#FF#);
+               end;
+            end if;
+         end;
+
+         I := I + 4;
+      end loop;
+   end Convert_RISCV;
 
    ------------------
    -- Convert_IA64 --
@@ -491,6 +566,356 @@ package body Zlib.Seven_Zip_Filters is
       end loop;
    end Convert_ARM64;
 
+   -----------------
+   -- BCJ2_Decode --
+   -----------------
+
+   function BCJ2_Decode
+     (Main_Stream : Byte_Array;
+      Call_Stream : Byte_Array;
+      Jump_Stream : Byte_Array;
+      RC_Stream   : Byte_Array;
+      Expected    : Natural;
+      Status      : out Status_Code) return Byte_Array
+   is
+      Empty : constant Byte_Array (1 .. 0) := [others => 0];
+
+      subtype Prob_Index is Natural range 0 .. 257;
+      type Prob_Array is array (Prob_Index) of Unsigned_16;
+
+      Top_Value       : constant Unsigned_32 := 16#0100_0000#;
+      Bit_Model_Total : constant Unsigned_32 := 2048;
+      Move_Bits       : constant Natural := 5;
+
+      Output   : Byte_Array (1 .. Expected) := [others => 0];
+      Probs    : Prob_Array := [others => 1024];
+      RC_Range : Unsigned_32 := Unsigned_32'Last;
+      Code     : Unsigned_32 := 0;
+      IP       : Unsigned_32 := 0;
+      V        : Unsigned_32 := 0;
+      Main_Pos : Natural := Main_Stream'First;
+      Call_Pos : Natural := Call_Stream'First;
+      Jump_Pos : Natural := Jump_Stream'First;
+      RC_Pos   : Natural := RC_Stream'First;
+      Out_Pos  : Natural := Output'First;
+
+      function Has_Byte (Pos : Natural; Data : Byte_Array) return Boolean is
+      begin
+         return Pos in Data'Range;
+      end Has_Byte;
+
+      function Read_RC_Byte return Boolean is
+      begin
+         if not Has_Byte (RC_Pos, RC_Stream) then
+            return False;
+         end if;
+
+         Code := Shift_Left (Code, 8) or Unsigned_32 (RC_Stream (RC_Pos));
+         RC_Pos := RC_Pos + 1;
+         return True;
+      end Read_RC_Byte;
+
+      function Read_BE32
+        (Data  : Byte_Array;
+         Pos   : in out Natural;
+         Value : out Unsigned_32) return Boolean is
+      begin
+         if Pos not in Data'Range
+           or else Pos + 3 > Data'Last
+         then
+            Value := 0;
+            return False;
+         end if;
+
+         Value :=
+           Shift_Left (Unsigned_32 (Data (Pos)), 24)
+           or Shift_Left (Unsigned_32 (Data (Pos + 1)), 16)
+           or Shift_Left (Unsigned_32 (Data (Pos + 2)), 8)
+           or Unsigned_32 (Data (Pos + 3));
+         Pos := Pos + 4;
+         return True;
+      end Read_BE32;
+
+      procedure Put_Byte (B : Byte) is
+      begin
+         Output (Out_Pos) := B;
+         Out_Pos := Out_Pos + 1;
+         IP := IP + 1;
+      end Put_Byte;
+
+      function Candidate (Value : Unsigned_32) return Boolean is
+         B : constant Unsigned_32 := Value and 16#FF#;
+      begin
+         return ((B + 16#18#) and 16#FE#) = 0
+           or else
+             ((Value - 16#0F00_0080#) and 16#FFFF_FFF0#) = 0;
+      end Candidate;
+
+      function Prob_For (Value : Unsigned_32) return Prob_Index is
+         C    : constant Unsigned_32 := Shift_Right (Value + 16#17#, 6) and 1;
+         High : constant Unsigned_32 := Shift_Right (Value, 24) and 16#FF#;
+         Low  : constant Unsigned_32 := Shift_Right (Value, 5) and 1;
+      begin
+         return Prob_Index (((0 - C) and High) + C + Low);
+      end Prob_For;
+
+      function Jump_Stream_For (Value : Unsigned_32) return Natural is
+      begin
+         return Natural (Shift_Right (Value + 16#57#, 6) and 1);
+      end Jump_Stream_For;
+   begin
+      Status := Unexpected_End_Of_Input;
+
+      for I in 1 .. 5 loop
+         if not Read_RC_Byte then
+            return Empty;
+         end if;
+
+         if I = 2 and then Code /= Unsigned_32 (RC_Stream (RC_Pos - 1)) then
+            return Empty;
+         end if;
+      end loop;
+
+      if Code = Unsigned_32'Last then
+         Status := Invalid_Block_Type;
+         return Empty;
+      end if;
+
+      while Out_Pos <= Output'Last loop
+         if RC_Range < Top_Value then
+            if not Read_RC_Byte then
+               return Empty;
+            end if;
+            RC_Range := Shift_Left (RC_Range, 8);
+         end if;
+
+         if not Has_Byte (Main_Pos, Main_Stream) then
+            return Empty;
+         end if;
+
+         declare
+            B : constant Byte := Main_Stream (Main_Pos);
+         begin
+            Main_Pos := Main_Pos + 1;
+            Put_Byte (B);
+            V := Shift_Left (V, 24) or Unsigned_32 (B);
+         end;
+
+         if Out_Pos <= Output'Last and then Candidate (V) then
+            declare
+               P_Index : constant Prob_Index := Prob_For (V);
+               Prob    : constant Unsigned_32 := Unsigned_32 (Probs (P_Index));
+               Bound   : constant Unsigned_32 := Shift_Right (RC_Range, 11) * Prob;
+            begin
+               if Code < Bound then
+                  RC_Range := Bound;
+                  Probs (P_Index) :=
+                    Unsigned_16 (Prob + Shift_Right (Bit_Model_Total - Prob, Move_Bits));
+               else
+                  RC_Range := RC_Range - Bound;
+                  Code := Code - Bound;
+                  Probs (P_Index) :=
+                    Unsigned_16 (Prob - Shift_Right (Prob, Move_Bits));
+
+                  declare
+                     Encoded : Unsigned_32 := 0;
+                     Source  : constant Natural := Jump_Stream_For (V);
+                     Ok_Read : Boolean;
+                  begin
+                     if Source = 0 then
+                        Ok_Read := Read_BE32 (Call_Stream, Call_Pos, Encoded);
+                     else
+                        Ok_Read := Read_BE32 (Jump_Stream, Jump_Pos, Encoded);
+                     end if;
+
+                     if not Ok_Read or else Out_Pos + 3 > Output'Last + 1 then
+                        return Empty;
+                     end if;
+
+                     Encoded := Encoded - (IP + 4);
+                     for I in 0 .. 3 loop
+                        Output (Out_Pos + I) :=
+                          Byte (Shift_Right (Encoded, 8 * I) and 16#FF#);
+                     end loop;
+                     Out_Pos := Out_Pos + 4;
+                     IP := IP + 4;
+                     V := Shift_Right (Encoded, 24);
+                  end;
+               end if;
+            end;
+         end if;
+      end loop;
+
+      if Main_Pos /= Main_Stream'Last + 1
+        or else Call_Pos /= Call_Stream'Last + 1
+        or else Jump_Pos /= Jump_Stream'Last + 1
+      then
+         Status := Invalid_Checksum;
+         return Empty;
+      end if;
+
+      Status := Ok;
+      return Output;
+   end BCJ2_Decode;
+
+   -----------------
+   -- BCJ2_Encode --
+   -----------------
+
+   function BCJ2_Encode (Input : Byte_Array) return BCJ2_Encoded_Streams is
+      subtype Prob_Index is Natural range 0 .. 257;
+      type Prob_Array is array (Prob_Index) of Unsigned_32;
+
+      Top_Value       : constant Unsigned_32 := 16#0100_0000#;
+      Bit_Model_Total : constant Unsigned_32 := 2048;
+      Move_Bits       : constant Natural := 5;
+
+      Probs      : Prob_Array := [others => 1024];
+      Rng        : Unsigned_32 := Unsigned_32'Last;
+      Low        : Unsigned_64 := 0;
+      Cache      : Byte := 0;
+      Cache_Size : Unsigned_64 := 1;
+
+      Total : constant Natural := Input'Length;
+      IP    : Unsigned_32 := 0;
+      V     : Unsigned_32 := 0;
+      I     : Natural := Input'First;
+
+      Main : Byte_Vectors.Vector;
+      Call : Byte_Vectors.Vector;
+      Jump : Byte_Vectors.Vector;
+      RC   : Byte_Vectors.Vector;
+
+      function Candidate (Value : Unsigned_32) return Boolean is
+         B : constant Unsigned_32 := Value and 16#FF#;
+      begin
+         return ((B + 16#18#) and 16#FE#) = 0
+           or else ((Value - 16#0F00_0080#) and 16#FFFF_FFF0#) = 0;
+      end Candidate;
+
+      function Prob_For (Value : Unsigned_32) return Prob_Index is
+         C    : constant Unsigned_32 := Shift_Right (Value + 16#17#, 6) and 1;
+         High : constant Unsigned_32 := Shift_Right (Value, 24) and 16#FF#;
+         Lo   : constant Unsigned_32 := Shift_Right (Value, 5) and 1;
+      begin
+         return Prob_Index (((0 - C) and High) + C + Lo);
+      end Prob_For;
+
+      function Jump_Stream_For (Value : Unsigned_32) return Natural is
+        (Natural (Shift_Right (Value + 16#57#, 6) and 1));
+
+      procedure Shift_Low is
+      begin
+         if Low < 16#FF00_0000#
+           or else Low > 16#FFFF_FFFF#
+         then
+            declare
+               Temp : Byte := Cache;
+            begin
+               loop
+                  RC.Append
+                    (Byte ((Unsigned_64 (Temp) + Shift_Right (Low, 32)) and 16#FF#));
+                  Temp := 16#FF#;
+                  Cache_Size := Cache_Size - 1;
+                  exit when Cache_Size = 0;
+               end loop;
+               Cache := Byte (Shift_Right (Low, 24) and 16#FF#);
+            end;
+         end if;
+         Cache_Size := Cache_Size + 1;
+         Low := Shift_Left (Low and 16#00FF_FFFF#, 8);
+      end Shift_Low;
+
+      procedure Encode_Bit (Idx : Prob_Index; Bit : Natural) is
+         Prob  : constant Unsigned_32 := Probs (Idx);
+         Bound : constant Unsigned_32 := Shift_Right (Rng, 11) * Prob;
+      begin
+         if Bit = 0 then
+            Rng := Bound;
+            Probs (Idx) :=
+              Prob + Shift_Right (Bit_Model_Total - Prob, Move_Bits);
+         else
+            Low := Low + Unsigned_64 (Bound);
+            Rng := Rng - Bound;
+            Probs (Idx) := Prob - Shift_Right (Prob, Move_Bits);
+         end if;
+         if Rng < Top_Value then
+            Rng := Shift_Left (Rng, 8);
+            Shift_Low;
+         end if;
+      end Encode_Bit;
+
+      procedure Append_BE32
+        (To : in out Byte_Vectors.Vector; Value : Unsigned_32) is
+      begin
+         To.Append (Byte (Shift_Right (Value, 24) and 16#FF#));
+         To.Append (Byte (Shift_Right (Value, 16) and 16#FF#));
+         To.Append (Byte (Shift_Right (Value, 8) and 16#FF#));
+         To.Append (Byte (Value and 16#FF#));
+      end Append_BE32;
+   begin
+      while I <= Input'Last loop
+         declare
+            B : constant Byte := Input (I);
+         begin
+            I := I + 1;
+            Main.Append (B);
+            IP := IP + 1;
+            V := Shift_Left (V, 24) or Unsigned_32 (B);
+         end;
+
+         if Natural (IP) < Total and then Candidate (V) then
+            declare
+               P_Idx   : constant Prob_Index := Prob_For (V);
+               Convert : Boolean := False;
+               Rel     : Unsigned_32 := 0;
+            begin
+               --  Need 4 displacement bytes to convert.
+               if I + 3 <= Input'Last then
+                  Rel :=
+                    Unsigned_32 (Input (I))
+                    or Shift_Left (Unsigned_32 (Input (I + 1)), 8)
+                    or Shift_Left (Unsigned_32 (Input (I + 2)), 16)
+                    or Shift_Left (Unsigned_32 (Input (I + 3)), 24);
+                  Convert := Input (I + 3) = 0 or else Input (I + 3) = 16#FF#;
+               end if;
+
+               if Convert then
+                  Encode_Bit (P_Idx, 1);
+                  declare
+                     Abs_Addr : constant Unsigned_32 := Rel + IP + 4;
+                  begin
+                     if Jump_Stream_For (V) = 0 then
+                        Append_BE32 (Call, Abs_Addr);
+                     else
+                        Append_BE32 (Jump, Abs_Addr);
+                     end if;
+                  end;
+                  I := I + 4;
+                  IP := IP + 4;
+                  V := Shift_Right (Rel, 24);
+               else
+                  Encode_Bit (P_Idx, 0);
+               end if;
+            end;
+         end if;
+      end loop;
+
+      for K in 1 .. 5 loop
+         Shift_Low;
+      end loop;
+
+      return
+        (Main_Length => Natural (Main.Length),
+         Call_Length => Natural (Call.Length),
+         Jump_Length => Natural (Jump.Length),
+         RC_Length   => Natural (RC.Length),
+         Main_Stream => To_Byte_Array (Main),
+         Call_Stream => To_Byte_Array (Call),
+         Jump_Stream => To_Byte_Array (Jump),
+         RC_Stream   => To_Byte_Array (RC));
+   end BCJ2_Encode;
+
    ------------------
    -- Delta_Encode --
    ------------------
@@ -499,15 +924,19 @@ package body Zlib.Seven_Zip_Filters is
      (Data     : Byte_Array;
       Distance : Positive) return Byte_Array
    is
-      Result  : Byte_Array (1 .. Data'Length);
+      Result  : Byte_Array (1 .. Data'Length) := [others => 0];
       History : array (0 .. 255) of Byte := [others => 0];
-      Pos     : Natural := 0;
+      Pos     : Natural range 0 .. 255 := 0;
    begin
-      for K in 0 .. Data'Length - 1 loop
+      if Data'Length = 0 then
+         return [1 .. 0 => 0];
+      end if;
+
+      for I in Data'Range loop
          declare
-            Cur : constant Byte := Data (Data'First + K);
+            Cur : constant Byte := Data (I);
          begin
-            Result (K + 1) := Cur - History (Pos);
+            Result (1 + (I - Data'First)) := Cur - History (Pos);
             History (Pos) := Cur;
             Pos := (Pos + 1) mod Distance;
          end;
@@ -523,20 +952,88 @@ package body Zlib.Seven_Zip_Filters is
      (Data     : Byte_Array;
       Distance : Positive) return Byte_Array
    is
-      Result  : Byte_Array (1 .. Data'Length);
+      Result  : Byte_Array (1 .. Data'Length) := [others => 0];
       History : array (0 .. 255) of Byte := [others => 0];
-      Pos     : Natural := 0;
+      Pos     : Natural range 0 .. 255 := 0;
    begin
-      for K in 0 .. Data'Length - 1 loop
+      if Data'Length = 0 then
+         return [1 .. 0 => 0];
+      end if;
+
+      for I in Data'Range loop
          declare
-            Cur : constant Byte := Data (Data'First + K) + History (Pos);
+            Cur : constant Byte := Data (I) + History (Pos);
          begin
-            Result (K + 1) := Cur;
+            Result (1 + (I - Data'First)) := Cur;
             History (Pos) := Cur;
             Pos := (Pos + 1) mod Distance;
          end;
       end loop;
       return Result;
    end Delta_Decode;
+
+   --------------------------
+   -- Delta_Decode_Checked --
+   --------------------------
+
+   function Delta_Decode_Checked
+     (Data     : Byte_Array;
+      Distance : Natural;
+      Status   : out Status_Code) return Byte_Array
+   is
+      Empty : constant Byte_Array (1 .. 0) := [others => 0];
+   begin
+      if Distance = 0 or else Distance > 256 then
+         Status := Unsupported_Method;
+         return Empty;
+      end if;
+
+      Status := Ok;
+      return Delta_Decode (Data, Distance);
+   end Delta_Decode_Checked;
+
+   --------------------
+   -- X86_BCJ_Decode --
+   --------------------
+
+   function X86_BCJ_Decode
+     (Data   : Byte_Array;
+      Status : out Status_Code) return Byte_Array is
+   begin
+      Status := Ok;
+      return Branch_Convert (X86, Data, Encoding => False);
+   end X86_BCJ_Decode;
+
+   ------------------
+   -- Apply_Filter --
+   ------------------
+
+   function Apply_Filter
+     (Data           : Byte_Array;
+      Filter         : Seven_Zip_Filter_Method;
+      Delta_Distance : Positive) return Byte_Array
+   is
+   begin
+      case Filter is
+         when Seven_Zip_Filter_X86_BCJ =>
+            return Branch_Convert (X86, Data, Encoding => True);
+         when Seven_Zip_Filter_ARM_BCJ =>
+            return Branch_Convert (ARM, Data, Encoding => True);
+         when Seven_Zip_Filter_ARMT_BCJ =>
+            return Branch_Convert (ARMT, Data, Encoding => True);
+         when Seven_Zip_Filter_ARM64_BCJ =>
+            return Branch_Convert (ARM64, Data, Encoding => True);
+         when Seven_Zip_Filter_PPC_BCJ =>
+            return Branch_Convert (PPC, Data, Encoding => True);
+         when Seven_Zip_Filter_SPARC_BCJ =>
+            return Branch_Convert (SPARC, Data, Encoding => True);
+         when Seven_Zip_Filter_IA64_BCJ =>
+            return Branch_Convert (IA64, Data, Encoding => True);
+         when Seven_Zip_Filter_RISCV_BCJ =>
+            return Branch_Convert (RISCV, Data, Encoding => True);
+         when Seven_Zip_Filter_Delta =>
+            return Delta_Encode (Data, Delta_Distance);
+      end case;
+   end Apply_Filter;
 
 end Zlib.Seven_Zip_Filters;

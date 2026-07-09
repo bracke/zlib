@@ -17,13 +17,23 @@ Run:
 ./tools/bin/zlib_inflate_file [--header=zlib|gzip|raw] INPUT OUTPUT
 ./tools/bin/zlib_compress_file --level=6 INPUT OUTPUT.z
 ./tools/bin/gzip_file --level=6 INPUT OUTPUT.gz
+./tools/bin/zlib_streaming_roundtrip INPUT
+./tools/bin/gzip_streaming_roundtrip INPUT
 ./tools/bin/raw_deflate_file --level=6 INPUT OUTPUT.deflate
 ./tools/bin/raw_inflate_file INPUT.deflate OUTPUT
 ./tools/bin/gzip_metadata_file --mode=auto --name=payload.bin --comment=demo --mtime=0 --os=255 INPUT OUTPUT.gz
 ./tools/bin/smoke_test
+./tools/bin/seven_zip_interop_check
 ```
 
 `tools/bin/check_all` runs the release checklist and fails fast.
+`tools/bin/seven_zip_interop_check` is optional: it runs stock-7z
+interoperability checks for method, filter, corpus, file-list directory, BCJ2,
+solid, encrypted listing/wrong-password, and multi-volume cases when `7z` is on
+`PATH`. It probes the stock `RISCV` filter and runs RISC-V cases when available;
+it skips successfully when `7z` is not available, or when the installed `7z`
+predates the RISC-V method. The final line reports executed check count and
+skip count.
 
 ## Optional benchmarks
 
@@ -31,6 +41,8 @@ Ada-only benchmark/profiling tools are included. They are intentionally not part
 of the correctness test runner and should not be used for wall-clock assertions.
 The compression benchmarks verify roundtrips by default and fail with a non-zero
 process exit status on compression, inflate, parsing, or verification errors.
+Repeated runs report last-run and aggregate ratio plus minimum, maximum, and
+average byte counts, which are intended for local before/after comparisons.
 
 Build all tools with:
 
@@ -44,6 +56,7 @@ Compression benchmarks:
 ./tools/bin/zlib_bench_deflate --pattern=text-like --size=1048576 --wrapper=zlib --mode=auto --repeat=5
 ./tools/bin/zlib_bench_gzip --input payload.bin --mode=dynamic --input-chunk=4096 --output-chunk=1024
 ./tools/bin/zlib_bench_raw --pattern=repeated --size=1048576 --level=6 --no-verify
+./tools/bin/zlib_bench_matrix --size=1048576 --repeat=3
 ```
 
 Compression benchmark options:
@@ -63,6 +76,11 @@ Compression benchmark options:
 
 `--mode` and `--level` are mutually exclusive. When `--input` is not supplied,
 the tools use deterministic Ada-generated synthetic input.
+`zlib_bench_matrix` runs a compact CSV matrix across random-ish, repeated, and
+text-like synthetic inputs, zlib/gzip/raw wrappers, and levels 0, 1, 6, and 9.
+Rows include last-run ratio, aggregate ratio, minimum/maximum/average compressed
+bytes, and percentage saved relative to the input size. It is intended for quick
+local before/after comparisons, not release gating.
 
 Inflate benchmark:
 
@@ -138,6 +156,7 @@ Available drivers:
 - `fuzz_dictionary`
 - `fuzz_gzip_metadata`
 - `fuzz_mutation`
+- `fuzz_flush`
 - `fuzz_lifecycle`
 - `fuzz_tiny_buffers`
 
@@ -160,6 +179,7 @@ Fuzz driver coverage:
 | `fuzz_dictionary` | preset-dictionary success and mismatch behavior |
 | `fuzz_gzip_metadata` | gzip FEXTRA/FNAME/FCOMMENT/MTIME/OS/XFL/FHCRC output paths |
 | `fuzz_mutation` | corrupted stream rejection for zlib, gzip, and raw Deflate |
+| `fuzz_flush` | valid streaming compression flush sequences across wrappers and modes |
 | `fuzz_lifecycle` | invalid inflate/compress lifecycle and flush sequencing |
 | `fuzz_tiny_buffers` | one-byte/tiny-buffer decode paths for raw, zlib, gzip, and dictionary streams |
 

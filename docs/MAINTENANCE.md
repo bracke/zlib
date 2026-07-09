@@ -12,7 +12,7 @@ The performance-sensitive path is:
 - `Zlib.Huffman`: canonical Huffman table construction and symbol decoding.
 - `Zlib.Stream_Inflate`: streaming zlib/gzip wrapper state and Deflate state.
 - `Zlib.Sliding_Window`: 32 KiB LZ77 history and pending-output queue.
-- `Zlib.Checksums` and `Zlib.CRC32_Internal`: zlib Adler-32 and gzip CRC32/ISIZE checks.
+- `CryptoLib.Checksums`: zlib Adler-32, gzip CRC32/ISIZE, ZIP CRC32, and 7z CRC32 checks.
 
 The one-shot API now routes through the streaming engine. Changes to the
 streaming engine therefore affect both public decode paths.
@@ -61,11 +61,13 @@ The benchmark programs are simple smoke tools, not pass/fail tests:
 alr exec -- gprbuild -P tools/tools.gpr
 ./tools/bin/zlib_bench_inflate --input payload.z --wrapper zlib
 ./tools/bin/zlib_bench_deflate --pattern text-like --size 1048576 --wrapper zlib --mode auto
+./tools/bin/zlib_bench_matrix --size 1048576 --repeat 3
 ```
 
 They report input/output bytes, compressed bytes where applicable, ratio,
-elapsed time, throughput, wrapper, compression mode or level, input chunk size,
-and output buffer size. Do not gate correctness on wall-clock timing.
+average ratio, minimum/maximum/average per-run byte counts, elapsed time,
+average elapsed time, throughput, wrapper, compression mode or level, input
+chunk size, and output buffer size. Do not gate correctness on wall-clock timing.
 Use them to compare local before/after changes on the same machine and build
 configuration.
 
@@ -141,7 +143,7 @@ zlib/gzip behavior remains unchanged.
 
 ## Raw Deflate hardening
 
-Raw Deflate compression is release-hardened by `zlib_raw_release_tests`, `zlib_raw_cross_wrapper_conformance_tests`, the raw examples, and the raw tools. The contract remains unchanged: `Deflate_*` APIs emit zlib-wrapped streams, `GZip*` APIs emit gzip-wrapped streams, `Deflate_Raw*` APIs emit raw Deflate blocks only, `Seven_Zip_Stored*` APIs emit Copy-coder `.7z` archives including header-only directory entries and solid stored file-list archives with no-stream directory entries, `Seven_Zip_Deflate*` APIs emit Deflate `.7z` archives, `Seven_Zip_BZip2*` APIs emit BZip2 `.7z` archives, `Seven_Zip_LZMA*` APIs emit LZMA `.7z` archives, `Seven_Zip_LZMA2*` APIs emit LZMA2 `.7z` archives, `Extract_Seven_Zip*` APIs extract those supported native 7z layouts plus native PPMd empty/repeated-symbol/root-symbol/periodic-prefix, stock-7z multi-block streams with LZMA encoded headers, stock-7z no-stream empty-file entries, stock-7z BCJ+PPMd filter chains, and BCJ2 graphs with Copy, PPMd, or supported main pre-coders, `Seven_Zip_PPMd`, `Seven_Zip_PPMd_File`, and `Seven_Zip_PPMd_Files` emit native PPMd 7z archives for this crate's extractor without calling local `7z`, while `Seven_Zip_External_File` and `Extract_Seven_Zip_External_File` are compatibility placeholders that fail closed without invoking local `7z`, `ZIP`/`ZIP_File`/`ZIP_Files` emit ZIP archives, `Inflate` is zlib-wrapper-only, `Inflate_With_Header` performs explicit wrapper selection, and `Inflate_Auto` is the convenience wrapper-discriminating inflate API. `Auto` remains deterministic and block-local; the library still has no general-purpose 7z codec stack or zlib-compatible compression-ratio promise.
+Raw Deflate compression is release-hardened by `zlib_raw_release_tests`, `zlib_raw_cross_wrapper_conformance_tests`, the raw examples, and the raw tools. The contract remains unchanged: `Deflate_*` APIs emit zlib-wrapped streams, `GZip*` APIs emit gzip-wrapped streams, `Deflate_Raw*` APIs emit raw Deflate blocks only, `Seven_Zip_Stored*` APIs emit Copy-coder `.7z` archives including header-only directory entries and solid stored file-list archives with no-stream directory entries, `Seven_Zip_Deflate*` APIs emit Deflate `.7z` archives, `Seven_Zip_BZip2*` APIs emit BZip2 `.7z` archives, `Seven_Zip_LZMA*` APIs emit LZMA `.7z` archives, `Seven_Zip_LZMA2*` APIs emit LZMA2 `.7z` archives, `Seven_Zip_Filtered` emits single-entry compressed filtered `.7z` archives, `Seven_Zip_Method_Graph` emits low-level single-entry non-encrypted method-graph `.7z` containers from caller-supplied packed stream bytes, `Extract_Seven_Zip*` APIs extract those supported native 7z layouts plus native PPMd empty/repeated-symbol/root-symbol/periodic-prefix, stock-7z multi-block streams with LZMA encoded headers, stock-7z no-stream empty-file entries, stock-7z BCJ+PPMd filter chains, and BCJ2 graphs with Copy, PPMd, or supported main pre-coders, `Seven_Zip_PPMd`, `Seven_Zip_PPMd_File`, and `Seven_Zip_PPMd_Files` emit native PPMd 7z archives for this crate's extractor without calling local `7z`, `ZIP`/`ZIP_File`/`ZIP_Files` emit ZIP archives, `Inflate`, `Inflate_Auto`, `Inflate_With_Header` with `Header => Default`, and streaming `Inflate_Init` with `Header => Default` auto-detect zlib/gzip/raw input, gzip input accepts concatenated members unless `GZip_Mode => Single_Member` is requested, and concrete inflate modes remain wrapper-strict. `Auto` remains deterministic and block-local.
 
 ## Maintaining Auto block selection
 

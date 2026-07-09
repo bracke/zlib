@@ -4,6 +4,7 @@ package body Zlib.Sliding_Window is
    function Before_First
      (Data : Ada.Streams.Stream_Element_Array)
       return Ada.Streams.Stream_Element_Offset
+     with SPARK_Mode => On
    is
    begin
       if Data'Length = 0 then
@@ -20,6 +21,10 @@ package body Zlib.Sliding_Window is
       Add   : Natural;
       Modulus : Natural)
       return Natural
+      with
+        SPARK_Mode => On,
+        Pre        => Modulus > 0 and then Value <= Natural'Last - Add,
+        Post       => Add_Mod'Result < Modulus
    is
    begin
       return (Value + Add) mod Modulus;
@@ -29,6 +34,9 @@ package body Zlib.Sliding_Window is
      (W        : Window;
       Distance : Natural)
       return History_Index
+      with
+        SPARK_Mode => On,
+        Pre        => Distance <= Window_Size
    is
    begin
       return History_Index ((W.History_Next + Window_Size - Distance) mod Window_Size);
@@ -115,6 +123,7 @@ package body Zlib.Sliding_Window is
    function Total_Output
      (W : Window)
       return Natural
+     with SPARK_Mode => On
    is
    begin
       return W.Total;
@@ -123,6 +132,7 @@ package body Zlib.Sliding_Window is
    function Pending_Output
      (W : Window)
       return Natural
+     with SPARK_Mode => On
    is
    begin
       return W.Pending_Count;
@@ -271,6 +281,7 @@ package body Zlib.Sliding_Window is
    function Copy_Active
      (W : Window)
       return Boolean
+     with SPARK_Mode => On
    is
    begin
       return W.Copy_Remaining > 0;

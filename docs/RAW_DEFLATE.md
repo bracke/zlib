@@ -78,8 +78,9 @@ Decoded := Zlib.Inflate_With_Header (Raw, Zlib.Raw_Deflate, Status);
 
 `Inflate_Raw` is a convenience wrapper for complete raw Deflate payloads. It
 does not auto-detect wrappers: zlib-wrapped and gzip-wrapped inputs fail with a
-non-`Ok` status. `Inflate` remains zlib-wrapper-only, and
-`Inflate_With_Header` remains the general explicit wrapper API. The raw inflate
+non-`Ok` status. `Inflate`, `Inflate_Auto`, `Inflate_With_Header` with
+`Header => Default`, and streaming `Inflate_Init` with `Header => Default`
+auto-detect raw Deflate input; concrete inflate modes remain wrapper-strict. The raw inflate
 path validates Deflate structure only. It cannot validate an outer checksum
 because raw Deflate has none.
 
@@ -130,12 +131,12 @@ Raw Deflate inflate convenience APIs are covered by `zlib_inflate_raw_api_tests`
 The contract remains unchanged: `Deflate_*` APIs emit zlib-wrapped streams, `GZip*`
 APIs emit gzip-wrapped streams, `Deflate_Raw*` APIs emit raw Deflate blocks only,
 `Inflate_Raw*` APIs consume raw Deflate payloads only, native `Seven_Zip_*` APIs
-emit/extract supported Copy and Deflate 7z layouts, `Seven_Zip_External_File`
-and `Extract_Seven_Zip_External_File` are compatibility placeholders that fail
-closed without invoking local `7z`, `ZIP`/`ZIP_File`/`ZIP_Files` emit ZIP
-archives, `Inflate` is
-zlib-wrapper-only, `Inflate_With_Header` performs explicit wrapper selection,
-and `Inflate_Auto` is the convenience wrapper-discriminating inflate API. `Auto`
-remains deterministic and block-local; the library still has no in-process full
-LZMA/LZMA2/stock-compatible PPMd codec stack, whole-stream optimal parser, or
-zlib-compatible compression-ratio promise.
+emit/extract supported Copy and Deflate 7z layouts, `ZIP`/`ZIP_File`/`ZIP_Files`
+emit ZIP archives, `Inflate`, `Inflate_Auto`, `Inflate_With_Header` with
+`Header => Default`, and streaming `Inflate_Init` with `Header => Default`
+auto-detect zlib/gzip/raw input, gzip input accepts concatenated members unless
+`GZip_Mode => Single_Member` is requested, and concrete inflate modes remain
+wrapper-strict. `Auto`
+remains deterministic and block-local. Native 7z support is covered by the
+explicit `Seven_Zip_*` APIs; raw Deflate remains a payload for containers that
+supply framing and integrity checks.

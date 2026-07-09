@@ -1,5 +1,6 @@
 with "config/tests_config.gpr";
 with "zlib";
+with "../../cryptolib/cryptolib.gpr";
 with "../../project_tools/project_tools.gpr";
 project Tests is
 

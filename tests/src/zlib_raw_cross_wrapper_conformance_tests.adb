@@ -485,11 +485,7 @@ package body Zlib_Raw_Cross_Wrapper_Conformance_Tests is
    is
       Match : constant Zlib.Header_Type := Matching_Inflate_Header (Header);
    begin
-      if Header = Zlib.Zlib_Header then
-         Assert_One_Shot_OK (Compressed, Zlib.Default, Payload, Label & " as Default");
-      else
-         Assert_One_Shot_Fails (Compressed, Zlib.Default, Label & " as Default");
-      end if;
+      Assert_One_Shot_OK (Compressed, Zlib.Default, Payload, Label & " as Default");
 
       for Candidate of Strict_Inflate_Headers loop
          if Candidate = Match then

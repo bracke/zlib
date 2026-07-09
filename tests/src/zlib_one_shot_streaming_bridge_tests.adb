@@ -76,7 +76,8 @@ package body Zlib_One_Shot_Streaming_Bridge_Tests is
          6 => 16#00#];
 
       Status : Zlib.Status_Code;
-      Output : constant Zlib.Byte_Array := Zlib.Inflate (Input, Status);
+      Output : constant Zlib.Byte_Array :=
+        Zlib.Inflate_With_Header (Input, Zlib.Zlib_Header, Status);
       pragma Unreferenced (Output);
    begin
       Assert

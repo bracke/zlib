@@ -9,6 +9,9 @@ licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
 website = ""
 tags = ["zlib", "deflate", "gzip", "compression", "ada"]
 
+[[depends-on]]
+gnat_native = "^15"
+
 [[actions]]
 type = "test"
 command = ["sh", "-c", "cd tests && alr build && ./bin/tests"]

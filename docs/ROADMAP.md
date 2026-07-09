@@ -21,18 +21,23 @@ The stable consumer surface includes:
 - compression levels 0 through 9 as deterministic broad effort policies;
 - explicit gzip metadata output through `GZip_Metadata`, including FEXTRA,
   FNAME, FCOMMENT, MTIME, OS, XFL, and FHCRC;
-- explicit multi-member gzip input through `GZip_Member_Mode => Multi_Member`;
+- implicit multi-member gzip input and explicit strict single-member gzip input
+  through `GZip_Member_Mode => Single_Member`;
 - zlib preset dictionary compression and inflate APIs;
 - one-shot and streaming file helpers, including zlib preset-dictionary file helpers;
-- public Adler-32 and CRC32 checksum helpers;
+- internal Adler-32 and CRC32 wrapper/archive validation through CryptoLib.Checksums;
 - examples, command-line tools, bounded deterministic fuzz drivers, and
   AI-facing discoverability documents.
 
-Wrapper behavior is intentionally explicit. `Inflate` is zlib-wrapper-only,
-`Inflate_Raw` is raw-only, and `Inflate_With_Header` remains the general
-explicit wrapper API. `Default` means `Zlib_Header`; it does not auto-detect
-gzip or raw streams. `Deflate_*` APIs emit zlib-wrapped streams, `GZip*` APIs
-emit gzip-wrapped streams, and `Deflate_Raw*` APIs emit raw Deflate bytes only.
+Wrapper behavior is explicit for concrete modes, with inflate auto-detection on
+the default path. `Inflate`, `Inflate_Auto`, `Inflate_With_Header` with
+`Header => Default`, and streaming `Inflate_Init` with `Header => Default`
+discriminate zlib, gzip, and raw Deflate. Gzip input accepts concatenated
+members unless `GZip_Mode => Single_Member` is requested. `Inflate_Raw` is
+raw-only, concrete `Inflate_With_Header` and `Inflate_Init` modes remain
+wrapper-strict, and streaming compression `Default` means `Zlib_Header`.
+`Deflate_*` APIs emit zlib-wrapped streams, `GZip*` APIs emit gzip-wrapped
+streams, and `Deflate_Raw*` APIs emit raw Deflate bytes only.
 
 ## Maintenance policy
 
@@ -71,39 +76,38 @@ Delivered and validated against stock 7-Zip in both directions:
   and password handling (SHA-256 key derivation) via `../cryptolib`;
 - solid compression (one shared compressed stream across entries), including
   encrypted solid archives for LZMA / LZMA2 / PPMd;
-- the branch-filter family on decode and (except RISC-V) encode — x86 masked
-  BCJ, ARM, ARM64, ARMT, PPC, SPARC, IA-64, plus Delta;
+- the branch-filter family on decode and encode — x86 masked BCJ, ARM, ARM64,
+  ARMT, PPC, SPARC, IA-64, RISC-V JAL, plus Delta;
 - a competitive LZMA/LZMA2 encoder with optimal (price-based) parsing;
 - multi-volume (split) archives, read and write.
 
 The BCJ2 encoder (`Seven_Zip_BCJ2`) is also done — the last decode-only codec —
 producing stored `-m0=BCJ2` archives stock 7z reads.
+`Seven_Zip_Filtered` writes public non-encrypted compressed filtered archives
+with one branch/Delta pre-filter plus Deflate, BZip2, LZMA, LZMA2, or PPMd
+as the terminal codec.
+`Seven_Zip_Method_Graph` writes low-level single-entry non-encrypted method
+graph containers from caller-supplied packed stream bytes, coders, bind pairs,
+packed stream indexes, sizes, and the final unpacked CRC.
 
 Remaining 7z work:
 
-- **RISC-V** branch filter — deferred until a 7-Zip 24.x+ is available to
-  cross-validate against (the algorithm is in 24.x; 23.01 cannot verify it);
-- a public **writer for non-encrypted *compressed* filtered archives** (e.g.
-  `BCJ + LZMA`, `BCJ2 + LZMA`); the decode side and the multi-coder writer
-  machinery already exist, so this is wiring rather than new codecs.
+- **RISC-V stock validation execution** — the in-process JAL converter, method
+  `0B` plumbing, and stock-interop lane are implemented. This workstation has
+  7-Zip 23.01, so `tools/bin/seven_zip_interop_check` skips the RISC-V cases
+  until it runs with a 24.x+ binary.
 
 ## Other future work
 
 Possible future work must preserve the explicit-wrapper design unless a new
-major version intentionally changes it. Candidate future work includes:
+major version intentionally changes it. The current polish pass added optional
+interop summary accounting, broader benchmark matrix reporting, replayed
+deterministic fuzz corpus fixtures, and additional bounded compression-quality
+tuning behind the existing level/mode APIs.
 
-- more compression-quality tuning behind the existing level/mode APIs;
-- additional optional interoperability tooling;
-- broader benchmark reporting;
-- expanded deterministic fuzz corpus fixtures.
+The following require explicit replanning as new public features:
 
-The following remain out of scope unless explicitly replanned as new public features:
-
-- implicit multi-member gzip input;
-- byte-for-byte compatibility with another compressor's output **on the zlib /
-  gzip / raw Deflate paths** (the 7z path explicitly does target
-  interoperability — producing archives stock `7z` can read and reading the
-  archives it writes);
+- additional gzip member-policy changes;
 - cryptographic hashes as a public general-purpose API (note: SHA-256 and AES
   are still implemented internally as required for 7z encryption — see
   `docs/SEVEN_ZIP_PLAN.md`);

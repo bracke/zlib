@@ -14,6 +14,14 @@ package Zlib is
    --  Status_Code. Streaming operations report malformed data through
    --  Zlib_Error and lifecycle misuse through Status_Error.
    --
+   --  Independent operations are reentrant and may be called from multiple
+   --  Ada tasks at the same time when each task uses its own buffers,
+   --  streaming filter objects, and output paths. The package does not add
+   --  internal synchronization around caller-owned mutable objects:
+   --  Filter_Type, Compression_Filter_Type, shared buffers, and overlapping
+   --  filesystem destinations must be protected by the caller if they are
+   --  shared between tasks.
+   --
    --  This root package owns all shared public types. Child packages are
    --  implementation details and the root spec must not depend on them.
 
@@ -85,74 +93,135 @@ package Zlib is
 
    type Header_Type is
      (Default,
-      --  Alias for Zlib_Header; not a wrapper-probing mode.
+      --  Inflate wrapper auto-detection; zlib default for compression APIs.
       Zlib_Header,
       --  zlib wrapper with Deflate payload and Adler-32 trailer.
       GZip,
       --  gzip member syntax with CRC32 and ISIZE trailer validation.
       Raw_Deflate);
       --  Bare Deflate payload with no wrapper or trailer checksum.
-   --  Wrapper/header mode selected for explicit inflate operations. Default is
-   --  exactly Zlib_Header. Zlib_Header expects a zlib wrapper, Deflate payload, and
-   --  Adler-32 trailer. GZip expects gzip member syntax and validates CRC32/ISIZE.
-   --  Raw_Deflate expects only a Deflate payload and performs no wrapper,
-   --  trailer, or checksum validation.
+   --  Wrapper/header mode. For inflate APIs, Default performs
+   --  lightweight wrapper auto-detection: syntactic zlib headers select
+   --  Zlib_Header, syntactic gzip headers select GZip, and other input is
+   --  attempted as Raw_Deflate. Compression APIs keep Default as their zlib
+   --  wrapper default. Zlib_Header expects a zlib wrapper, Deflate payload,
+   --  and Adler-32 trailer. GZip expects gzip member syntax and validates
+   --  CRC32/ISIZE. Raw_Deflate expects only a Deflate payload and performs no
+   --  wrapper, trailer, or checksum validation.
 
    type GZip_Member_Mode is
      (Single_Member,
       --  Accept exactly one gzip member and reject trailing gzip members.
       Multi_Member);
       --  Accept concatenated gzip members and concatenate decoded payloads.
-   --  Gzip member handling policy. Single_Member is the strict default and
-   --  accepts exactly one gzip member. Multi_Member explicitly enables
-   --  concatenated gzip members and concatenates their decoded payloads.
+   --  Gzip member handling policy. One-shot and streaming gzip inflate APIs
+   --  use Multi_Member unless a caller passes Single_Member explicitly through
+   --  the overload with GZip_Mode.
+
+   type Seven_Zip_Filter_Method is
+     (Seven_Zip_Filter_X86_BCJ,
+      --  x86 BCJ executable-code pre-filter.
+      Seven_Zip_Filter_ARM_BCJ,
+      --  ARM BCJ executable-code pre-filter.
+      Seven_Zip_Filter_ARMT_BCJ,
+      --  ARM Thumb BCJ executable-code pre-filter.
+      Seven_Zip_Filter_ARM64_BCJ,
+      --  ARM64 BCJ executable-code pre-filter.
+      Seven_Zip_Filter_PPC_BCJ,
+      --  PowerPC BCJ executable-code pre-filter.
+      Seven_Zip_Filter_SPARC_BCJ,
+      --  SPARC BCJ executable-code pre-filter.
+      Seven_Zip_Filter_IA64_BCJ,
+      --  IA-64 BCJ executable-code pre-filter.
+      Seven_Zip_Filter_RISCV_BCJ,
+      --  RISC-V BCJ executable-code pre-filter.
+      Seven_Zip_Filter_Delta);
+      --  Byte-wise Delta pre-filter with distance 1.
+   --  Public 7z pre-filter selector for compressed filtered archive writers.
+   --  Filters are applied before the terminal compression coder and reversed
+   --  after decompression by 7z extractors.
+
+   type Seven_Zip_Codec_Method is
+     (Seven_Zip_Codec_Deflate,
+      --  Raw Deflate terminal 7z coder.
+      Seven_Zip_Codec_BZip2,
+      --  BZip2 terminal 7z coder.
+      Seven_Zip_Codec_LZMA,
+      --  LZMA terminal 7z coder.
+      Seven_Zip_Codec_LZMA2,
+      --  LZMA2 terminal 7z coder.
+      Seven_Zip_Codec_PPMd);
+      --  PPMd terminal 7z coder.
+   --  Public terminal codec selector for compressed filtered 7z writers.
+
+   type Seven_Zip_Graph_Method is
+     (Seven_Zip_Graph_Copy,
+      --  7z Copy coder.
+      Seven_Zip_Graph_Deflate,
+      --  7z Deflate coder.
+      Seven_Zip_Graph_BZip2,
+      --  7z BZip2 coder.
+      Seven_Zip_Graph_LZMA,
+      --  7z LZMA coder using this library's default properties.
+      Seven_Zip_Graph_LZMA2,
+      --  7z LZMA2 coder using this library's default properties.
+      Seven_Zip_Graph_PPMd,
+      --  7z PPMd coder using this library's default properties.
+      Seven_Zip_Graph_Delta,
+      --  7z Delta filter.
+      Seven_Zip_Graph_X86_BCJ,
+      --  x86 BCJ filter.
+      Seven_Zip_Graph_ARM_BCJ,
+      --  ARM BCJ filter.
+      Seven_Zip_Graph_ARMT_BCJ,
+      --  ARM Thumb BCJ filter.
+      Seven_Zip_Graph_ARM64_BCJ,
+      --  ARM64 BCJ filter.
+      Seven_Zip_Graph_PPC_BCJ,
+      --  PowerPC BCJ filter.
+      Seven_Zip_Graph_SPARC_BCJ,
+      --  SPARC BCJ filter.
+      Seven_Zip_Graph_IA64_BCJ,
+      --  IA-64 BCJ filter.
+      Seven_Zip_Graph_RISCV_BCJ,
+      --  RISC-V BCJ filter.
+      Seven_Zip_Graph_BCJ2);
+      --  x86 BCJ2 graph coder with four input streams.
+   --  Public non-encrypted 7z graph method selector.
+
+   type Seven_Zip_Graph_Coder is record
+      Method         : Seven_Zip_Graph_Method := Seven_Zip_Graph_Copy;
+      Delta_Distance : Positive := 1;
+   end record;
+   --  One coder in a low-level 7z folder graph. Delta_Distance is used only
+   --  for Seven_Zip_Graph_Delta and must be in 1 .. 256.
+
+   type Seven_Zip_Graph_Coder_Array is
+     array (Positive range <>) of Seven_Zip_Graph_Coder;
+   --  Ordered coder list for a low-level 7z folder graph.
+
+   type Seven_Zip_Bind_Pair is record
+      In_Index  : Natural := 0;
+      Out_Index : Natural := 0;
+   end record;
+   --  One 7z folder bind pair. Indices are zero-based 7z stream indices.
+
+   type Seven_Zip_Bind_Pair_Array is
+     array (Positive range <>) of Seven_Zip_Bind_Pair;
+   --  Bind-pair list for a low-level 7z folder graph.
+
+   type Seven_Zip_Stream_Index_Array is array (Positive range <>) of Natural;
+   --  Zero-based packed stream indices for a low-level 7z folder graph.
+
+   type Seven_Zip_Size_Array is
+     array (Positive range <>) of Interfaces.Unsigned_64;
+   --  Packed or unpacked stream sizes for a low-level 7z folder graph.
 
    function Status_Image (Status : Status_Code) return String
      with SPARK_Mode => On;
    --  Return release-contract human-readable text for Status.
    --  @param Status status code to format
    --  @return release-contract status text
-
-   function Adler32 (Input : Byte_Array) return Interfaces.Unsigned_32;
-   --  Compute standard zlib Adler-32 over Input. This is the checksum
-   --  used by zlib stream trailers and preset-dictionary DICTID values.
-   --  The function is binary-safe and treats Input as bytes, not text.
-   --  @param Input bytes to checksum
-   --  @return standard Adler-32 value
-
-   function CRC32 (Input : Byte_Array) return Interfaces.Unsigned_32;
-   --  Compute standard gzip CRC-32 over Input using polynomial
-   --  0xEDB88320. This is the checksum used by gzip trailers and FHCRC
-   --  calculation. The function is binary-safe and treats Input as bytes,
-   --  not text.
-   --  @param Input bytes to checksum
-   --  @return standard finalized CRC-32 value
-
-   type CRC32_State is private;
-   --  Incremental standard gzip CRC-32 state.
-
-   procedure CRC32_Reset (State : out CRC32_State);
-   --  Reset State to the initial CRC-32 value.
-   --   State state to reset
-
-   procedure CRC32_Update
-     (State : in out CRC32_State;
-      B     : Ada.Streams.Stream_Element);
-   --  Incorporate one byte into State.
-   --   State running CRC-32 state
-   --   B byte to incorporate
-
-   procedure CRC32_Update
-     (State : in out CRC32_State;
-      Data  : Ada.Streams.Stream_Element_Array);
-   --  Incorporate Data into State in order.
-   --   State running CRC-32 state
-   --   Data bytes to incorporate
-
-   function CRC32_Value (State : CRC32_State) return Interfaces.Unsigned_32;
-   --  Return the finalized CRC-32 value for State.
-   --   State running CRC-32 state
-   --   standard finalized CRC-32 value
 
    function Looks_Like_Zlib_Header (Input : Byte_Array) return Boolean
      with SPARK_Mode => On;
@@ -176,19 +245,23 @@ package Zlib is
 
    function Inflate
      (Input : Byte_Array; Status : out Status_Code) return Byte_Array;
-   --  Decode one complete zlib-wrapped Deflate stream. This is exactly
-   --  equivalent to Inflate_With_Header with Header => Zlib_Header. It does
-   --  not auto-detect gzip or raw Deflate input.
-   --  @param Input complete zlib stream: header, Deflate payload, Adler-32
+   --  Decode one complete compressed stream using implicit wrapper
+   --  auto-detection. Syntactic zlib headers select Zlib_Header, syntactic
+   --  gzip headers select GZip with Multi_Member policy, and other input is
+   --  attempted as Raw_Deflate. Use Inflate_With_Header with a concrete Header
+   --  value for strict wrapper boundaries.
+   --  @param Input complete zlib, gzip, or raw Deflate stream
    --  @param Status set to Ok on success or a deterministic failure code
    --  @return inflated bytes when Status is Ok; otherwise invalid partial data
 
    function Inflate_With_Header
      (Input : Byte_Array; Header : Header_Type; Status : out Status_Code)
       return Byte_Array;
-   --  Decode one complete compressed stream using an explicit wrapper mode.
-   --  Header selects zlib, gzip single-member, or raw Deflate decoding. This
-   --  strict API does not perform wrapper auto-detection.
+   --  Decode one complete compressed stream using Header. Header => Default
+   --  performs the same implicit auto-detection as Inflate. Concrete Header
+   --  values select strict zlib, gzip multi-member, or raw Deflate decoding.
+   --  Use the overload with GZip_Mode => Single_Member to reject concatenated
+   --  gzip input.
    --  @param Input complete compressed stream for the selected Header
    --  @param Header wrapper/header mode to decode
    --  @param Status set to Ok on success or a deterministic failure code
@@ -196,11 +269,12 @@ package Zlib is
 
    function Inflate_Auto
      (Input : Byte_Array; Status : out Status_Code) return Byte_Array;
-   --  Decode one complete compressed stream by lightweight wrapper
+   --  Decode one complete compressed stream by the same lightweight wrapper
    --  discrimination. Syntactic zlib headers select Zlib_Header, syntactic
    --  gzip headers select GZip with Multi_Member policy, and all other input
-   --  is attempted as Raw_Deflate. Call Inflate_With_Header for strict wrapper
-   --  boundaries.
+   --  is attempted as Raw_Deflate. This is equivalent to Inflate and to
+   --  Inflate_With_Header with Header => Default. Call Inflate_With_Header with
+   --  a concrete Header value for strict wrapper boundaries.
    --  @param Input complete compressed stream
    --  @param Status set to Ok on success or a deterministic failure code
    --  @return inflated bytes when Status is Ok; otherwise invalid partial data
@@ -220,7 +294,8 @@ package Zlib is
       GZip_Mode : GZip_Member_Mode;
       Status    : out Status_Code) return Byte_Array;
    --  Decode one complete compressed stream using an explicit wrapper mode
-   --  and explicit gzip member policy. GZip_Mode is used only for Header => GZip.
+   --  and explicit gzip member policy. GZip_Mode is used for Header => GZip
+   --  and for gzip streams detected through Header => Default.
    --  @param Input complete compressed stream for the selected Header
    --  @param Header wrapper/header mode to decode
    --  @param GZip_Mode gzip single-member or multi-member policy
@@ -241,8 +316,9 @@ package Zlib is
 
    procedure Inflate_File
      (Input_Path : String; Output_Path : String; Status : out Status_Code);
-   --  Decode one complete zlib stream from a file into another file.
-   --  @param Input_Path path to the zlib stream
+   --  Decode one complete zlib, gzip, or raw Deflate stream from a file into
+   --  another file using the same implicit wrapper auto-detection as Inflate.
+   --  @param Input_Path path to the compressed stream
    --  @param Output_Path path that receives inflated bytes
    --  @param Status set to Ok or a deterministic failure code
 
@@ -318,6 +394,15 @@ package Zlib is
    --  @param Status set to Ok or a deterministic failure code
    --  @return zlib stream when Status is Ok; otherwise empty array
 
+   function Deflate_Bound (Input_Length : Natural) return Natural
+     with SPARK_Mode => On;
+   --  Return a conservative upper bound for zlib-wrapped output produced by
+   --  this package's Deflate APIs for an input of Input_Length bytes. The
+   --  value includes the zlib header and Adler-32 trailer and saturates at
+   --  Natural'Last if the arithmetic would overflow.
+   --  @param Input_Length number of uncompressed input bytes
+   --  @return conservative zlib output size bound
+
    function Deflate
      (Input : Byte_Array; Level : Compression_Level; Status : out Status_Code)
       return Byte_Array;
@@ -380,15 +465,18 @@ package Zlib is
    --  @param Metadata metadata object to update
    --  @param Comment comment metadata encoded in the gzip header
    procedure Set_MTime
-     (Metadata : in out GZip_Metadata; MTime : Interfaces.Unsigned_32);
+     (Metadata : in out GZip_Metadata; MTime : Interfaces.Unsigned_32)
+     with SPARK_Mode => On;
    --  Set gzip MTIME metadata.
    --  @param Metadata metadata object to update
    --  @param MTime Unix timestamp value to encode in the gzip header
-   procedure Set_OS (Metadata : in out GZip_Metadata; OS : Byte);
+   procedure Set_OS (Metadata : in out GZip_Metadata; OS : Byte)
+     with SPARK_Mode => On;
    --  Set gzip OS metadata byte.
    --  @param Metadata metadata object to update
    --  @param OS gzip operating-system identifier byte
-   procedure Set_XFL (Metadata : in out GZip_Metadata; XFL : Byte);
+   procedure Set_XFL (Metadata : in out GZip_Metadata; XFL : Byte)
+     with SPARK_Mode => On;
    --  Set gzip XFL metadata byte. The default deterministic value is 0.
    --  @param Metadata metadata object to update
    --  @param XFL gzip extra-flags byte
@@ -398,7 +486,8 @@ package Zlib is
    --  @param Metadata metadata object to update
    --  @param Extra raw FEXTRA field bytes to encode in the gzip header
    procedure Set_Header_CRC
-     (Metadata : in out GZip_Metadata; Enabled : Boolean);
+     (Metadata : in out GZip_Metadata; Enabled : Boolean)
+     with SPARK_Mode => On;
    --  Enable or disable gzip FHCRC output.
    --  @param Metadata metadata object to update
    --  @param Enabled True to emit and validate a gzip header CRC field
@@ -414,6 +503,16 @@ package Zlib is
    --  @param Mode compression mode or Auto policy
    --  @param Status set to Ok or a deterministic failure code
    --  @return gzip stream when Status is Ok; otherwise empty array
+
+   function GZip_Bound (Input_Length : Natural) return Natural
+     with SPARK_Mode => On;
+   --  Return a conservative upper bound for deterministic minimal gzip output
+   --  produced by this package's GZip APIs for an input of Input_Length bytes.
+   --  The value includes the fixed gzip header and CRC32/ISIZE trailer, but
+   --  not optional metadata fields. It saturates at Natural'Last if the
+   --  arithmetic would overflow.
+   --  @param Input_Length number of uncompressed input bytes
+   --  @return conservative minimal gzip output size bound
 
    function GZip
      (Input    : Byte_Array;
@@ -531,6 +630,15 @@ package Zlib is
    --  @param Mode Stored, Fixed, Dynamic, or Auto for raw output
    --  @param Status set to Ok on success
    --  @return raw Deflate stream when Status is Ok; otherwise empty array
+
+   function Deflate_Raw_Bound (Input_Length : Natural) return Natural
+     with SPARK_Mode => On;
+   --  Return a conservative upper bound for raw Deflate output produced by
+   --  this package's Deflate_Raw APIs for an input of Input_Length bytes. The
+   --  value covers Deflate blocks only and saturates at Natural'Last if the
+   --  arithmetic would overflow.
+   --  @param Input_Length number of uncompressed input bytes
+   --  @return conservative raw Deflate output size bound
 
    function Deflate_Raw
      (Input : Byte_Array; Level : Compression_Level; Status : out Status_Code)
@@ -783,10 +891,10 @@ package Zlib is
      (Archive_Image : Byte_Array;
       Status        : out Status_Code) return Archive_Entry_Array;
    --  Catalogue every member of a .7z archive: decode the header (plain, or
-   --  LZMA/Copy/AES-encoded — set the password via the Extract_Seven_Zip
-   --  password overload's mechanism for AES headers) and recover each file's
-   --  name, directory flag, uncompressed size and CRC32. Compression is left 0
-   --  (7z coders are folder-level, not per file).
+   --  LZMA/Copy-encoded) and recover each file's name, directory flag,
+   --  uncompressed size and CRC32. Use List_Archive_Entries with Password for
+   --  encrypted 7z headers. Compression is left 0 (7z coders are folder-level,
+   --  not per file).
    --  @param Archive_Image complete .7z archive image
    --  @param Status Ok on success, otherwise a deterministic failure code
    --  @return one Archive_Entry per file when Status is Ok
@@ -846,7 +954,9 @@ package Zlib is
    --  Streaming inflate filter state. The lifecycle contract is:
    --  Closed before initialization, Open after Inflate_Init, Failed after a
    --  fatal decompression error, and Ended after wrapper-validated stream end.
-   --  Failed and Ended filters remain open until Close is called.
+   --  Failed and Ended filters remain open until Close is called. Filter
+   --  objects are mutable and are not internally synchronized; use one filter
+   --  per task or protect shared access externally.
 
    type Flush_Mode is
      (No_Flush,
@@ -873,8 +983,11 @@ package Zlib is
 
    procedure Inflate_Init
      (Filter : in out Filter_Type; Header : Header_Type := Default);
-   --  Reset and open Filter for a streaming inflate session. Header selects
-   --  zlib, gzip single-member, or raw Deflate decoding.
+   --  Reset and open Filter for a streaming inflate session. Header => Default
+   --  auto-detects zlib, gzip multi-member, or raw Deflate input. Concrete
+   --  headers select strict zlib, gzip multi-member, or raw Deflate decoding.
+   --  Use the overload with GZip_Mode => Single_Member to reject concatenated
+   --  gzip input.
    --  @param Filter inflate filter object to initialize
    --  @param Header wrapper/header mode to decode
 
@@ -883,7 +996,8 @@ package Zlib is
       Header    : Header_Type;
       GZip_Mode : GZip_Member_Mode);
    --  Reset and open Filter for a streaming inflate session with explicit
-   --  gzip member policy. GZip_Mode is used only for Header => GZip.
+   --  gzip member policy. GZip_Mode is used for Header => GZip and for gzip
+   --  streams detected through Header => Default.
    --  @param Filter inflate filter object to initialize
    --  @param Header wrapper/header mode to decode
    --  @param GZip_Mode gzip single-member or multi-member policy
@@ -895,7 +1009,8 @@ package Zlib is
    --  @param Filter open streaming inflate filter awaiting a dictionary
    --  @param Dictionary preset dictionary bytes to validate and seed
 
-   function Is_Open (Filter : Filter_Type) return Boolean;
+   function Is_Open (Filter : Filter_Type) return Boolean
+     with SPARK_Mode => On;
    --  Return True after Inflate_Init and before Close, including Failed and
    --  Ended states that still require explicit Close.
    --  @param Filter filter object to inspect
@@ -961,7 +1076,9 @@ package Zlib is
    --  size scoring with the documented Stored, Fixed, Dynamic tie-breaker. Level-based
    --  initialization maps level 0 to Stored, level 1 to Fixed, levels 2 .. 3
    --  to greedy Auto, levels 4 .. 7 to lazy Auto, and levels 8 .. 9 to
-   --  bounded-optimal Auto without changing wrapper semantics.
+   --  bounded-optimal Auto without changing wrapper semantics. Compression
+   --  filter objects are mutable and are not internally synchronized; use one
+   --  filter per task or protect shared access externally.
 
    procedure Deflate_Init
      (Filter : in out Compression_Filter_Type;
@@ -1014,7 +1131,8 @@ package Zlib is
    --  @param Level broad compression-effort policy to map onto a strategy
    --  @param Metadata optional gzip metadata for Header => GZip
 
-   function Is_Open (Filter : Compression_Filter_Type) return Boolean;
+   function Is_Open (Filter : Compression_Filter_Type) return Boolean
+     with SPARK_Mode => On;
    --  Return True after Deflate_Init and before Compress_Close, including a
    --  failed compression filter that still requires explicit close.
    --  @param Filter compression filter object to inspect
@@ -1066,7 +1184,8 @@ package Zlib is
    --  @param Flush flush request
 
    function Compress_Stream_End
-     (Filter : Compression_Filter_Type) return Boolean;
+     (Filter : Compression_Filter_Type) return Boolean
+     with SPARK_Mode => On;
    --  Return True only after the final Deflate block and any active wrapper
    --  trailer have been fully emitted and drained to caller output by a
    --  streaming compression session.
@@ -1085,7 +1204,8 @@ package Zlib is
    --  when True; useful during exception cleanup
 
    function Is_ZIP_External_Method
-     (Method : Interfaces.Unsigned_16) return Boolean;
+     (Method : Interfaces.Unsigned_16) return Boolean
+     with SPARK_Mode => On;
    --  Return True for ZIP compression method ids handled by the non-Deflate
    --  ZIP codec bridge: bzip2 (12), LZMA (14), Zstandard (20/93), and PPMd
    --  (98). BZip2 ZIP creation and unencrypted extraction, ZIP-LZMA
@@ -1097,7 +1217,8 @@ package Zlib is
    --  @return True when Extract_ZIP_External_Entry can attempt this method
 
    function ZIP_External_Method_Name
-     (Method : Interfaces.Unsigned_16) return String;
+     (Method : Interfaces.Unsigned_16) return String
+     with SPARK_Mode => On;
    --  Return the canonical method name for a ZIP method id handled by the
    --  non-Deflate ZIP codec bridge: "BZip2" for 12, "LZMA" for 14, "ZSTD"
    --  for 20/93, and "PPMd" for 98. Return the empty string for methods
@@ -1107,7 +1228,6 @@ package Zlib is
 
    function Extract_ZIP_External_Entry
      (Archive_Image : Byte_Array;
-      Temp_Base     : String;
       Entry_Name    : String;
       Password      : String;
       Status        : out Status_Code) return Byte_Array;
@@ -1117,10 +1237,8 @@ package Zlib is
    --  library and Zstandard entries are also decoded in-process when they are
    --  not encrypted and use classic or ZIP64 size metadata. Other LZMA
    --  streams, ZIP PPMd, and encrypted entries fail closed with
-   --  Unsupported_Method. Temp_Base is accepted for compatibility and is not
-   --  used by the in-process paths.
+   --  Unsupported_Method.
    --  @param Archive_Image complete logical ZIP archive image
-   --  @param Temp_Base filesystem path prefix for temporary files/directories
    --  @param Entry_Name archive entry path to extract
    --  @param Password optional ZIP password for encrypted entries
    --  @param Status set to Ok on success, otherwise a deterministic failure code
@@ -1128,7 +1246,6 @@ package Zlib is
 
    function Compress_ZIP_External_File
      (Input_Path        : String;
-      Temp_Base         : String;
       Method_Name       : String;
       Method            : out Interfaces.Unsigned_16;
       Crc32             : out Interfaces.Unsigned_32;
@@ -1137,36 +1254,15 @@ package Zlib is
    --  Compress Input_Path as one ZIP entry and return only the compressed
    --  member payload. BZip2, ZIP-LZMA normal-distance streams, and Zstandard
    --  are compressed in-process. ZIP PPMd and unsupported method names fail
-   --  closed with Unsupported_Method. Temp_Base is accepted for compatibility
-   --  and is not used by the in-process paths. Method_Name is the ZIP method
-   --  name, for example BZip2.
+   --  closed with Unsupported_Method. Method_Name is the ZIP method name, for
+   --  example BZip2.
    --  @param Input_Path source file to compress
-   --  @param Temp_Base filesystem path prefix for temporary files
    --  @param Method_Name ZIP method name
    --  @param Method parsed ZIP compression method id
    --  @param Crc32 parsed ZIP CRC32 for the uncompressed payload
    --  @param Uncompressed_Size parsed uncompressed payload size
    --  @param Status set to Ok on success, otherwise a deterministic failure code
    --  @return compressed ZIP member payload when Status is Ok
-
-   procedure Seven_Zip_External_File
-     (Input_Path  : String;
-      Output_Path : String;
-      Method_Name : String;
-      Solid       : Boolean;
-      Password    : String;
-      Status      : out Status_Code);
-   --  Compatibility placeholder for the former external .7z bridge. This
-   --  procedure does not invoke a local 7z executable. Native
-   --  Seven_Zip_Stored/Deflate/BZip2/LZMA/LZMA2/PPMd APIs remain in-process;
-   --  unsupported broader 7z creation fails closed with Unsupported_Method
-   --  after deterministic input/output path checks.
-   --  @param Input_Path source file or directory to archive
-   --  @param Output_Path path that receives the .7z archive
-   --  @param Method_Name 7z compression method name
-   --  @param Solid True for solid archives, False for independent streams
-   --  @param Password optional 7z password
-   --  @param Status set to Ok on success, otherwise a deterministic failure code
 
    procedure Seven_Zip_PPMd_File
      (Input_Path  : String;
@@ -1194,24 +1290,6 @@ package Zlib is
    --  @param Input_Path source file or directory to archive
    --  @param Output_Path path that receives the .7z archive
    --  @param Entry_Name archive entry name, without NUL characters
-   --  @param Status set to Ok on success, otherwise a deterministic failure code
-
-   procedure Extract_Seven_Zip_External_File
-     (Input_Path : String;
-      Output_Dir : String;
-      Password   : String;
-      Status     : out Status_Code);
-   --  Compatibility placeholder for the former external .7z extraction
-   --  bridge. This procedure does not invoke a local 7z executable. Broader
-   --  unsupported 7z archives and password-protected archives fail closed
-   --  with Unsupported_Method after deterministic input/output path checks.
-   --  Neutral Extract_Seven_Zip APIs do not use an external fallback. The
-   --  native extractor may skip an SFX prefix and common archive/file
-   --  metadata while extracting supported payload layouts, but does not
-   --  preserve metadata.
-   --  @param Input_Path source .7z archive
-   --  @param Output_Dir directory that receives extracted entries
-   --  @param Password optional 7z password
    --  @param Status set to Ok on success, otherwise a deterministic failure code
 
    type Seven_Zip_Entry_Metadata is record
@@ -1452,6 +1530,78 @@ package Zlib is
    --  header-only directory entry is emitted.
    --  @param Input uncompressed file payload
    --  @param Entry_Name archive entry name, without NUL characters
+   --  @param Metadata optional file metadata emitted into the 7z file record
+   --  @param Status set to Ok on success, otherwise a deterministic failure code
+   --  @return .7z archive image when Status is Ok
+
+   function Seven_Zip_Filtered
+     (Input      : Byte_Array;
+      Entry_Name : String;
+      Filter     : Seven_Zip_Filter_Method;
+      Codec      : Seven_Zip_Codec_Method := Seven_Zip_Codec_LZMA;
+      Status     : out Status_Code) return Byte_Array;
+   --  Encode Input as a native single-entry .7z archive whose folder is a
+   --  non-encrypted two-coder chain: terminal compression Codec followed by
+   --  the reversible 7z Filter. This produces compressed filtered archives
+   --  such as BCJ+LZMA, BCJ+LZMA2, or Delta+Deflate without calling a local 7z
+   --  executable. For Seven_Zip_Filter_Delta this overload uses distance 1.
+   --  @param Input uncompressed file payload
+   --  @param Entry_Name archive entry name, without NUL characters
+   --  @param Filter reversible 7z pre-filter to apply before compression
+   --  @param Codec terminal compression coder for the filtered bytes
+   --  @param Status set to Ok on success, otherwise a deterministic failure code
+   --  @return .7z archive image when Status is Ok
+
+   function Seven_Zip_Filtered
+     (Input          : Byte_Array;
+      Entry_Name     : String;
+      Filter         : Seven_Zip_Filter_Method;
+      Codec          : Seven_Zip_Codec_Method;
+      Delta_Distance : Positive;
+      Metadata       : Seven_Zip_Entry_Metadata;
+      Status         : out Status_Code) return Byte_Array;
+   --  Metadata and Delta-distance overload for Seven_Zip_Filtered. The
+   --  Delta_Distance parameter is used only for Seven_Zip_Filter_Delta and
+   --  must be in 1 .. 256; other filters ignore it. When Metadata.Is_Directory
+   --  is True, Input and the filter chain are ignored and a header-only
+   --  directory entry is emitted.
+   --  @param Input uncompressed file payload
+   --  @param Entry_Name archive entry name, without NUL characters
+   --  @param Filter reversible 7z pre-filter to apply before compression
+   --  @param Codec terminal compression coder for the filtered bytes
+   --  @param Delta_Distance Delta filter distance, 1 .. 256
+   --  @param Metadata optional file metadata emitted into the 7z file record
+   --  @param Status set to Ok on success, otherwise a deterministic failure code
+   --  @return .7z archive image when Status is Ok
+
+   function Seven_Zip_Method_Graph
+     (Packed_Data    : Byte_Array;
+      Entry_Name     : String;
+      Coders         : Seven_Zip_Graph_Coder_Array;
+      Bind_Pairs     : Seven_Zip_Bind_Pair_Array;
+      Packed_Streams : Seven_Zip_Stream_Index_Array;
+      Pack_Sizes     : Seven_Zip_Size_Array;
+      Unpack_Sizes   : Seven_Zip_Size_Array;
+      Unpacked_CRC   : Interfaces.Unsigned_32;
+      Metadata       : Seven_Zip_Entry_Metadata;
+      Status         : out Status_Code) return Byte_Array;
+   --  Write a native single-entry .7z archive from a caller-supplied
+   --  non-encrypted method graph and already packed stream bytes. This is a
+   --  low-level container writer: it emits the 7z folder, bind pairs, packed
+   --  stream indices, sizes, CRCs, file metadata, and signature/start headers;
+   --  callers are responsible for supplying Packed_Data that actually matches
+   --  the declared graph. Coder properties are the same defaults used by the
+   --  built-in writers, except Delta_Distance on Delta coders. When
+   --  Metadata.Is_Directory is True, graph data is ignored and a header-only
+   --  directory entry is emitted.
+   --  @param Packed_Data concatenated packed streams, in PackInfo order
+   --  @param Entry_Name archive entry name, without NUL characters
+   --  @param Coders ordered folder coder graph
+   --  @param Bind_Pairs zero-based 7z bind pairs to emit
+   --  @param Packed_Streams zero-based packed stream indices to emit
+   --  @param Pack_Sizes size of each packed stream in Packed_Data order
+   --  @param Unpack_Sizes one unpack size for each coder output stream
+   --  @param Unpacked_CRC CRC32 of the final uncompressed entry payload
    --  @param Metadata optional file metadata emitted into the 7z file record
    --  @param Status set to Ok on success, otherwise a deterministic failure code
    --  @return .7z archive image when Status is Ok
@@ -1805,8 +1955,8 @@ package Zlib is
    --  than a fixed stream-independent context cap. Supported extraction
    --  also accepts encoded headers, solid substreams, BCJ2 graph layouts with
    --  supported main-stream pre-coders, and bounded linear filter chains made
-   --  from supported single-input coders and x86 BCJ/Delta filters, including
-   --  standard zero-based,
+   --  from supported single-input coders and supported branch/Delta filters,
+   --  including standard zero-based,
    --  reverse-linear, reordered zero-based, and legacy one-based linear bind
    --  pairs.
    --  Header CRC, packed CRC, unpacked CRC, method, size, and UTF-16LE entry
@@ -2002,10 +2152,6 @@ package Zlib is
    --  @param Status set to Ok on success, otherwise a deterministic failure code
 
 private
-   type CRC32_State is record
-      CRC : Interfaces.Unsigned_32 := 16#FFFF_FFFF#;
-   end record;
-
    type GZip_Metadata is record
       Has_Name    : Boolean := False;
       Has_Comment : Boolean := False;

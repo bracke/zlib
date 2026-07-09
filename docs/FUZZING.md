@@ -22,9 +22,11 @@ The fuzzing infrastructure targets:
 - stored, fixed, dynamic, and auto compression modes;
 - compression levels 0 through 9 across zlib, gzip, and raw wrappers;
 - gzip metadata fields including FEXTRA, FNAME, FCOMMENT, MTIME, OS, XFL, and FHCRC;
-- explicit multi-member gzip inflate policy;
+- implicit multi-member gzip inflate policy and explicit strict single-member policy;
 - preset dictionary roundtrips and dictionary mismatch handling;
 - bit flips, truncation, byte duplication/removal, and trailer/header corruption;
+- streaming compression flush sequences across wrappers, modes, chunk sizes, and
+  tiny output buffers;
 - invalid streaming lifecycle sequences such as calls before init, after close,
   dictionary changes after data start, and sync/full flush after stream end;
 - flush handling and finish handling with partial input/output buffers;
@@ -55,6 +57,7 @@ tools/fuzz/fuzz_wrapper_mix.adb
 tools/fuzz/fuzz_dictionary.adb
 tools/fuzz/fuzz_gzip_metadata.adb
 tools/fuzz/fuzz_mutation.adb
+tools/fuzz/fuzz_flush.adb
 tools/fuzz/fuzz_lifecycle.adb
 tools/fuzz/fuzz_tiny_buffers.adb
 ```
@@ -84,6 +87,7 @@ Example manual runs:
 ./tools/bin/fuzz_wrapper_mix 500 635
 ./tools/bin/fuzz_dictionary 250 636
 ./tools/bin/fuzz_gzip_metadata 250 637
+./tools/bin/fuzz_flush 500 638
 ```
 
 ## Target matrix
@@ -98,6 +102,7 @@ Example manual runs:
 | `fuzz_dictionary` | dictionary roundtrips and wrong-dictionary failures | no |
 | `fuzz_gzip_metadata` | metadata header fields and gzip roundtrips | no |
 | `fuzz_mutation` | corrupted zlib/gzip/raw streams and deterministic rejection | yes |
+| `fuzz_flush` | valid streaming compression flush sequences and roundtrips | no |
 | `fuzz_lifecycle` | invalid streaming inflate/compress lifecycle sequences | no |
 | `fuzz_tiny_buffers` | one-byte and tiny-buffer streaming decode paths | no |
 
@@ -107,8 +112,8 @@ hex snippet. A nonzero crash count is always a fuzz failure. Deterministic
 non-`Ok` results are allowed only for the negative-input targets that
 intentionally feed arbitrary or corrupted streams: `fuzz_inflate`,
 `fuzz_streaming_inflate`, and `fuzz_mutation`. Roundtrip, wrapper, dictionary,
-metadata, lifecycle, level, and tiny-buffer targets fail when any deterministic
-failure is reported.
+metadata, flush, lifecycle, level, and tiny-buffer targets fail when any
+deterministic failure is reported.
 
 ## Reproducibility
 
@@ -140,6 +145,11 @@ stable regression test.
 fuzzing. It should contain small, stable inputs plus a short note explaining the
 bug each fixture prevents. Do not add generated random corpora, large binary
 logs, or machine-local reproducer output.
+
+Corpus fixtures are stored as ASCII hex files and replayed by the AUnit fuzz
+smoke suite. The initial replay set covers valid empty zlib, gzip, and raw
+Deflate streams plus a truncated zlib header. Add new fixture files only with a
+matching executable assertion in the normal test suite.
 
 ## Optional system zlib cross-checking
 

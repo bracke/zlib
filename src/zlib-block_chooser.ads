@@ -18,7 +18,8 @@ package Zlib.Block_Chooser is
    function Stored_Bit_Size
      (Payload_Length     : Natural;
       Starting_Bit_Index : Natural := 0)
-      return Natural;
+      return Natural
+     with SPARK_Mode => On;
    --  Return the bit size of one or more stored Deflate blocks, including
    --  block header bits, byte-alignment padding, LEN/NLEN, and data bytes.
    --  @param Payload_Length Payload_Length argument supplied to Stored_Bit_Size
@@ -47,7 +48,8 @@ package Zlib.Block_Chooser is
      (Stored_Candidate  : Candidate_Score;
       Fixed_Candidate   : Candidate_Score;
       Dynamic_Candidate : Candidate_Score)
-      return Candidate_Score;
+      return Candidate_Score
+     with SPARK_Mode => On;
    --  Choose from precomputed candidates using the public Auto tie-breaker.
    --  This is exposed for deterministic scorer tests and remains an internal
    --  child-package API.
@@ -72,7 +74,8 @@ package Zlib.Block_Chooser is
    --  @param Allow_Stored Allow_Stored argument supplied to Choose
    --  @param Starting_Bit_Index Starting_Bit_Index argument supplied to Choose
    --  @return result produced by Choose
-   function To_Mode (Kind : Block_Kind) return Compression_Mode;
+   function To_Mode (Kind : Block_Kind) return Compression_Mode
+     with SPARK_Mode => On;
    --  Return the To Mode result.
    --  @param Kind Kind argument supplied to To_Mode
    --  @return result produced by To_Mode

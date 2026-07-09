@@ -221,8 +221,8 @@ package body Zlib_ZIP_External_Codec_Tests is
       declare
          Payload : constant Zlib.Byte_Array :=
            Zlib.Compress_ZIP_External_File
-             (Input_Path, "zlib-zip-external-temp", Method_Name, Method,
-              Crc32, Uncompressed_Size, Status);
+             (Input_Path, Method_Name, Method, Crc32, Uncompressed_Size,
+              Status);
       begin
          Assert (Status = Zlib.Ok, Message & ": compression status");
          Assert (Method = Expected_Method, Message & ": compression method");
@@ -236,7 +236,7 @@ package body Zlib_ZIP_External_Codec_Tests is
                  Central_ZIP64);
             Decoded : constant Zlib.Byte_Array :=
               Zlib.Extract_ZIP_External_Entry
-                (Archive, "zlib-zip-external-temp", "payload.bin", "", Status);
+                (Archive, "payload.bin", "", Status);
          begin
             Assert (Status = Zlib.Ok, Message & ": extraction status");
             Assert_Bytes_Equal (Decoded, Plain, Message);
@@ -248,66 +248,6 @@ package body Zlib_ZIP_External_Codec_Tests is
          Delete_If_Exists (Input_Path);
          raise;
    end Assert_ZIP_External_Roundtrip;
-
-   procedure Test_External_7z_Bridge_Closed
-     (T : in out AUnit.Test_Cases.Test_Case'Class)
-   is
-      pragma Unreferenced (T);
-      Input_Path  : constant String := "zlib-external-7z-input.bin";
-      Output_Path : constant String := "zlib-external-7z-output.7z";
-      Output_Dir  : constant String := "zlib-external-7z-output-dir";
-      Status      : Zlib.Status_Code;
-   begin
-      Delete_If_Exists (Input_Path);
-      Delete_If_Exists (Output_Path);
-      Delete_If_Exists (Output_Dir);
-      Write_File (Input_Path, [1 => 1, 2 => 2, 3 => 3]);
-
-      Zlib.Seven_Zip_External_File
-        (Input_Path, Output_Path, "LZMA2", Solid => False, Password => "",
-         Status => Status);
-      Assert
-        (Status = Zlib.Unsupported_Method,
-         "external 7z bridge creates and extracts broad archives when available");
-
-      Zlib.Seven_Zip_External_File
-        (Input_Path, Output_Path, "Copy", Solid => True, Password => "",
-         Status => Status);
-      Assert
-        (Status = Zlib.Unsupported_Method,
-         "external 7z bridge preserves directories when available");
-
-      Ada.Directories.Create_Directory (Output_Dir);
-      Zlib.Extract_Seven_Zip_External_File
-        (Input_Path, "", Password => "", Status => Status);
-      Assert
-        (Status = Zlib.Output_File_Error,
-         "external 7z extraction reports output directory errors");
-
-      Zlib.Seven_Zip_External_File
-        (Input_Path, Output_Path, "BZip2", Solid => False, Password => "",
-         Status => Status);
-      Assert
-        (Status = Zlib.Unsupported_Method,
-         "external 7z creation overwrites archives without stale entries");
-
-      Zlib.Seven_Zip_External_File
-        ("zlib-external-7z-missing.bin", Output_Path, "", Solid => False,
-         Password => "secret", Status => Status);
-      Assert
-        (Status = Zlib.Input_File_Error,
-         "external 7z bridge reports missing input method and password errors");
-
-      Delete_If_Exists (Input_Path);
-      Delete_If_Exists (Output_Path);
-      Delete_If_Exists (Output_Dir);
-   exception
-      when others =>
-         Delete_If_Exists (Input_Path);
-         Delete_If_Exists (Output_Path);
-         Delete_If_Exists (Output_Dir);
-         raise;
-   end Test_External_7z_Bridge_Closed;
 
    procedure Test_ZIP_BZip2_Created
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -348,6 +288,76 @@ package body Zlib_ZIP_External_Codec_Tests is
         ("LZMA", 14, Repeated_Data (225, 7),
          "ZIP LZMA payloads are extracted in-process");
    end Test_ZIP_LZMA_Extracted;
+
+   procedure Test_ZIP_LZMA_Selects_Non_Default_Properties
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Default_Props : constant Zlib.Byte := 16#5D#;
+      Input_Path    : constant String := "zlib-zip-lzma-props-input.bin";
+      Status        : Zlib.Status_Code;
+      Found         : Boolean := False;
+
+      procedure Check (Plain : Zlib.Byte_Array; Label : String) is
+         Method            : Interfaces.Unsigned_16;
+         Crc32             : Interfaces.Unsigned_32;
+         Uncompressed_Size : Interfaces.Unsigned_64;
+      begin
+         Write_File (Input_Path, Plain);
+         declare
+            Payload : constant Zlib.Byte_Array :=
+              Zlib.Compress_ZIP_External_File
+                (Input_Path, "LZMA", Method, Crc32, Uncompressed_Size,
+                 Status);
+         begin
+            Assert (Status = Zlib.Ok, Label & " compression status");
+            Assert (Method = 14, Label & " compression method");
+            Assert (Payload'Length > 9, Label & " LZMA payload header");
+            Assert (Payload (Payload'First + 2) = 5, Label & " LZMA props size");
+            Assert (Payload (Payload'First + 3) = 0, Label & " LZMA props size high");
+
+            if Payload (Payload'First + 4) /= Default_Props then
+               Found := True;
+            end if;
+
+            declare
+               Archive : constant Zlib.Byte_Array :=
+                 Archive_With_External_Payload
+                   (Payload, 14, Crc32, Uncompressed_Size, "payload.bin");
+               Decoded : constant Zlib.Byte_Array :=
+                 Zlib.Extract_ZIP_External_Entry
+                   (Archive, "payload.bin", "", Status);
+            begin
+               Assert (Status = Zlib.Ok, Label & " extraction status");
+               Assert_Bytes_Equal (Decoded, Plain, Label & " roundtrip");
+            end;
+         end;
+      end Check;
+
+      Binary_Input : Zlib.Byte_Array (1 .. 4096);
+      Text_Input   : Zlib.Byte_Array (1 .. 4096);
+      Sparse_Input : Zlib.Byte_Array (1 .. 4096);
+      Text_Pattern : constant String := "etaoin shrdlu ";
+   begin
+      for I in Binary_Input'Range loop
+         Binary_Input (I) := Zlib.Byte ((I * 37 + I / 7) mod 256);
+         Text_Input (I) :=
+           Zlib.Byte
+             (Character'Pos
+                (Text_Pattern ((I - 1) mod Text_Pattern'Length + 1)));
+         Sparse_Input (I) := (if I mod 17 = 0 then 16#80# else 0);
+      end loop;
+
+      Check (Binary_Input, "ZIP LZMA binary tuned props");
+      Check (Text_Input, "ZIP LZMA text tuned props");
+      Check (Sparse_Input, "ZIP LZMA sparse tuned props");
+      Assert (Found, "ZIP LZMA writer selected a non-default property set");
+      Delete_If_Exists (Input_Path);
+   exception
+      when others =>
+         Delete_If_Exists (Input_Path);
+         raise;
+   end Test_ZIP_LZMA_Selects_Non_Default_Properties;
 
    procedure Test_ZIP_Zstd_Created
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -492,9 +502,6 @@ package body Zlib_ZIP_External_Codec_Tests is
       use AUnit.Test_Cases;
    begin
       Registration.Register_Routine
-        (T, Test_External_7z_Bridge_Closed'Access,
-         "external 7z bridge creates and extracts broad archives when available");
-      Registration.Register_Routine
         (T, Test_ZIP_BZip2_Created'Access,
          "ZIP BZip2 payloads are created in-process");
       Registration.Register_Routine
@@ -506,6 +513,9 @@ package body Zlib_ZIP_External_Codec_Tests is
       Registration.Register_Routine
         (T, Test_ZIP_LZMA_Extracted'Access,
          "ZIP LZMA payloads are extracted in-process");
+      Registration.Register_Routine
+        (T, Test_ZIP_LZMA_Selects_Non_Default_Properties'Access,
+         "ZIP LZMA payloads select non-default coder properties");
       Registration.Register_Routine
         (T, Test_ZIP_Zstd_Created'Access,
          "ZIP Zstd payloads are created in-process");

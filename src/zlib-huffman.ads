@@ -17,7 +17,8 @@ package Zlib.Huffman is
    --  Decode table built from canonical Deflate code lengths.
 
    procedure Clear
-     (Table : out Decode_Table);
+     (Table : out Decode_Table)
+     with SPARK_Mode => On;
    --  Reset Table to contain no codes.
    --  @param Table decode table to clear
 

@@ -165,21 +165,20 @@ package body Zlib_Inflate_With_Header_Tests is
    Truncated_Raw_Deflate : constant Zlib.Byte_Array :=
      [1 => 16#01#, 2 => 16#05#, 3 => 16#00#];
 
-   procedure Test_Default_Equals_Zlib_Header
+   procedure Test_Default_Auto_Detects_Wrappers
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
       Status_Default : Zlib.Status_Code;
-      Status_Zlib    : Zlib.Status_Code;
       Default_Output : constant Zlib.Byte_Array :=
         Zlib.Inflate_With_Header (Zlib_Stored_Hello, Zlib.Default, Status_Default);
-      Zlib_Output    : constant Zlib.Byte_Array :=
-        Zlib.Inflate_With_Header (Zlib_Stored_Hello, Zlib.Zlib_Header, Status_Zlib);
    begin
       Assert (Status_Default = Zlib.Ok, "Default must decode zlib fixture");
-      Assert (Status_Zlib = Zlib.Ok, "Zlib_Header must decode zlib fixture");
-      Assert_Bytes_Equal (Default_Output, Zlib_Output, "Default equals Zlib_Header");
-   end Test_Default_Equals_Zlib_Header;
+      Assert_Bytes_Equal (Default_Output, Hello, "Default zlib output");
+
+      Assert_Inflates (GZip_Hello, Zlib.Default, Hello, "Default gzip fixture");
+      Assert_Inflates (Raw_Stored_Hello, Zlib.Default, Hello, "Default raw fixture");
+   end Test_Default_Auto_Detects_Wrappers;
 
    procedure Test_Zlib_Header_Inflates_Zlib
      (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -216,27 +215,30 @@ package body Zlib_Inflate_With_Header_Tests is
       Assert_Inflates (Raw_Dynamic_Text, Zlib.Raw_Deflate, Dynamic_Text, "raw dynamic fixture");
    end Test_Raw_Dynamic_Inflates;
 
-   procedure Test_Inflate_Remains_Zlib_Only
+   procedure Test_Inflate_Auto_Detects_Wrappers
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
       Status : Zlib.Status_Code;
       Output : constant Zlib.Byte_Array := Zlib.Inflate (Zlib_Stored_Hello, Status);
    begin
-      Assert (Status = Zlib.Ok, "Inflate must keep zlib wrapper behavior");
-      Assert_Bytes_Equal (Output, Hello, "Inflate zlib-only output");
-   end Test_Inflate_Remains_Zlib_Only;
+      Assert (Status = Zlib.Ok, "Inflate must decode zlib fixture");
+      Assert_Bytes_Equal (Output, Hello, "Inflate zlib output");
 
-   procedure Test_Inflate_Rejects_Raw
-     (T : in out AUnit.Test_Cases.Test_Case'Class)
-   is
-      pragma Unreferenced (T);
-      Status : Zlib.Status_Code;
-      Output : constant Zlib.Byte_Array := Zlib.Inflate (Raw_Stored_Hello, Status);
-      pragma Unreferenced (Output);
-   begin
-      Assert (Status /= Zlib.Ok, "Inflate must reject raw Deflate input");
-   end Test_Inflate_Rejects_Raw;
+      declare
+         GZip_Output : constant Zlib.Byte_Array := Zlib.Inflate (GZip_Hello, Status);
+      begin
+         Assert (Status = Zlib.Ok, "Inflate must auto-detect gzip fixture");
+         Assert_Bytes_Equal (GZip_Output, Hello, "Inflate gzip output");
+      end;
+
+      declare
+         Raw_Output : constant Zlib.Byte_Array := Zlib.Inflate (Raw_Stored_Hello, Status);
+      begin
+         Assert (Status = Zlib.Ok, "Inflate must auto-detect raw fixture");
+         Assert_Bytes_Equal (Raw_Output, Hello, "Inflate raw output");
+      end;
+   end Test_Inflate_Auto_Detects_Wrappers;
 
    procedure Test_Zlib_Header_Rejects_Raw
      (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -298,8 +300,8 @@ package body Zlib_Inflate_With_Header_Tests is
       use AUnit.Test_Cases;
    begin
       Registration.Register_Routine
-        (T, Test_Default_Equals_Zlib_Header'Access,
-         "Inflate_With_Header Default equals Zlib_Header");
+        (T, Test_Default_Auto_Detects_Wrappers'Access,
+         "Inflate_With_Header Default auto-detects wrappers");
       Registration.Register_Routine
         (T, Test_Zlib_Header_Inflates_Zlib'Access,
          "Inflate_With_Header Zlib_Header inflates zlib fixture");
@@ -316,11 +318,8 @@ package body Zlib_Inflate_With_Header_Tests is
         (T, Test_Raw_Dynamic_Inflates'Access,
          "Inflate_With_Header Raw_Deflate inflates raw dynamic fixture");
       Registration.Register_Routine
-        (T, Test_Inflate_Remains_Zlib_Only'Access,
-         "Inflate remains zlib-wrapper-only");
-      Registration.Register_Routine
-        (T, Test_Inflate_Rejects_Raw'Access,
-         "Inflate rejects raw Deflate input");
+        (T, Test_Inflate_Auto_Detects_Wrappers'Access,
+         "Inflate auto-detects wrappers");
       Registration.Register_Routine
         (T, Test_Zlib_Header_Rejects_Raw'Access,
          "Inflate_With_Header Zlib_Header rejects raw Deflate input");

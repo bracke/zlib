@@ -23,7 +23,9 @@ project Tools is
       "zlib_bench_deflate.adb",
       "zlib_bench_gzip.adb",
       "zlib_bench_raw.adb",
+      "zlib_bench_matrix.adb",
       "smoke_test.adb",
+      "seven_zip_interop_check.adb",
       "check_all.adb",
       "fuzz_inflate.adb",
       "fuzz_streaming_inflate.adb",
@@ -33,6 +35,7 @@ project Tools is
       "fuzz_dictionary.adb",
       "fuzz_gzip_metadata.adb",
       "fuzz_mutation.adb",
+      "fuzz_flush.adb",
       "fuzz_lifecycle.adb",
       "fuzz_tiny_buffers.adb");
 

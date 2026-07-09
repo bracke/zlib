@@ -4,6 +4,7 @@ with Ada.Streams;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Unbounded;
 with AUnit.Assertions; use AUnit.Assertions;
+with CryptoLib.Checksums;
 with GNAT.OS_Lib;
 with Interfaces;
 with Zlib;
@@ -42,6 +43,16 @@ package body Zlib_Seven_Zip_Tests is
         or Interfaces.Shift_Left (Interfaces.Unsigned_32 (Data (Pos + 2)), 16)
         or Interfaces.Shift_Left (Interfaces.Unsigned_32 (Data (Pos + 3)), 24);
    end U32_LE;
+
+   function CRC32 (Data : Zlib.Byte_Array) return Interfaces.Unsigned_32 is
+      State : CryptoLib.Checksums.CRC32_State;
+   begin
+      CryptoLib.Checksums.CRC32_Reset (State);
+      for B of Data loop
+         CryptoLib.Checksums.CRC32_Update (State, Ada.Streams.Stream_Element (B));
+      end loop;
+      return CryptoLib.Checksums.CRC32_Value (State);
+   end CRC32;
 
    procedure Set_U32_LE
      (Data  : in out Zlib.Byte_Array;
@@ -90,6 +101,33 @@ package body Zlib_Seven_Zip_Tests is
       return Archive'First + 32 + Natural (U64_LE (Archive, Archive'First + 12));
    end Seven_Zip_Header_First;
 
+   function Seven_Zip_LZMA_Props_Count
+     (Archive     : Zlib.Byte_Array;
+      Non_Default : Boolean := False) return Natural
+   is
+      Default_Props : constant Zlib.Byte := 16#5D#;
+      Header_First  : constant Natural := Seven_Zip_Header_First (Archive);
+      Count         : Natural := 0;
+   begin
+      if Header_First > Archive'Last or else Archive'Length < 6 then
+         return 0;
+      end if;
+
+      for Pos in Header_First .. Archive'Last - 5 loop
+         if Archive (Pos) = 16#23#
+           and then Archive (Pos + 1) = 16#03#
+           and then Archive (Pos + 2) = 16#01#
+           and then Archive (Pos + 3) = 16#01#
+           and then Archive (Pos + 4) = 5
+           and then (not Non_Default or else Archive (Pos + 5) /= Default_Props)
+         then
+            Count := Count + 1;
+         end if;
+      end loop;
+
+      return Count;
+   end Seven_Zip_LZMA_Props_Count;
+
    function Remove_Seven_Zip_Header_Bytes
      (Archive : Zlib.Byte_Array;
       First   : Natural;
@@ -117,10 +155,10 @@ package body Zlib_Seven_Zip_Tests is
          Interfaces.Unsigned_64 (Result'Last - Header_First + 1));
       Set_U32_LE
         (Result, Result'First + 28,
-         Zlib.CRC32 (Result (Header_First .. Result'Last)));
+         CRC32 (Result (Header_First .. Result'Last)));
       Set_U32_LE
         (Result, Result'First + 8,
-         Zlib.CRC32 (Result (Result'First + 12 .. Result'First + 31)));
+         CRC32 (Result (Result'First + 12 .. Result'First + 31)));
 
       return Result;
    end Remove_Seven_Zip_Header_Bytes;
@@ -135,10 +173,10 @@ package body Zlib_Seven_Zip_Tests is
          Interfaces.Unsigned_64 (Archive'Last - Header_First + 1));
       Set_U32_LE
         (Archive, Archive'First + 28,
-         Zlib.CRC32 (Archive (Header_First .. Archive'Last)));
+         CRC32 (Archive (Header_First .. Archive'Last)));
       Set_U32_LE
         (Archive, Archive'First + 8,
-         Zlib.CRC32 (Archive (Archive'First + 12 .. Archive'First + 31)));
+         CRC32 (Archive (Archive'First + 12 .. Archive'First + 31)));
    end Refresh_Seven_Zip_Header_CRCs;
 
    function Insert_Seven_Zip_Header_Bytes
@@ -327,10 +365,10 @@ package body Zlib_Seven_Zip_Tests is
 
       Payload      : constant Zlib.Byte_Array :=
         Build_Payload;
-      Payload_CRC  : constant Interfaces.Unsigned_32 := Zlib.CRC32 (Payload);
-      Plain_CRC    : constant Interfaces.Unsigned_32 := Zlib.CRC32 (Plain);
-      First_CRC    : constant Interfaces.Unsigned_32 := Zlib.CRC32 (First_Data);
-      Second_CRC   : constant Interfaces.Unsigned_32 := Zlib.CRC32 (Second_Data);
+      Payload_CRC  : constant Interfaces.Unsigned_32 := CRC32 (Payload);
+      Plain_CRC    : constant Interfaces.Unsigned_32 := CRC32 (Plain);
+      First_CRC    : constant Interfaces.Unsigned_32 := CRC32 (First_Data);
+      Second_CRC   : constant Interfaces.Unsigned_32 := CRC32 (Second_Data);
       Header_First : Natural := 0;
 
       procedure Put (B : Zlib.Byte) is
@@ -553,10 +591,10 @@ package body Zlib_Seven_Zip_Tests is
          Interfaces.Unsigned_64 (Pos - Header_First));
       Set_U32_LE
         (Buffer, Buffer'First + 28,
-         Zlib.CRC32 (Buffer (Header_First .. Pos - 1)));
+         CRC32 (Buffer (Header_First .. Pos - 1)));
       Set_U32_LE
         (Buffer, Buffer'First + 8,
-         Zlib.CRC32 (Buffer (Buffer'First + 12 .. Buffer'First + 31)));
+         CRC32 (Buffer (Buffer'First + 12 .. Buffer'First + 31)));
 
       return Buffer (Buffer'First .. Pos - 1);
    end Seven_Zip_Solid_Substream_Archive;
@@ -845,7 +883,7 @@ package body Zlib_Seven_Zip_Tests is
          end loop;
       end if;
       Put_Number (Data'Length);
-      Put (16#0A#); Put (1); Put_U32 (Zlib.CRC32 (Data));
+      Put (16#0A#); Put (1); Put_U32 (CRC32 (Data));
       Put (0);      -- End UnpackInfo
       Put (0);      -- End MainStreamsInfo
       Put (16#05#); -- FilesInfo
@@ -862,10 +900,10 @@ package body Zlib_Seven_Zip_Tests is
          Interfaces.Unsigned_64 (Pos - Header_First));
       Set_U32_LE
         (Buffer, Buffer'First + 28,
-         Zlib.CRC32 (Buffer (Header_First .. Pos - 1)));
+         CRC32 (Buffer (Header_First .. Pos - 1)));
       Set_U32_LE
         (Buffer, Buffer'First + 8,
-         Zlib.CRC32 (Buffer (Buffer'First + 12 .. Buffer'First + 31)));
+         CRC32 (Buffer (Buffer'First + 12 .. Buffer'First + 31)));
 
       return Buffer (Buffer'First .. Pos - 1);
    end Seven_Zip_BCJ2_Copy_Archive;
@@ -947,7 +985,7 @@ package body Zlib_Seven_Zip_Tests is
       Assert (Pack_CRC_Pos /= 0, "PPMd packed CRC property is present");
       Set_U32_LE
         (Archive, Pack_CRC_Pos + 2,
-         Zlib.CRC32 (Archive (Payload_First .. Payload_Last)));
+         CRC32 (Archive (Payload_First .. Payload_Last)));
       Refresh_Seven_Zip_Header_CRCs (Archive);
       return Archive;
    end Mutate_Seven_Zip_PPMd_Range_Header;
@@ -1065,7 +1103,7 @@ package body Zlib_Seven_Zip_Tests is
          "empty PPMd fixture exposes its pack CRC");
       Set_U32_LE
         (Result, Pack_CRC_Pos + 2,
-         Zlib.CRC32 (Result (Result'First + 32 .. Result'First + 36)));
+         CRC32 (Result (Result'First + 32 .. Result'First + 36)));
       Refresh_Seven_Zip_Header_CRCs (Result);
       return Result;
    end Seven_Zip_Empty_PPMd_With_Range_Header;
@@ -1162,7 +1200,7 @@ package body Zlib_Seven_Zip_Tests is
       Put (Zlib.Byte (Payload'Length));
       Put (16#0A#); -- CRC
       Put (1);
-      Put_U32 (Zlib.CRC32 (Payload));
+      Put_U32 (CRC32 (Payload));
       Put (0);      -- End PackInfo
       Put (16#07#); -- UnpackInfo
       Put (16#0B#); -- Folder
@@ -1183,7 +1221,7 @@ package body Zlib_Seven_Zip_Tests is
       Put (Zlib.Byte (Plain'Length));
       Put (16#0A#); -- CRC
       Put (1);
-      Put_U32 (Zlib.CRC32 (Plain));
+      Put_U32 (CRC32 (Plain));
       Put (0);      -- End UnpackInfo
       Put (16#08#); -- SubStreamsInfo
       Put (16#0D#); -- NumUnPackStream
@@ -1192,8 +1230,8 @@ package body Zlib_Seven_Zip_Tests is
       Put (Zlib.Byte (First_Data'Length));
       Put (16#0A#); -- CRC
       Put (1);
-      Put_U32 (Zlib.CRC32 (First_Data));
-      Put_U32 (Zlib.CRC32 (Second_Data));
+      Put_U32 (CRC32 (First_Data));
+      Put_U32 (CRC32 (Second_Data));
       Put (0);      -- End SubStreamsInfo
       Put (0);      -- End MainStreamsInfo
       Put (16#05#); -- FilesInfo
@@ -1211,10 +1249,10 @@ package body Zlib_Seven_Zip_Tests is
          Interfaces.Unsigned_64 (Pos - Header_First));
       Set_U32_LE
         (Buffer, Buffer'First + 28,
-         Zlib.CRC32 (Buffer (Header_First .. Pos - 1)));
+         CRC32 (Buffer (Header_First .. Pos - 1)));
       Set_U32_LE
         (Buffer, Buffer'First + 8,
-         Zlib.CRC32 (Buffer (Buffer'First + 12 .. Buffer'First + 31)));
+         CRC32 (Buffer (Buffer'First + 12 .. Buffer'First + 31)));
 
       return Buffer (Buffer'First .. Pos - 1);
    end Seven_Zip_Solid_PPMd_Repeated_Substream_Archive;
@@ -1510,6 +1548,7 @@ package body Zlib_Seven_Zip_Tests is
         Archive (Header_First .. Archive'Last);
       Payload_Size : constant Natural := Header_First - (Archive'First + 32);
       Compress_Status : Zlib.Status_Code := Zlib.Ok;
+      LZMA_Header_Props : Zlib.Byte := 16#5D#;
 
       function Payload_From_Single_Stream_Archive
         (Encoded_Archive : Zlib.Byte_Array) return Zlib.Byte_Array
@@ -1553,6 +1592,23 @@ package body Zlib_Seven_Zip_Tests is
                   if Compress_Status /= Zlib.Ok then
                      return [];
                   end if;
+
+                  declare
+                     Encoded_Header_First : constant Natural :=
+                       Seven_Zip_Header_First (Encoded_Archive);
+                  begin
+                     for P in Encoded_Header_First .. Encoded_Archive'Last - 5 loop
+                        if Encoded_Archive (P) = 16#23#
+                          and then Encoded_Archive (P + 1) = 16#03#
+                          and then Encoded_Archive (P + 2) = 16#01#
+                          and then Encoded_Archive (P + 3) = 16#01#
+                          and then Encoded_Archive (P + 4) = 5
+                        then
+                           LZMA_Header_Props := Encoded_Archive (P + 5);
+                           exit;
+                        end if;
+                     end loop;
+                  end;
 
                   return Payload_From_Single_Stream_Archive (Encoded_Archive);
                end;
@@ -1631,7 +1687,7 @@ package body Zlib_Seven_Zip_Tests is
                Put (16#01#);
                Put (16#01#);
                Put (5);
-               Put (16#5D#);
+               Put (LZMA_Header_Props);
                Put (0);
                Put (0);
                Put (16#01#);
@@ -1682,7 +1738,7 @@ package body Zlib_Seven_Zip_Tests is
       Put_Number (Encoded'Length);
       Put (16#0A#); -- CRC
       Put (1);
-      Put_U32 (Zlib.CRC32 (Encoded));
+      Put_U32 (CRC32 (Encoded));
       Put (0);      -- End PackInfo
       Put (16#07#); -- UnpackInfo
       Put (16#0B#); -- Folder
@@ -1694,7 +1750,7 @@ package body Zlib_Seven_Zip_Tests is
       Put_Number (Header'Length);
       Put (16#0A#); -- CRC
       Put (1);
-      Put_U32 (Zlib.CRC32 (Header));
+      Put_U32 (CRC32 (Header));
       Put (0);      -- End UnpackInfo
       Put (0);      -- End MainStreamsInfo
 
@@ -1703,10 +1759,10 @@ package body Zlib_Seven_Zip_Tests is
          Interfaces.Unsigned_64 (Pos - Encoded_Info_First));
       Set_U32_LE
         (Buffer, Buffer'First + 28,
-         Zlib.CRC32 (Buffer (Encoded_Info_First .. Pos - 1)));
+         CRC32 (Buffer (Encoded_Info_First .. Pos - 1)));
       Set_U32_LE
         (Buffer, Buffer'First + 8,
-         Zlib.CRC32 (Buffer (Buffer'First + 12 .. Buffer'First + 31)));
+         CRC32 (Buffer (Buffer'First + 12 .. Buffer'First + 31)));
 
       return Buffer (Buffer'First .. Pos - 1);
    end Seven_Zip_With_Encoded_Header;
@@ -1820,8 +1876,8 @@ package body Zlib_Seven_Zip_Tests is
       begin
          Assert (Offset = Interfaces.Unsigned_64 (Payload'Length), "next header offset");
          Assert (Size = Interfaces.Unsigned_64 (Header'Length), "next header size");
-         Assert (U32_LE (Archive, 9) = Zlib.CRC32 (Start_Header), "start header CRC");
-         Assert (Header_CRC = Zlib.CRC32 (Header), "next header CRC");
+         Assert (U32_LE (Archive, 9) = CRC32 (Start_Header), "start header CRC");
+         Assert (Header_CRC = CRC32 (Header), "next header CRC");
          Assert (Header (Header'First) = 16#01#, "next header starts with kHeader");
       end;
    end Test_Stored_Header_Structure;
@@ -1916,8 +1972,7 @@ package body Zlib_Seven_Zip_Tests is
 
       for Pos in Header_First .. Archive'Last - 3 loop
          if U32_LE (Archive, Pos) =
-           Zlib.CRC32
-             (Archive
+           CRC32 (Archive
                 (Archive'First + 32 + Payload'Length ..
                  Header_First - 1))
          then
@@ -2089,6 +2144,151 @@ package body Zlib_Seven_Zip_Tests is
       end;
    end Test_LZMA_Roundtrip_Native;
 
+   procedure Test_LZMA_Parser_Segment_Keeps_Long_Repeats_Compact
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Pattern : constant String := "Ada-LZMA-parser-boundary-pattern-";
+      Status  : Zlib.Status_Code := Zlib.Ok;
+      Input   : Zlib.Byte_Array (1 .. 12_288);
+   begin
+      for I in Input'Range loop
+         Input (I) :=
+           Zlib.Byte
+             (Character'Pos
+                (Pattern (Pattern'First + ((I - Input'First) mod Pattern'Length))));
+      end loop;
+
+      declare
+         Archive : constant Zlib.Byte_Array :=
+           Zlib.Seven_Zip_LZMA (Input, "payload.txt", Status);
+      begin
+         Assert (Status = Zlib.Ok, "native LZMA boundary fixture creation");
+         Assert
+           (Archive'Length < 600,
+            "native LZMA parser keeps old-boundary repeated input compact");
+         declare
+            Plain : constant Zlib.Byte_Array :=
+              Zlib.Extract_Seven_Zip (Archive, "payload.txt", Status);
+         begin
+            Assert (Status = Zlib.Ok, "native LZMA boundary fixture extract");
+            Assert (Plain = Input, "native LZMA boundary fixture roundtrip");
+         end;
+      end;
+   end Test_LZMA_Parser_Segment_Keeps_Long_Repeats_Compact;
+
+   procedure Test_LZMA_Parser_Uses_Short_Reps_For_Interrupted_Repeats
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Status : Zlib.Status_Code := Zlib.Ok;
+      Input  : Zlib.Byte_Array (1 .. 16_384);
+   begin
+      for I in Input'Range loop
+         case (I - Input'First) mod 14 is
+            when 0      => Input (I) := Zlib.Byte (Character'Pos ('A'));
+            when 1      => Input (I) := Zlib.Byte (Character'Pos ('B'));
+            when 2      => Input (I) := Zlib.Byte (Character'Pos ('C'));
+            when 3      => Input (I) := Zlib.Byte (Character'Pos ('D'));
+            when 4      => Input (I) := Zlib.Byte (Character'Pos ('E'));
+            when 5      => Input (I) := Zlib.Byte (Character'Pos ('q'));
+            when 6      => Input (I) := Zlib.Byte (Character'Pos ('r'));
+            when 7      => Input (I) := Zlib.Byte (Character'Pos ('A'));
+            when 8      => Input (I) := Zlib.Byte (Character'Pos ('B'));
+            when 9      => Input (I) := Zlib.Byte (Character'Pos ('C'));
+            when 10     => Input (I) := Zlib.Byte (Character'Pos ('D'));
+            when 11     => Input (I) := Zlib.Byte (Character'Pos ('E'));
+            when 12     => Input (I) := Zlib.Byte (Character'Pos ('x'));
+            when others => Input (I) := Zlib.Byte (Character'Pos ('r'));
+         end case;
+      end loop;
+
+      declare
+         Archive : constant Zlib.Byte_Array :=
+           Zlib.Seven_Zip_LZMA (Input, "payload.txt", Status);
+      begin
+         Assert (Status = Zlib.Ok, "native LZMA short-rep fixture creation");
+         Assert
+           (Archive'Length < 700,
+            "native LZMA parser keeps interrupted repeats compact");
+         declare
+            Plain : constant Zlib.Byte_Array :=
+              Zlib.Extract_Seven_Zip (Archive, "payload.txt", Status);
+         begin
+            Assert (Status = Zlib.Ok, "native LZMA short-rep fixture extract");
+            Assert (Plain = Input, "native LZMA short-rep fixture roundtrip");
+         end;
+      end;
+   end Test_LZMA_Parser_Uses_Short_Reps_For_Interrupted_Repeats;
+
+   procedure Test_LZMA_Writer_Selects_Non_Default_Properties
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Default_Props : constant Zlib.Byte := 16#5D#;
+      Status        : Zlib.Status_Code := Zlib.Ok;
+      Found         : Boolean := False;
+
+      function LZMA_Props_Offset (Archive : Zlib.Byte_Array) return Natural is
+         Payload_Count : constant Natural := Natural (U64_LE (Archive, 13));
+         Header_First  : constant Natural := 33 + Payload_Count;
+      begin
+         for Pos in Header_First .. Archive'Last - 5 loop
+            if Archive (Pos) = 16#23#
+              and then Archive (Pos + 1) = 16#03#
+              and then Archive (Pos + 2) = 16#01#
+              and then Archive (Pos + 3) = 16#01#
+              and then Archive (Pos + 4) = 5
+            then
+               return Pos + 5;
+            end if;
+         end loop;
+
+         return 0;
+      end LZMA_Props_Offset;
+
+      procedure Check (Input : Zlib.Byte_Array; Name : String) is
+         Archive   : constant Zlib.Byte_Array :=
+           Zlib.Seven_Zip_LZMA (Input, Name, Status);
+         Props_Pos : Natural;
+      begin
+         Assert (Status = Zlib.Ok, "native LZMA tuned fixture creation");
+         Props_Pos := LZMA_Props_Offset (Archive);
+         Assert (Props_Pos /= 0, "native LZMA tuned fixture properties found");
+
+         if Archive (Props_Pos) /= Default_Props then
+            Found := True;
+         end if;
+
+         declare
+            Plain : constant Zlib.Byte_Array :=
+              Zlib.Extract_Seven_Zip (Archive, Name, Status);
+         begin
+            Assert (Status = Zlib.Ok, "native LZMA tuned fixture extract");
+            Assert (Plain = Input, "native LZMA tuned fixture roundtrip");
+         end;
+      end Check;
+
+      Binary_Input : Zlib.Byte_Array (1 .. 4096);
+      Text_Input   : Zlib.Byte_Array (1 .. 4096);
+      Sparse_Input : Zlib.Byte_Array (1 .. 4096);
+      Text_Pattern : constant String := "etaoin shrdlu ";
+   begin
+      for I in Binary_Input'Range loop
+         Binary_Input (I) := Zlib.Byte ((I * 37 + I / 7) mod 256);
+         Text_Input (I) :=
+           Zlib.Byte
+             (Character'Pos
+                (Text_Pattern ((I - 1) mod Text_Pattern'Length + 1)));
+         Sparse_Input (I) := (if I mod 17 = 0 then 16#80# else 0);
+      end loop;
+
+      Check (Binary_Input, "binary.bin");
+      Check (Text_Input, "text.txt");
+      Check (Sparse_Input, "sparse.bin");
+      Assert (Found, "native LZMA writer selected a non-default property set");
+   end Test_LZMA_Writer_Selects_Non_Default_Properties;
+
    procedure Test_BZip2_Roundtrip_Native
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -2158,8 +2358,8 @@ package body Zlib_Seven_Zip_Tests is
       Archive (Props_Pos + 4) := 0;
 
       Set_U32_LE
-        (Archive, 29, Zlib.CRC32 (Archive (Header_First .. Header_Last)));
-      Set_U32_LE (Archive, 9, Zlib.CRC32 (Archive (13 .. 32)));
+        (Archive, 29, CRC32 (Archive (Header_First .. Header_Last)));
+      Set_U32_LE (Archive, 9, CRC32 (Archive (13 .. 32)));
 
       declare
          Plain : constant Zlib.Byte_Array :=
@@ -2178,6 +2378,30 @@ package body Zlib_Seven_Zip_Tests is
       pragma Unreferenced (T);
       Status : Zlib.Status_Code := Zlib.Ok;
       Input  : Zlib.Byte_Array (1 .. 18_000);
+
+      function Non_Default_LZMA2_Chunk_Props
+        (Archive : Zlib.Byte_Array) return Natural
+      is
+         Default_Props : constant Zlib.Byte := 16#5D#;
+         Payload_Count : constant Natural := Natural (U64_LE (Archive, 13));
+         Payload_First : constant Natural := 33;
+         Payload_Last  : constant Natural := 32 + Payload_Count;
+         Count         : Natural := 0;
+      begin
+         if Payload_Count = 0 or else Payload_Last > Archive'Last then
+            return 0;
+         end if;
+
+         for Pos in Payload_First .. Payload_Last - 5 loop
+            if Archive (Pos) >= 16#E0#
+              and then Archive (Pos + 5) /= Default_Props
+            then
+               Count := Count + 1;
+            end if;
+         end loop;
+
+         return Count;
+      end Non_Default_LZMA2_Chunk_Props;
    begin
       for I in Input'Range loop
          Input (I) := 16#41#;
@@ -2202,6 +2426,9 @@ package body Zlib_Seven_Zip_Tests is
          Assert
            (Has_Compressed_Control,
             "native LZMA2 archive contains compressed chunk control byte");
+         Assert
+           (Non_Default_LZMA2_Chunk_Props (Archive) > 0,
+            "native LZMA2 compressed chunks select tuned props");
 
          declare
             Plain : constant Zlib.Byte_Array :=
@@ -2410,7 +2637,7 @@ package body Zlib_Seven_Zip_Tests is
          Header_First  : constant Natural := 33 + Payload_Count;
          Header_Last   : constant Natural := Archive'Last;
          Pack_CRC      : constant Interfaces.Unsigned_32 :=
-           Zlib.CRC32 (Archive (33 .. Header_First - 1));
+           CRC32 (Archive (33 .. Header_First - 1));
          Pack_CRC_Pos  : Natural := 0;
       begin
          Assert (Status = Zlib.Ok, Label & " bad packed CRC fixture creation status");
@@ -2426,8 +2653,8 @@ package body Zlib_Seven_Zip_Tests is
          Assert (Pack_CRC_Pos /= 0, Label & " packed CRC field found");
          Set_U32_LE (Archive, Pack_CRC_Pos, Pack_CRC xor 16#FFFF_FFFF#);
          Set_U32_LE
-           (Archive, 29, Zlib.CRC32 (Archive (Header_First .. Header_Last)));
-         Set_U32_LE (Archive, 9, Zlib.CRC32 (Archive (13 .. 32)));
+           (Archive, 29, CRC32 (Archive (Header_First .. Header_Last)));
+         Set_U32_LE (Archive, 9, CRC32 (Archive (13 .. 32)));
 
          declare
             Plain : constant Zlib.Byte_Array :=
@@ -2463,7 +2690,7 @@ package body Zlib_Seven_Zip_Tests is
 
       declare
          Old_CRC : constant Interfaces.Unsigned_32 :=
-           Zlib.CRC32 (Archive (33 .. Header_First - 1));
+           CRC32 (Archive (33 .. Header_First - 1));
       begin
          Archive (33) := Archive (33) xor 16#FF#;
 
@@ -2477,10 +2704,10 @@ package body Zlib_Seven_Zip_Tests is
          Assert (Pack_CRC_Pos /= 0, "packed Deflate CRC field found");
          Set_U32_LE
            (Archive, Pack_CRC_Pos,
-            Zlib.CRC32 (Archive (33 .. Header_First - 1)));
+            CRC32 (Archive (33 .. Header_First - 1)));
          Set_U32_LE
-           (Archive, 29, Zlib.CRC32 (Archive (Header_First .. Header_Last)));
-         Set_U32_LE (Archive, 9, Zlib.CRC32 (Archive (13 .. 32)));
+           (Archive, 29, CRC32 (Archive (Header_First .. Header_Last)));
+         Set_U32_LE (Archive, 9, CRC32 (Archive (13 .. 32)));
       end;
 
       declare
@@ -2520,7 +2747,7 @@ package body Zlib_Seven_Zip_Tests is
          Pack_Size_Pos    : Natural := 0;
          Pack_CRC_Pos     : Natural := 0;
          Old_Pack_CRC     : constant Interfaces.Unsigned_32 :=
-           Zlib.CRC32 (Archive (33 .. Header_First - 1));
+           CRC32 (Archive (33 .. Header_First - 1));
       begin
          for I in Archive'First .. Header_First - 1 loop
             Mutated (I) := Archive (I);
@@ -2565,15 +2792,15 @@ package body Zlib_Seven_Zip_Tests is
             "single-stream Deflate pack CRC field found");
          Set_U32_LE
            (Mutated, Pack_CRC_Pos,
-            Zlib.CRC32 (Mutated (33 .. Mut_Header_First - 1)));
+            CRC32 (Mutated (33 .. Mut_Header_First - 1)));
          Set_U64_LE (Mutated, 13, Interfaces.Unsigned_64 (Payload_Count + 1));
          Set_U64_LE
            (Mutated, 21,
             Interfaces.Unsigned_64 (Mut_Header_Last - Mut_Header_First + 1));
          Set_U32_LE
            (Mutated, 29,
-            Zlib.CRC32 (Mutated (Mut_Header_First .. Mut_Header_Last)));
-         Set_U32_LE (Mutated, 9, Zlib.CRC32 (Mutated (13 .. 32)));
+            CRC32 (Mutated (Mut_Header_First .. Mut_Header_Last)));
+         Set_U32_LE (Mutated, 9, CRC32 (Mutated (13 .. 32)));
 
          declare
             Plain : constant Zlib.Byte_Array :=
@@ -2601,7 +2828,7 @@ package body Zlib_Seven_Zip_Tests is
       Payload_Count : constant Natural := Natural (U64_LE (Archive, 13));
       Header_First  : constant Natural := 33 + Payload_Count;
       Header_Last   : constant Natural := Archive'Last;
-      Unpack_CRC    : constant Interfaces.Unsigned_32 := Zlib.CRC32 (Input);
+      Unpack_CRC    : constant Interfaces.Unsigned_32 := CRC32 (Input);
       Unpack_CRC_Pos : Natural := 0;
    begin
       Assert (Status = Zlib.Ok, "bad Deflate unpack CRC fixture creation status");
@@ -2616,8 +2843,8 @@ package body Zlib_Seven_Zip_Tests is
       Assert (Unpack_CRC_Pos /= 0, "Deflate unpack CRC field found");
       Set_U32_LE (Archive, Unpack_CRC_Pos, Unpack_CRC xor 16#FFFF_FFFF#);
       Set_U32_LE
-        (Archive, 29, Zlib.CRC32 (Archive (Header_First .. Header_Last)));
-      Set_U32_LE (Archive, 9, Zlib.CRC32 (Archive (13 .. 32)));
+        (Archive, 29, CRC32 (Archive (Header_First .. Header_Last)));
+      Set_U32_LE (Archive, 9, CRC32 (Archive (13 .. 32)));
 
       declare
          Plain : constant Zlib.Byte_Array :=
@@ -2655,8 +2882,8 @@ package body Zlib_Seven_Zip_Tests is
       Assert (Unpack_Size_Pos /= 0, "Deflate unpack size field found");
       Archive (Unpack_Size_Pos + 1) := 1;
       Set_U32_LE
-        (Archive, 29, Zlib.CRC32 (Archive (Header_First .. Header_Last)));
-      Set_U32_LE (Archive, 9, Zlib.CRC32 (Archive (13 .. 32)));
+        (Archive, 29, CRC32 (Archive (Header_First .. Header_Last)));
+      Set_U32_LE (Archive, 9, CRC32 (Archive (13 .. 32)));
 
       declare
          Plain : constant Zlib.Byte_Array :=
@@ -2695,7 +2922,7 @@ package body Zlib_Seven_Zip_Tests is
          Pack_Size_Pos    : Natural := 0;
          Pack_CRC_Pos     : Natural := 0;
          Old_Pack_CRC     : constant Interfaces.Unsigned_32 :=
-           Zlib.CRC32 (Archive (33 .. Header_First - 1));
+           CRC32 (Archive (33 .. Header_First - 1));
       begin
          for I in Archive'First .. Header_First - 1 loop
             Mutated (I) := Archive (I);
@@ -2740,15 +2967,15 @@ package body Zlib_Seven_Zip_Tests is
             "single-stream BZip2 pack CRC field found");
          Set_U32_LE
            (Mutated, Pack_CRC_Pos,
-            Zlib.CRC32 (Mutated (33 .. Mut_Header_First - 1)));
+            CRC32 (Mutated (33 .. Mut_Header_First - 1)));
          Set_U64_LE (Mutated, 13, Interfaces.Unsigned_64 (Payload_Count + 1));
          Set_U64_LE
            (Mutated, 21,
             Interfaces.Unsigned_64 (Mut_Header_Last - Mut_Header_First + 1));
          Set_U32_LE
            (Mutated, 29,
-            Zlib.CRC32 (Mutated (Mut_Header_First .. Mut_Header_Last)));
-         Set_U32_LE (Mutated, 9, Zlib.CRC32 (Mutated (13 .. 32)));
+            CRC32 (Mutated (Mut_Header_First .. Mut_Header_Last)));
+         Set_U32_LE (Mutated, 9, CRC32 (Mutated (13 .. 32)));
 
          declare
             Plain : constant Zlib.Byte_Array :=
@@ -2792,7 +3019,7 @@ package body Zlib_Seven_Zip_Tests is
 
          declare
             Old_CRC : constant Interfaces.Unsigned_32 :=
-              Zlib.CRC32 (Archive (33 .. Header_First - 1));
+              CRC32 (Archive (33 .. Header_First - 1));
          begin
             Archive (33) := Archive (33) xor 16#FF#;
 
@@ -2806,10 +3033,10 @@ package body Zlib_Seven_Zip_Tests is
             Assert (Pack_CRC_Pos /= 0, Label & " packed CRC field found");
             Set_U32_LE
               (Archive, Pack_CRC_Pos,
-               Zlib.CRC32 (Archive (33 .. Header_First - 1)));
+               CRC32 (Archive (33 .. Header_First - 1)));
             Set_U32_LE
-              (Archive, 29, Zlib.CRC32 (Archive (Header_First .. Header_Last)));
-            Set_U32_LE (Archive, 9, Zlib.CRC32 (Archive (13 .. 32)));
+              (Archive, 29, CRC32 (Archive (Header_First .. Header_Last)));
+            Set_U32_LE (Archive, 9, CRC32 (Archive (13 .. 32)));
          end;
 
          declare
@@ -2847,7 +3074,7 @@ package body Zlib_Seven_Zip_Tests is
          Payload_Count  : constant Natural := Natural (U64_LE (Archive, 13));
          Header_First   : constant Natural := 33 + Payload_Count;
          Header_Last    : constant Natural := Archive'Last;
-         Unpack_CRC     : constant Interfaces.Unsigned_32 := Zlib.CRC32 (Input);
+         Unpack_CRC     : constant Interfaces.Unsigned_32 := CRC32 (Input);
          Unpack_CRC_Pos : Natural := 0;
       begin
          Assert (Status = Zlib.Ok, Label & " bad unpack CRC fixture creation status");
@@ -2862,8 +3089,8 @@ package body Zlib_Seven_Zip_Tests is
          Assert (Unpack_CRC_Pos /= 0, Label & " unpack CRC field found");
          Set_U32_LE (Archive, Unpack_CRC_Pos, Unpack_CRC xor 16#FFFF_FFFF#);
          Set_U32_LE
-           (Archive, 29, Zlib.CRC32 (Archive (Header_First .. Header_Last)));
-         Set_U32_LE (Archive, 9, Zlib.CRC32 (Archive (13 .. 32)));
+           (Archive, 29, CRC32 (Archive (Header_First .. Header_Last)));
+         Set_U32_LE (Archive, 9, CRC32 (Archive (13 .. 32)));
 
          declare
             Plain : constant Zlib.Byte_Array :=
@@ -2915,8 +3142,8 @@ package body Zlib_Seven_Zip_Tests is
          Assert (Unpack_Size_Pos /= 0, Label & " unpack size field found");
          Archive (Unpack_Size_Pos + 1) := 1;
          Set_U32_LE
-           (Archive, 29, Zlib.CRC32 (Archive (Header_First .. Header_Last)));
-         Set_U32_LE (Archive, 9, Zlib.CRC32 (Archive (13 .. 32)));
+           (Archive, 29, CRC32 (Archive (Header_First .. Header_Last)));
+         Set_U32_LE (Archive, 9, CRC32 (Archive (13 .. 32)));
 
          declare
             Plain : constant Zlib.Byte_Array :=
@@ -3713,6 +3940,122 @@ package body Zlib_Seven_Zip_Tests is
          raise;
    end Test_File_List_Creation_Preserves_Source_Metadata;
 
+   procedure Test_LZMA_File_List_Writers_Select_Non_Default_Properties
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Binary_Path  : constant String := Base_Path ("lzma-props-binary.bin");
+      Text_Path    : constant String := Base_Path ("lzma-props-text.bin");
+      Sparse_Path  : constant String := Base_Path ("lzma-props-sparse.bin");
+      Archive_Path : constant String := Base_Path ("lzma-props.7z");
+      Status       : Zlib.Status_Code := Zlib.Ok;
+      Binary_Input : Zlib.Byte_Array (1 .. 4096);
+      Text_Input   : Zlib.Byte_Array (1 .. 4096);
+      Sparse_Input : Zlib.Byte_Array (1 .. 4096);
+      Text_Pattern : constant String := "etaoin shrdlu ";
+      Input_Paths  : constant Zlib.Text_Array :=
+        [1 => US.To_Unbounded_String (Binary_Path),
+         2 => US.To_Unbounded_String (Text_Path),
+         3 => US.To_Unbounded_String (Sparse_Path)];
+      Entry_Names  : constant Zlib.Text_Array :=
+        [1 => US.To_Unbounded_String ("binary.bin"),
+         2 => US.To_Unbounded_String ("text.txt"),
+         3 => US.To_Unbounded_String ("sparse.bin")];
+
+      procedure Check_Entry
+        (Archive : Zlib.Byte_Array;
+         Name    : String;
+         Expect  : Zlib.Byte_Array;
+         Label   : String)
+      is
+         Out_Status : Zlib.Status_Code := Zlib.Ok;
+         Plain      : constant Zlib.Byte_Array :=
+           Zlib.Extract_Seven_Zip (Archive, Name, Out_Status);
+      begin
+         Assert (Out_Status = Zlib.Ok, Label & " extract status");
+         Assert (Plain = Expect, Label & " payload");
+      end Check_Entry;
+
+      procedure Check_Archive
+        (Label          : String;
+         Expected_Props : Natural;
+         Password       : String := "")
+      is
+         Archive : constant Zlib.Byte_Array := Read_File (Archive_Path);
+      begin
+         Assert
+           (Seven_Zip_LZMA_Props_Count (Archive) = Expected_Props,
+            Label & " emits expected LZMA coder count");
+         Assert
+           (Seven_Zip_LZMA_Props_Count (Archive, Non_Default => True) > 0,
+            Label & " selects tuned LZMA props");
+
+         if Password = "" then
+            Check_Entry (Archive, "binary.bin", Binary_Input, Label & " binary");
+            Check_Entry (Archive, "text.txt", Text_Input, Label & " text");
+            Check_Entry (Archive, "sparse.bin", Sparse_Input, Label & " sparse");
+         else
+            declare
+               Out_Status : Zlib.Status_Code := Zlib.Ok;
+               Plain      : constant Zlib.Byte_Array :=
+                 Zlib.Extract_Seven_Zip
+                   (Archive, "binary.bin", Password, Out_Status);
+            begin
+               Assert (Out_Status = Zlib.Ok, Label & " encrypted extract");
+               Assert (Plain = Binary_Input, Label & " encrypted payload");
+            end;
+         end if;
+      end Check_Archive;
+   begin
+      for I in Binary_Input'Range loop
+         Binary_Input (I) := Zlib.Byte ((I * 37 + I / 7) mod 256);
+         Text_Input (I) :=
+           Zlib.Byte
+             (Character'Pos
+                (Text_Pattern ((I - 1) mod Text_Pattern'Length + 1)));
+         Sparse_Input (I) := (if I mod 17 = 0 then 16#80# else 0);
+      end loop;
+
+      Delete_If_Exists (Binary_Path);
+      Delete_If_Exists (Text_Path);
+      Delete_If_Exists (Sparse_Path);
+      Write_File (Binary_Path, Binary_Input);
+      Write_File (Text_Path, Text_Input);
+      Write_File (Sparse_Path, Sparse_Input);
+
+      Delete_If_Exists (Archive_Path);
+      Zlib.Seven_Zip_LZMA_Files
+        (Input_Paths, Archive_Path, Entry_Names, Status);
+      Assert (Status = Zlib.Ok, "LZMA file-list tuned props status");
+      Check_Archive ("LZMA file-list", Expected_Props => 3);
+
+      Delete_If_Exists (Archive_Path);
+      Zlib.Seven_Zip_LZMA_Solid_Files
+        (Input_Paths, Archive_Path, Entry_Names, Status);
+      Assert (Status = Zlib.Ok, "solid LZMA file-list tuned props status");
+      Check_Archive ("solid LZMA file-list", Expected_Props => 1);
+
+      Delete_If_Exists (Archive_Path);
+      Zlib.Seven_Zip_LZMA_Encrypted_Files
+        (Input_Paths, Archive_Path, Entry_Names, "props-password", Status);
+      Assert (Status = Zlib.Ok, "encrypted LZMA file-list tuned props status");
+      Check_Archive
+        ("encrypted LZMA file-list", Expected_Props => 1,
+         Password => "props-password");
+
+      Delete_If_Exists (Binary_Path);
+      Delete_If_Exists (Text_Path);
+      Delete_If_Exists (Sparse_Path);
+      Delete_If_Exists (Archive_Path);
+   exception
+      when others =>
+         Delete_If_Exists (Binary_Path);
+         Delete_If_Exists (Text_Path);
+         Delete_If_Exists (Sparse_Path);
+         Delete_If_Exists (Archive_Path);
+         raise;
+   end Test_LZMA_File_List_Writers_Select_Non_Default_Properties;
+
    procedure Test_Extract_Accepts_SFX_Prefixed_Archive
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -3941,7 +4284,7 @@ package body Zlib_Seven_Zip_Tests is
          "native 7z solid Copy file-list extraction writes second file");
 
       for Pos in Seven_Zip_Header_First (Archive) .. Archive'Last - 3 loop
-         if U32_LE (Archive, Pos) = Zlib.CRC32 (Second_Data) then
+         if U32_LE (Archive, Pos) = CRC32 (Second_Data) then
             Second_CRC_Pos := Pos;
             exit;
          end if;
@@ -4936,7 +5279,7 @@ package body Zlib_Seven_Zip_Tests is
          "native 7z solid PPMd file-list extraction writes second file");
 
       for Pos in Seven_Zip_Header_First (Archive) .. Archive'Last - 3 loop
-         if U32_LE (Archive, Pos) = Zlib.CRC32 (Second_Data) then
+         if U32_LE (Archive, Pos) = CRC32 (Second_Data) then
             CRC_Matches := CRC_Matches + 1;
             if CRC_Matches = 2 then
                Second_CRC_Pos := Pos;
@@ -5554,7 +5897,7 @@ package body Zlib_Seven_Zip_Tests is
          end;
       end loop;
 
-      Expected_CRC := Zlib.CRC32 (Expected);
+      Expected_CRC := CRC32 (Expected);
       for Pos in Seven_Zip_Header_First (Archive) .. Archive'Last - 3 loop
          if U32_LE (Archive, Pos) = Expected_CRC then
             CRC_Pos := Pos;
@@ -5717,7 +6060,7 @@ package body Zlib_Seven_Zip_Tests is
 
       Set_U64_LE
         (Archive, 13, Interfaces.Unsigned_64 (Natural'Last));
-      Set_U32_LE (Archive, 9, Zlib.CRC32 (Archive (13 .. 32)));
+      Set_U32_LE (Archive, 9, CRC32 (Archive (13 .. 32)));
 
       declare
          Plain : constant Zlib.Byte_Array :=
@@ -5742,7 +6085,7 @@ package body Zlib_Seven_Zip_Tests is
       Payload_Count : constant Natural := Natural (U64_LE (Archive, 13));
       Header_First  : constant Natural := 33 + Payload_Count;
       Header_Last   : constant Natural := Archive'Last;
-      Payload_CRC   : constant Interfaces.Unsigned_32 := Zlib.CRC32 (Payload);
+      Payload_CRC   : constant Interfaces.Unsigned_32 := CRC32 (Payload);
       Pack_CRC_Pos  : Natural := 0;
    begin
       Assert (Status = Zlib.Ok, "short CRC table fixture archive creation status");
@@ -5769,8 +6112,8 @@ package body Zlib_Seven_Zip_Tests is
             Interfaces.Unsigned_64 (Mut_Header_Last - Header_First + 1));
          Set_U32_LE
            (Mutated, 29,
-            Zlib.CRC32 (Mutated (Header_First .. Mut_Header_Last)));
-         Set_U32_LE (Mutated, 9, Zlib.CRC32 (Mutated (13 .. 32)));
+            CRC32 (Mutated (Header_First .. Mut_Header_Last)));
+         Set_U32_LE (Mutated, 9, CRC32 (Mutated (13 .. 32)));
 
          declare
             Plain : constant Zlib.Byte_Array :=
@@ -5807,8 +6150,8 @@ package body Zlib_Seven_Zip_Tests is
       Archive (Method_Pos) := 1;
       Set_U32_LE
         (Archive, 29,
-         Zlib.CRC32 (Archive (Header_First .. Archive'Last)));
-      Set_U32_LE (Archive, 9, Zlib.CRC32 (Archive (13 .. 32)));
+         CRC32 (Archive (Header_First .. Archive'Last)));
+      Set_U32_LE (Archive, 9, CRC32 (Archive (13 .. 32)));
 
       declare
          Plain : constant Zlib.Byte_Array :=
@@ -5899,8 +6242,8 @@ package body Zlib_Seven_Zip_Tests is
          Assert (Section_Pos /= 0, Label & " section marker found");
          Archive (Section_Pos) := 16#FF#;
          Set_U32_LE
-           (Archive, 29, Zlib.CRC32 (Archive (Header_First .. Header_Last)));
-         Set_U32_LE (Archive, 9, Zlib.CRC32 (Archive (13 .. 32)));
+           (Archive, 29, CRC32 (Archive (Header_First .. Header_Last)));
+         Set_U32_LE (Archive, 9, CRC32 (Archive (13 .. 32)));
 
          declare
             Plain : constant Zlib.Byte_Array :=
@@ -5989,8 +6332,8 @@ package body Zlib_Seven_Zip_Tests is
             Set_U64_LE (Mutated, 21, Interfaces.Unsigned_64 (Mut_Header_Last - Mut_Header_First + 1));
             Set_U32_LE
               (Mutated, 29,
-               Zlib.CRC32 (Mutated (Mut_Header_First .. Mut_Header_Last)));
-            Set_U32_LE (Mutated, 9, Zlib.CRC32 (Mutated (13 .. 32)));
+               CRC32 (Mutated (Mut_Header_First .. Mut_Header_Last)));
+            Set_U32_LE (Mutated, 9, CRC32 (Mutated (13 .. 32)));
 
             declare
                Plain : constant Zlib.Byte_Array :=
@@ -6034,8 +6377,8 @@ package body Zlib_Seven_Zip_Tests is
 
       Archive (Count_Pos) := 127;
       Set_U32_LE
-        (Archive, 29, Zlib.CRC32 (Archive (Header_First .. Header_Last)));
-      Set_U32_LE (Archive, 9, Zlib.CRC32 (Archive (13 .. 32)));
+        (Archive, 29, CRC32 (Archive (Header_First .. Header_Last)));
+      Set_U32_LE (Archive, 9, CRC32 (Archive (13 .. 32)));
 
       declare
          Plain : constant Zlib.Byte_Array :=
@@ -6089,8 +6432,8 @@ package body Zlib_Seven_Zip_Tests is
          Assert (Archive (Count_Pos) = 1, Label & " fixture count starts at one");
          Archive (Count_Pos) := 2;
          Set_U32_LE
-           (Archive, 29, Zlib.CRC32 (Archive (Header_First .. Header_Last)));
-         Set_U32_LE (Archive, 9, Zlib.CRC32 (Archive (13 .. 32)));
+           (Archive, 29, CRC32 (Archive (Header_First .. Header_Last)));
+         Set_U32_LE (Archive, 9, CRC32 (Archive (13 .. 32)));
 
          declare
             Plain : constant Zlib.Byte_Array :=
@@ -6134,8 +6477,8 @@ package body Zlib_Seven_Zip_Tests is
       Assert (Count_Pos /= 0, "name-field size found");
       Archive (Count_Pos) := Name_Count - 1;
       Set_U32_LE
-        (Archive, 29, Zlib.CRC32 (Archive (Header_First .. Header_Last)));
-      Set_U32_LE (Archive, 9, Zlib.CRC32 (Archive (13 .. 32)));
+        (Archive, 29, CRC32 (Archive (Header_First .. Header_Last)));
+      Set_U32_LE (Archive, 9, CRC32 (Archive (13 .. 32)));
 
       declare
          Plain : constant Zlib.Byte_Array :=
@@ -6177,8 +6520,8 @@ package body Zlib_Seven_Zip_Tests is
       Assert (Props_Pos /= 0, "LZMA coder properties found");
       Archive (Props_Pos) := 16#FF#;
       Set_U32_LE
-        (Archive, 29, Zlib.CRC32 (Archive (Header_First .. Header_Last)));
-      Set_U32_LE (Archive, 9, Zlib.CRC32 (Archive (13 .. 32)));
+        (Archive, 29, CRC32 (Archive (Header_First .. Header_Last)));
+      Set_U32_LE (Archive, 9, CRC32 (Archive (13 .. 32)));
 
       declare
          Plain : constant Zlib.Byte_Array :=
@@ -6217,7 +6560,7 @@ package body Zlib_Seven_Zip_Tests is
          Pack_Size_Pos    : Natural := 0;
          Pack_CRC_Pos     : Natural := 0;
          Old_Pack_CRC     : constant Interfaces.Unsigned_32 :=
-           Zlib.CRC32 (Archive (33 .. Header_First - 1));
+           CRC32 (Archive (33 .. Header_First - 1));
       begin
          for I in Archive'First .. Header_First - 1 loop
             Mutated (I) := Archive (I);
@@ -6258,15 +6601,15 @@ package body Zlib_Seven_Zip_Tests is
          Assert (Pack_CRC_Pos /= 0, "single-stream LZMA pack CRC field found");
          Set_U32_LE
            (Mutated, Pack_CRC_Pos,
-            Zlib.CRC32 (Mutated (33 .. Mut_Header_First - 1)));
+            CRC32 (Mutated (33 .. Mut_Header_First - 1)));
          Set_U64_LE (Mutated, 13, Interfaces.Unsigned_64 (Payload_Count + 1));
          Set_U64_LE
            (Mutated, 21,
             Interfaces.Unsigned_64 (Mut_Header_Last - Mut_Header_First + 1));
          Set_U32_LE
            (Mutated, 29,
-            Zlib.CRC32 (Mutated (Mut_Header_First .. Mut_Header_Last)));
-         Set_U32_LE (Mutated, 9, Zlib.CRC32 (Mutated (13 .. 32)));
+            CRC32 (Mutated (Mut_Header_First .. Mut_Header_Last)));
+         Set_U32_LE (Mutated, 9, CRC32 (Mutated (13 .. 32)));
 
          declare
             Plain : constant Zlib.Byte_Array :=
@@ -6329,8 +6672,8 @@ package body Zlib_Seven_Zip_Tests is
            (Mutated, 21,
             Interfaces.Unsigned_64 (Mut_Header_Last - Header_First + 1));
          Set_U32_LE
-           (Mutated, 29, Zlib.CRC32 (Mutated (Header_First .. Mut_Header_Last)));
-         Set_U32_LE (Mutated, 9, Zlib.CRC32 (Mutated (13 .. 32)));
+           (Mutated, 29, CRC32 (Mutated (Header_First .. Mut_Header_Last)));
+         Set_U32_LE (Mutated, 9, CRC32 (Mutated (13 .. 32)));
 
          declare
             Plain : constant Zlib.Byte_Array :=
@@ -6398,7 +6741,7 @@ package body Zlib_Seven_Zip_Tests is
             Pack_Size_Pos    : Natural := 0;
             Pack_CRC_Pos     : Natural := 0;
             Old_Pack_CRC     : constant Interfaces.Unsigned_32 :=
-              Zlib.CRC32 (Archive (33 .. Header_First - 1));
+              CRC32 (Archive (33 .. Header_First - 1));
          begin
             for I in Archive'First .. Term_Pos loop
                Mutated (I) := Archive (I);
@@ -6442,15 +6785,15 @@ package body Zlib_Seven_Zip_Tests is
             Assert (Pack_CRC_Pos /= 0, "single-stream pack CRC field found");
             Set_U32_LE
               (Mutated, Pack_CRC_Pos,
-               Zlib.CRC32 (Mutated (33 .. Mut_Header_First - 1)));
+               CRC32 (Mutated (33 .. Mut_Header_First - 1)));
             Set_U64_LE (Mutated, 13, Interfaces.Unsigned_64 (Payload_Count + 1));
             Set_U64_LE
               (Mutated, 21,
                Interfaces.Unsigned_64 (Mut_Header_Last - Mut_Header_First + 1));
             Set_U32_LE
               (Mutated, 29,
-               Zlib.CRC32 (Mutated (Mut_Header_First .. Mut_Header_Last)));
-            Set_U32_LE (Mutated, 9, Zlib.CRC32 (Mutated (13 .. 32)));
+               CRC32 (Mutated (Mut_Header_First .. Mut_Header_Last)));
+            Set_U32_LE (Mutated, 9, CRC32 (Mutated (13 .. 32)));
 
             declare
                Plain : constant Zlib.Byte_Array :=
@@ -6932,7 +7275,7 @@ package body Zlib_Seven_Zip_Tests is
          end;
       end loop;
 
-      Expected_CRC := Zlib.CRC32 (Expected);
+      Expected_CRC := CRC32 (Expected);
       for Pos in Seven_Zip_Header_First (Archive) .. Archive'Last - 3 loop
          if U32_LE (Archive, Pos) = Expected_CRC then
             CRC_Pos := Pos;
@@ -7039,7 +7382,7 @@ package body Zlib_Seven_Zip_Tests is
       Status       : Zlib.Status_Code := Zlib.Unsupported_Method;
       Archive      : Zlib.Byte_Array :=
         Zlib.Seven_Zip_PPMd (Input, "ppmd-crc.txt", Status);
-      Expected_CRC : constant Interfaces.Unsigned_32 := Zlib.CRC32 (Input);
+      Expected_CRC : constant Interfaces.Unsigned_32 := CRC32 (Input);
       CRC_Pos      : Natural := 0;
    begin
       Assert
@@ -11203,8 +11546,8 @@ package body Zlib_Seven_Zip_Tests is
 
          Assert (Patched, "ambiguous-name fixture was patched");
          Set_U32_LE
-           (Archive, 29, Zlib.CRC32 (Archive (Header_First .. Header_Last)));
-         Set_U32_LE (Archive, 9, Zlib.CRC32 (Archive (13 .. 32)));
+           (Archive, 29, CRC32 (Archive (Header_First .. Header_Last)));
+         Set_U32_LE (Archive, 9, CRC32 (Archive (13 .. 32)));
 
          declare
             Plain : constant Zlib.Byte_Array :=
@@ -11232,7 +11575,7 @@ package body Zlib_Seven_Zip_Tests is
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
-      Data   : Zlib.Byte_Array (1 .. 200);
+      Data   : Zlib.Byte_Array (1 .. 4096);
       Status : Zlib.Status_Code := Zlib.Unsupported_Method;
    begin
       for I in Data'Range loop
@@ -11246,6 +11589,12 @@ package body Zlib_Seven_Zip_Tests is
          Assert
            (Status = Zlib.Ok,
             "AES-256 7z encryption: " & Zlib.Status_Image (Status));
+         Assert
+           (Seven_Zip_LZMA_Props_Count (Archive) = 1,
+            "AES-256 7z emits one LZMA coder property set");
+         Assert
+           (Seven_Zip_LZMA_Props_Count (Archive, Non_Default => True) = 1,
+            "AES-256 7z selects tuned LZMA props");
          declare
             Out_Status : Zlib.Status_Code := Zlib.Unsupported_Method;
             Decoded    : constant Zlib.Byte_Array :=
@@ -11345,6 +11694,164 @@ package body Zlib_Seven_Zip_Tests is
          end;
       end;
    end Test_BCJ2_Encode_Decode_Roundtrip;
+
+   procedure Test_Filtered_Compressed_Roundtrip
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Code_Data : Zlib.Byte_Array (1 .. 512);
+      Mix_Data  : Zlib.Byte_Array (1 .. 350);
+      Status    : Zlib.Status_Code := Zlib.Unsupported_Method;
+
+      function LZMA_Props_Offset (Archive : Zlib.Byte_Array) return Natural is
+         Payload_Count : constant Natural := Natural (U64_LE (Archive, 13));
+         Header_First  : constant Natural := 33 + Payload_Count;
+      begin
+         for Pos in Header_First .. Archive'Last - 5 loop
+            if Archive (Pos) = 16#23#
+              and then Archive (Pos + 1) = 16#03#
+              and then Archive (Pos + 2) = 16#01#
+              and then Archive (Pos + 3) = 16#01#
+              and then Archive (Pos + 4) = 5
+            then
+               return Pos + 5;
+            end if;
+         end loop;
+
+         return 0;
+      end LZMA_Props_Offset;
+   begin
+      for I in Code_Data'Range loop
+         Code_Data (I) := Zlib.Byte ((I * 17 + 19) mod 256);
+      end loop;
+      for K in 0 .. 7 loop
+         Code_Data (1 + K * 48) := 16#E8#;
+         Code_Data (2 + K * 48) := 16#20#;
+         Code_Data (3 + K * 48) := 16#00#;
+         Code_Data (4 + K * 48) := 16#00#;
+         Code_Data (5 + K * 48) := 16#00#;
+      end loop;
+
+      for I in Mix_Data'Range loop
+         Mix_Data (I) := Zlib.Byte ((I * 29 + I / 3) mod 256);
+      end loop;
+
+      declare
+         Archive : constant Zlib.Byte_Array :=
+           Zlib.Seven_Zip_Filtered
+             (Code_Data, "code.bin", Zlib.Seven_Zip_Filter_X86_BCJ,
+              Zlib.Seven_Zip_Codec_LZMA, Status);
+         Props_Pos : Natural;
+      begin
+         Assert
+           (Status = Zlib.Ok,
+            "BCJ+LZMA filtered archive creation: " &
+              Zlib.Status_Image (Status));
+         Props_Pos := LZMA_Props_Offset (Archive);
+         Assert (Props_Pos /= 0, "BCJ+LZMA filtered archive has LZMA props");
+         Assert
+           (Archive (Props_Pos) /= 16#5D#,
+            "BCJ+LZMA filtered archive selects tuned LZMA props");
+         declare
+            OStatus : Zlib.Status_Code := Zlib.Unsupported_Method;
+            Out_B   : constant Zlib.Byte_Array :=
+              Zlib.Extract_Seven_Zip (Archive, "code.bin", OStatus);
+         begin
+            Assert
+              (OStatus = Zlib.Ok and then Out_B = Code_Data,
+               "BCJ+LZMA filtered archive round-trips");
+         end;
+      end;
+
+      declare
+         Archive : constant Zlib.Byte_Array :=
+           Zlib.Seven_Zip_Filtered
+             (Mix_Data, "delta.bin", Zlib.Seven_Zip_Filter_Delta,
+              Zlib.Seven_Zip_Codec_Deflate, 4,
+              Zlib.No_Seven_Zip_Entry_Metadata, Status);
+      begin
+         Assert
+           (Status = Zlib.Ok,
+            "Delta+Deflate filtered archive creation: " &
+              Zlib.Status_Image (Status));
+         declare
+            OStatus : Zlib.Status_Code := Zlib.Unsupported_Method;
+            Out_B   : constant Zlib.Byte_Array :=
+              Zlib.Extract_Seven_Zip (Archive, "delta.bin", OStatus);
+         begin
+            Assert
+              (OStatus = Zlib.Ok and then Out_B = Mix_Data,
+               "Delta+Deflate filtered archive round-trips");
+         end;
+      end;
+   end Test_Filtered_Compressed_Roundtrip;
+
+   procedure Test_Method_Graph_Writer_Roundtrip
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Data            : Zlib.Byte_Array (1 .. 420);
+      Status          : Zlib.Status_Code := Zlib.Unsupported_Method;
+      Compress_Status : Zlib.Status_Code := Zlib.Ok;
+   begin
+      for I in Data'Range loop
+         Data (I) := Zlib.Byte ((I * 31 + 23) mod 256);
+      end loop;
+      for K in 0 .. 6 loop
+         Data (1 + K * 54) := 16#E8#;
+         Data (2 + K * 54) := 16#18#;
+         Data (3 + K * 54) := 16#00#;
+         Data (4 + K * 54) := 16#00#;
+         Data (5 + K * 54) := 16#00#;
+      end loop;
+
+      declare
+         BCJ_Data : constant Zlib.Byte_Array :=
+           Zlib.Seven_Zip_Filters.Branch_Convert
+             (Zlib.Seven_Zip_Filters.X86, Data, Encoding => True);
+         Delta_Data : constant Zlib.Byte_Array :=
+           Zlib.Seven_Zip_Filters.Delta_Encode (BCJ_Data, 3);
+         Packed : constant Zlib.Byte_Array :=
+           Zlib.Deflate_Raw (Delta_Data, Zlib.Fixed, Compress_Status);
+      begin
+         Assert
+           (Compress_Status = Zlib.Ok,
+            "graph fixture Deflate pack status");
+         declare
+            Archive : constant Zlib.Byte_Array :=
+              Zlib.Seven_Zip_Method_Graph
+                (Packed,
+                 "graph.bin",
+                 [1 => (Zlib.Seven_Zip_Graph_Deflate, 1),
+                  2 => (Zlib.Seven_Zip_Graph_Delta, 3),
+                  3 => (Zlib.Seven_Zip_Graph_X86_BCJ, 1)],
+                 [1 => (In_Index => 1, Out_Index => 0),
+                  2 => (In_Index => 2, Out_Index => 1)],
+                 [1 => 0],
+                 [1 => Interfaces.Unsigned_64 (Packed'Length)],
+                 [1 => Interfaces.Unsigned_64 (Data'Length),
+                  2 => Interfaces.Unsigned_64 (Data'Length),
+                  3 => Interfaces.Unsigned_64 (Data'Length)],
+                 CRC32 (Data),
+                 Zlib.No_Seven_Zip_Entry_Metadata,
+                 Status);
+         begin
+            Assert
+              (Status = Zlib.Ok,
+               "explicit method graph archive creation: " &
+                 Zlib.Status_Image (Status));
+            declare
+               OStatus : Zlib.Status_Code := Zlib.Unsupported_Method;
+               Out_B   : constant Zlib.Byte_Array :=
+                 Zlib.Extract_Seven_Zip (Archive, "graph.bin", OStatus);
+            begin
+               Assert
+                 (OStatus = Zlib.Ok and then Out_B = Data,
+                  "explicit BCJ+Delta+Deflate method graph round-trips");
+            end;
+         end;
+      end;
+   end Test_Method_Graph_Writer_Roundtrip;
 
    procedure Test_ZIP_List_And_Extract
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -11475,6 +11982,12 @@ package body Zlib_Seven_Zip_Tests is
         (T, Test_BCJ2_Encode_Decode_Roundtrip'Access,
          "native 7z BCJ2 encode/decode round-trip");
       Register_Routine
+        (T, Test_Filtered_Compressed_Roundtrip'Access,
+         "native 7z filtered compressed archive round-trip");
+      Register_Routine
+        (T, Test_Method_Graph_Writer_Roundtrip'Access,
+         "native 7z explicit method graph writer round-trip");
+      Register_Routine
         (T, Test_ZIP_List_And_Extract'Access,
          "ZIP central-directory catalogue and Deflate extraction");
       Register_Routine
@@ -11512,6 +12025,18 @@ package body Zlib_Seven_Zip_Tests is
       Register_Routine
         (T, Test_LZMA_Roundtrip_Native'Access,
          "native LZMA 7z extracts its own LZMA archives");
+      Register_Routine
+        (T, Test_LZMA_Parser_Segment_Keeps_Long_Repeats_Compact'Access,
+         "native LZMA 7z keeps old-boundary repeated input compact");
+      Register_Routine
+        (T, Test_LZMA_Parser_Uses_Short_Reps_For_Interrupted_Repeats'Access,
+         "native LZMA 7z keeps interrupted repeated input compact");
+      Register_Routine
+        (T, Test_LZMA_Writer_Selects_Non_Default_Properties'Access,
+         "native LZMA 7z selects non-default coder properties");
+      Register_Routine
+        (T, Test_LZMA_File_List_Writers_Select_Non_Default_Properties'Access,
+         "native LZMA file-list writers select non-default coder properties");
       Register_Routine
         (T, Test_LZMA_Extracts_Non_Default_Dictionary_Metadata'Access,
          "native LZMA 7z accepts non-default dictionary metadata");

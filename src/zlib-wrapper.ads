@@ -1,6 +1,8 @@
 with Interfaces;
 
-package Zlib.Wrapper is
+package Zlib.Wrapper
+  with SPARK_Mode => On
+is
    --  Support level: private internal implementation.
    --  Legacy internal parser for complete zlib wrappers.
    --

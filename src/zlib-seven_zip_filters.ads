@@ -15,12 +15,10 @@
 
 package Zlib.Seven_Zip_Filters is
 
-   type Branch_Arch is (X86, ARM, ARMT, ARM64, PPC, SPARC, IA64);
-   --  Architectures with a shipped, stock-7z-validated branch converter. X86
-   --  is the full masked BCJ. RISC-V is intentionally not yet included: the
-   --  filter exists in 7-Zip 24.x+ but cannot be cross-checked with the
-   --  available 7-Zip 23.01, so it is deferred to avoid shipping an
-   --  unvalidated converter (see docs/SEVEN_ZIP_PLAN.md).
+   type Branch_Arch is (X86, ARM, ARMT, ARM64, RISCV, PPC, SPARC, IA64);
+   --  Architectures with a branch converter. X86 is the full masked BCJ.
+   --  RISC-V uses the compact 7z 24.x method ID and handles 32-bit JAL
+   --  instructions; stock-7z cross-validation requires a local 24.x+ binary.
 
    function Branch_Convert
      (Arch     : Branch_Arch;
@@ -49,5 +47,52 @@ package Zlib.Seven_Zip_Filters is
    --  Inverse of Delta_Encode for the same Distance.
    --  @param Data input bytes
    --  @param Distance delta byte distance, 1 .. 256
+
+   function Delta_Decode_Checked
+     (Data     : Byte_Array;
+      Distance : Natural;
+      Status   : out Status_Code) return Byte_Array;
+   --  Checked Delta_Decode wrapper for parsed 7z properties.
+
+   function X86_BCJ_Decode
+     (Data   : Byte_Array;
+      Status : out Status_Code) return Byte_Array;
+   --  Checked x86 BCJ decode wrapper for parsed 7z folders.
+
+   function Apply_Filter
+     (Data           : Byte_Array;
+      Filter         : Seven_Zip_Filter_Method;
+      Delta_Distance : Positive) return Byte_Array
+     with Pre => Delta_Distance in 1 .. 256;
+   --  Apply the public 7z filter selector for writer-side filtering.
+
+   function BCJ2_Decode
+     (Main_Stream : Byte_Array;
+      Call_Stream : Byte_Array;
+      Jump_Stream : Byte_Array;
+      RC_Stream   : Byte_Array;
+      Expected    : Natural;
+      Status      : out Status_Code) return Byte_Array;
+   --  Decode a four-stream x86 BCJ2 coder payload.
+   --  @param Main_Stream byte stream containing unconverted bytes/opcodes
+   --  @param Call_Stream absolute call targets
+   --  @param Jump_Stream absolute jump targets
+   --  @param RC_Stream range-coded conversion decisions
+   --  @param Expected exact decoded output size
+
+   type BCJ2_Encoded_Streams
+     (Main_Length : Natural;
+      Call_Length : Natural;
+      Jump_Length : Natural;
+      RC_Length   : Natural) is record
+         Main_Stream : Byte_Array (1 .. Main_Length);
+         Call_Stream : Byte_Array (1 .. Call_Length);
+         Jump_Stream : Byte_Array (1 .. Jump_Length);
+         RC_Stream   : Byte_Array (1 .. RC_Length);
+   end record;
+
+   function BCJ2_Encode (Input : Byte_Array) return BCJ2_Encoded_Streams;
+   --  Split x86 code into the four BCJ2 coder streams.
+   --  @param Input executable byte stream to encode
 
 end Zlib.Seven_Zip_Filters;

@@ -3,6 +3,7 @@ with Ada.Streams;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Unbounded;
 with AUnit.Assertions; use AUnit.Assertions;
+with CryptoLib.Checksums;
 with Interfaces;
 with Zlib;
 
@@ -15,6 +16,16 @@ package body Zlib_Release_Contract_Tests is
    use type Zlib.Byte;
    use type Zlib.Status_Code;
    package US renames Ada.Strings.Unbounded;
+
+   function CRC32 (Data : Zlib.Byte_Array) return Interfaces.Unsigned_32 is
+      State : CryptoLib.Checksums.CRC32_State;
+   begin
+      CryptoLib.Checksums.CRC32_Reset (State);
+      for B of Data loop
+         CryptoLib.Checksums.CRC32_Update (State, Ada.Streams.Stream_Element (B));
+      end loop;
+      return CryptoLib.Checksums.CRC32_Value (State);
+   end CRC32;
 
    overriding function Name
      (T : Test_Case)
@@ -183,7 +194,7 @@ package body Zlib_Release_Contract_Tests is
         (ZIP_U16_At (Archive, Local + 8) = Expected_Method,
          Message & ": local compression method");
       Assert
-        (ZIP_U32_At (Archive, Local + 14) = Zlib.CRC32 (Expected_Data),
+        (ZIP_U32_At (Archive, Local + 14) = CRC32 (Expected_Data),
          Message & ": local CRC32");
       Assert
         (ZIP_U32_At (Archive, Local + 22) =
@@ -472,14 +483,24 @@ package body Zlib_Release_Contract_Tests is
          Assert (Status = Zlib.Ok, "GZip_Members must be visible and succeed");
          declare
             Decoded : constant Zlib.Byte_Array :=
-              Zlib.Inflate_With_Header
-                (Members, Zlib.GZip, Zlib.Multi_Member, Status);
+              Zlib.Inflate_With_Header (Members, Zlib.GZip, Status);
          begin
             Assert
               (Status = Zlib.Ok,
-               "multi-member gzip output must inflate explicitly");
+               "multi-member gzip output must inflate through default one-shot gzip");
             Assert_Bytes_Equal
               (Decoded, Expected, "public multi-member gzip output");
+         end;
+
+         declare
+            Rejected : constant Zlib.Byte_Array :=
+              Zlib.Inflate_With_Header
+                (Members, Zlib.GZip, Zlib.Single_Member, Status);
+            pragma Unreferenced (Rejected);
+         begin
+            Assert
+              (Status /= Zlib.Ok,
+               "explicit Single_Member must reject multi-member gzip output");
          end;
       end;
 
@@ -535,17 +556,6 @@ package body Zlib_Release_Contract_Tests is
          end;
       end;
 
-      Zlib.Seven_Zip_External_File
-        ("/tmp/zlib-release-contract-missing-input",
-         "/tmp/zlib-release-contract-external.7z",
-         "LZMA2",
-         Solid    => True,
-         Password => "",
-         Status   => Status);
-      Assert
-        (Status /= Zlib.Ok,
-         "Seven_Zip_External_File must be visible and status-based");
-
       Zlib.Seven_Zip_PPMd_File
         ("/tmp/zlib-release-contract-missing-input",
          "/tmp/zlib-release-contract-ppmd.7z",
@@ -554,14 +564,6 @@ package body Zlib_Release_Contract_Tests is
         (Status /= Zlib.Ok,
          "Seven_Zip_PPMd_File must be visible and status-based");
 
-      Zlib.Extract_Seven_Zip_External_File
-        ("/tmp/zlib-release-contract-missing.7z",
-         "/tmp/zlib-release-contract-external-out",
-         Password => "",
-         Status   => Status);
-      Assert
-        (Status /= Zlib.Ok,
-         "Extract_Seven_Zip_External_File must be visible and status-based");
    end Test_Root_Public_Compression_Contracts;
 
    procedure Test_Root_Public_Streaming_Compression_Compiles

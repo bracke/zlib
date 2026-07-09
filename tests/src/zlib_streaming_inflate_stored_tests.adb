@@ -147,7 +147,7 @@ package body Zlib_Streaming_Inflate_Stored_Tests is
          In_Data (Ada.Streams.Stream_Element_Offset (I - Input'First + 1)) := Ada.Streams.Stream_Element (Input (I));
       end loop;
 
-      Zlib.Inflate_Init (Filter);
+      Zlib.Inflate_Init (Filter, Header => Zlib.Zlib_Header);
       begin
          Zlib.Translate
            (Filter,

@@ -1,5 +1,6 @@
 with Ada.Command_Line;
 with Ada.Directories;
+with Ada.Strings.Fixed;
 with Ada.Text_IO;
 with Ada.Strings.Unbounded;
 
@@ -40,18 +41,16 @@ procedure Check_Zlib is
      (1 => new String'("exec"), 2 => new String'("--"), 3 => new String'("./tools/bin/smoke_test"));
 
    function Root_Directory return String is
-      Current : constant String := Ada.Directories.Current_Directory;
+      Root : constant String :=
+        Project_Tools.Files.Find_Root_Upward
+          (Ada.Directories.Current_Directory, "zlib.gpr");
    begin
-      if Ada.Directories.Exists (Current & "/zlib.gpr")
-        and then Ada.Directories.Exists (Current & "/docs/API.md")
-      then
-         return Current;
-      elsif Ada.Directories.Exists (Current & "/../zlib.gpr")
-        and then Ada.Directories.Exists (Current & "/../docs/API.md")
-      then
-         return Ada.Directories.Full_Name (Current & "/..");
+      if Root /= "" and then Ada.Directories.Exists (Root & "/docs/API.md") then
+         return Root;
       else
-         Put_Line (Standard_Error, "zlib root not found from " & Current);
+         Put_Line
+           (Standard_Error,
+            "zlib root not found from " & Ada.Directories.Current_Directory);
          Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          raise Program_Error;
       end if;
@@ -74,6 +73,31 @@ procedure Check_Zlib is
          Args    => Args);
    end Run_Command;
 
+   procedure Require_Alire_GNAT_15 is
+      Output : Ada.Strings.Unbounded.Unbounded_String;
+   begin
+      Project_Tools.Processes.Run
+        (Label   => "GNAT 15 toolchain guard",
+         Dir     => Root,
+         Program => Alr_Path,
+         Args    =>
+           [new String'("exec"), new String'("--"), new String'("gnatls"),
+            new String'("--version")],
+         Output  => Output,
+         Quiet   => True);
+
+      if Ada.Strings.Fixed.Index
+          (Ada.Strings.Unbounded.To_String (Output), "GNATLS 15.") = 0
+      then
+         Put_Line
+           (Standard_Error,
+            "wrong Ada compiler: zlib validation must run through Alire GNAT 15; got:");
+         Put_Line (Standard_Error, Ada.Strings.Unbounded.To_String (Output));
+         Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         raise Program_Error;
+      end if;
+   end Require_Alire_GNAT_15;
+
    procedure Require_Text (Relative_Path : String; Text : String) is
       Path : constant String := Root & "/" & Relative_Path;
    begin
@@ -83,6 +107,18 @@ procedure Check_Zlib is
          "missing expected text in " & Relative_Path & ": " & Text,
          Quiet => False);
    end Require_Text;
+
+   procedure Forbid_Text (Relative_Path : String; Text : String) is
+      Path : constant String := Root & "/" & Relative_Path;
+   begin
+      if Project_Tools.Files.File_Contains (Path, Text) then
+         Put_Line
+           (Standard_Error,
+            "forbidden text in " & Relative_Path & ": " & Text);
+         Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         raise Program_Error;
+      end if;
+   end Forbid_Text;
 
    procedure Require_Checked_Example (Relative_Path : String) is
    begin
@@ -171,6 +207,8 @@ procedure Check_Zlib is
    end Require_Support_Level_Markers;
 
 begin
+   Require_Alire_GNAT_15;
+
    Project_Tools.Files.Require_Files
      ([Ada.Strings.Unbounded.To_Unbounded_String (Root & "/README.md"),
        Ada.Strings.Unbounded.To_Unbounded_String (Root & "/LICENSE"),
@@ -193,19 +231,36 @@ begin
    Require_Text ("README.md", "check_zlib");
    Require_Text ("README.md", "with Zlib;");
    Require_Text ("README.md", "No runtime fixture generation or system");
+   Require_Text ("README.md", "GNAT 15");
+   Require_Text ("alire.toml", "gnat_native = ""^15""");
+   Require_Text ("tests/alire.toml", "gnat_native = ""^15""");
+   Require_Text ("check_zlib/alire.toml", "gnat_native = ""^15""");
 
    Require_Text ("docs/API.md", "The root package `Zlib` is the public API entry point");
    Require_Text ("docs/API.md", "Inflate_With_Header");
    Require_Text ("docs/API.md", "Deflate_Raw");
-   Require_Text ("docs/API.md", "CRC32_Update");
-   Require_Text ("src/zlib.ads", "CRC32_Update");
+   Require_Text ("docs/API.md", "Deflate_Bound");
+   Require_Text ("docs/API.md", "GZip_Bound");
+   Require_Text ("docs/API.md", "Deflate_Raw_Bound");
+   Require_Text ("docs/API.md", "CryptoLib.Checksums");
+   Require_Text ("src/zlib.adb", "CryptoLib.Checksums.Adler32_Update");
+   Require_Text ("src/zlib.adb", "CryptoLib.Checksums.CRC32_Update");
+   Require_Text ("src/zlib-stream_inflate.ads", "CryptoLib.Checksums.Adler32_State");
+   Require_Text ("src/zlib-stream_inflate.ads", "CryptoLib.Checksums.CRC32_State");
+   Forbid_Text ("src/zlib.ads", "Adler32_Update");
+   Forbid_Text ("src/zlib.ads", "function Adler32");
+   Forbid_Text ("src/zlib.ads", "CRC32_Update");
+   Forbid_Text ("src/zlib.ads", "function CRC32");
+   Require_Text ("src/zlib.ads", "Deflate_Bound");
+   Require_Text ("src/zlib.ads", "GZip_Bound");
+   Require_Text ("src/zlib.ads", "Deflate_Raw_Bound");
    Require_Text ("docs/API.md", "Deflate_Raw_File_To_Stream");
    Require_Text ("docs/API.md", "Deflate_Raw_File_Size");
    Require_Text ("src/zlib.ads", "Deflate_Raw_File_To_Stream");
    Require_Text ("src/zlib.ads", "Deflate_Raw_File_Size");
    Require_Text ("docs/API.md", "Raw_Deflate");
    Require_Text ("docs/API.md", "GZip_Metadata");
-   Require_Text ("docs/API.md", "Strict inflate APIs do not perform wrapper auto-detection");
+   Require_Text ("docs/API.md", "Header => Default` perform lightweight wrapper auto-detection");
    Require_Text ("docs/API.md", "implementation units and may change without a public API bump");
 
    Require_Text ("docs/TESTING.md", "check_zlib");

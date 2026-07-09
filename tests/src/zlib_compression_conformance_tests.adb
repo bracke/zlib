@@ -2,11 +2,10 @@ with Ada.Containers.Vectors;
 with Ada.Directories;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
+with CryptoLib.Checksums;
 with Interfaces;
 with AUnit.Assertions; use AUnit.Assertions;
 with Zlib;
-with Zlib.Checksums;
-with Zlib.CRC32_Internal;
 with Zlib_Fixture_Data;
 with Zlib_Conformance_Test_Support;
 
@@ -249,6 +248,19 @@ package body Zlib_Compression_Conformance_Tests is
         or Interfaces.Unsigned_32 (Data (Data'Last));
    end Footer_Adler;
 
+   function Expected_Adler
+     (Input : Zlib.Byte_Array)
+      return Interfaces.Unsigned_32
+   is
+      State : CryptoLib.Checksums.Adler32_State;
+   begin
+      CryptoLib.Checksums.Adler32_Reset (State);
+      for B of Input loop
+         CryptoLib.Checksums.Adler32_Update (State, Ada.Streams.Stream_Element (B));
+      end loop;
+      return CryptoLib.Checksums.Adler32_Value (State);
+   end Expected_Adler;
+
    procedure Assert_Compressed_Output
      (Encoded  : Zlib.Byte_Array;
       Expected : Zlib.Byte_Array;
@@ -266,7 +278,7 @@ package body Zlib_Compression_Conformance_Tests is
         (((Natural (Encoded (Encoded'First + 1)) / 32) mod 2) = 0,
          Message & ": no preset dictionary flag");
       Assert
-        (Footer_Adler (Encoded) = Zlib.Checksums.Adler32 (Expected),
+        (Footer_Adler (Encoded) = Expected_Adler (Expected),
          Message & ": Adler-32 footer");
 
       S.Assert_One_Shot_OK (Encoded, Zlib.Zlib_Header, Expected, Message);
@@ -293,13 +305,13 @@ package body Zlib_Compression_Conformance_Tests is
      (Input : Zlib.Byte_Array)
       return Interfaces.Unsigned_32
    is
-      State : Zlib.CRC32_Internal.CRC32_State;
+      State : CryptoLib.Checksums.CRC32_State;
    begin
-      Zlib.CRC32_Internal.Reset (State);
+      CryptoLib.Checksums.CRC32_Reset (State);
       for B of Input loop
-         Zlib.CRC32_Internal.Update (State, Ada.Streams.Stream_Element (B));
+         CryptoLib.Checksums.CRC32_Update (State, Ada.Streams.Stream_Element (B));
       end loop;
-      return Zlib.CRC32_Internal.Value (State);
+      return CryptoLib.Checksums.CRC32_Value (State);
    end CRC32_Of;
 
    procedure Assert_GZip_Output

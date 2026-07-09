@@ -6,6 +6,18 @@ consumer code or repository changes, use `docs/AI_GUIDE.md`.
 
 `Zlib` exposes one-shot and streaming inflate APIs from the root package only.
 
+## Reentrancy and parallel callers
+
+Independent calls are reentrant. An external tool may run separate compression,
+inflate, archive, or streaming jobs in multiple Ada tasks when each task owns
+its input/output buffers, streaming filter object, and output path.
+
+The library does not synchronize shared caller-owned state. Do not use the same
+`Filter_Type` or `Compression_Filter_Type` concurrently from multiple tasks
+unless the caller protects it. Likewise, avoid concurrent writes to the same
+file, extraction directory, or mutable buffer unless that sharing is externally
+synchronized.
+
 ## One-shot zlib inflate
 
 `Inflate` expects a complete zlib stream:
@@ -50,13 +62,15 @@ They map file read errors to `Input_File_Error` and file write errors to
 
 ## Streaming inflate
 
-Use `Header => Default` or `Header => Zlib_Header` for zlib-wrapped streaming
-input. `Default` is exactly `Zlib_Header`; it is not auto-detection. Use
-`Header => GZip` for single-member gzip streaming input with CRC32 and ISIZE
-trailer validation. Use `Header => Raw_Deflate` only for raw Deflate payloads that have no
-zlib/gzip wrapper and no trailer checksum. One-shot `Inflate_With_Header`
-supports the same explicit wrapper modes for complete in-memory buffers.
-Plain one-shot `Inflate` remains zlib-wrapper-only. `Deflate_*` APIs continue
+Use `Header => Default` for streaming wrapper auto-detection across zlib, gzip,
+and raw Deflate input. Use `Header => Zlib_Header` for strict zlib-wrapped
+streaming input. Use `Header => GZip` for strict gzip streaming input with
+CRC32 and ISIZE trailer validation. Use `Header => Raw_Deflate` only for raw
+Deflate payloads that have no zlib/gzip wrapper and no trailer checksum.
+One-shot `Inflate` and `Inflate_With_Header` with `Header => Default` use the
+same wrapper discrimination for complete zlib, gzip, or raw Deflate buffers.
+Gzip input accepts concatenated members by default; concrete one-shot and
+streaming headers remain wrapper-strict. `Deflate_*` APIs continue
 to produce zlib-wrapped output, while `GZip`/`GZip_File` produce gzip-wrapped
 output.
 
@@ -70,4 +84,5 @@ dependency on `HttpClient`, and no dependency on a system zlib library.
 
 ## Release baseline
 
-See `docs/API.md`, `docs/API_CHEATSHEET.md`, and `docs/CONSTRAINTS.md` for the public API, task mapping, and explicit non-goals.
+See `docs/API.md`, `docs/API_CHEATSHEET.md`, and `docs/CONSTRAINTS.md` for the
+public API, task mapping, and current constraints.

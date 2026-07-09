@@ -3,14 +3,21 @@
 This document is the consumer-facing contract for `Filter_Type`,
 `Inflate_Init`, `Translate`, `Flush`, `Stream_End`, and `Close`.
 
+## Task safety
+
+Streaming inflate is safe for parallel callers when each Ada task uses its own
+`Filter_Type` object and caller-owned input/output buffers. A `Filter_Type` is
+mutable session state and is not internally synchronized; protect it externally
+if it is shared between tasks.
+
 ## Supported wrappers and payloads
 
 Supported:
 
-- `Header => Default`: exactly the same as `Zlib_Header`
+- `Header => Default`: lightweight wrapper auto-detection for zlib, gzip, or raw Deflate input
 - `Header => Zlib_Header`: zlib wrapper, Deflate payload, Adler-32 trailer
 - `Header => GZip`: gzip member input containing a Deflate payload, CRC32 trailer, and ISIZE trailer;
-  strict single-member mode is the default, and explicit multi-member mode is available through the overload
+  multi-member mode is the default, and explicit single-member mode is available through the overload
   that takes `GZip_Member_Mode`
 - `Header => Raw_Deflate`: Deflate payload only, with no wrapper and no trailer checksum
 
@@ -22,9 +29,7 @@ Supported Deflate payloads:
 
 Unsupported:
 
-- auto-detecting gzip or raw data through `Default`
-- implicit multi-member gzip concatenation in the default `GZip` mode
-- wrapper auto-detection for strict one-shot or streaming inflate APIs
+- implicit wrapper switching after the first stream has been detected in an already-open streaming filter
 
 Unsupported wrappers or malformed block types fail deterministically with
 `Zlib_Error`.
@@ -32,13 +37,13 @@ Unsupported wrappers or malformed block types fail deterministically with
 
 ## Relationship to one-shot inflate
 
-`Inflate` is zlib-wrapper-only and is equivalent to `Inflate_With_Header` with
-`Header => Zlib_Header`. Complete gzip or raw Deflate buffers should use
-`Inflate_With_Header` with `Header => GZip` or `Header => Raw_Deflate`.
-Streaming callers should continue to use `Inflate_Init` with the matching
-`Header_Type`; no wrapper auto-detection is performed by strict APIs.
-`Inflate_Auto` is the explicit one-shot convenience API for lightweight wrapper
-discrimination.
+`Inflate`, `Inflate_Auto`, one-shot `Inflate_With_Header` with
+`Header => Default`, and streaming `Inflate_Init` with `Header => Default` use
+lightweight wrapper auto-detection for zlib, gzip, or raw Deflate input. Gzip
+one-shot and streaming paths accept concatenated members by default; pass
+`GZip_Mode => Single_Member` when strict single-member boundaries are required.
+Streaming callers can still use concrete `Header_Type` values when wrapper
+strictness is required.
 
 ## State model
 
@@ -167,14 +172,19 @@ a null output buffer and `Finish`, the completion check still applies.
 
 ## zlib vs gzip header behavior
 
-`Default` and `Zlib_Header` parse a zlib wrapper: CMF/FLG header, Deflate
-payload, and Adler-32 trailer.
+`Default` waits until two prefix bytes are available, then selects gzip for
+`1F 8B`, zlib for a syntactically valid zlib CMF/FLG pair, and raw Deflate
+otherwise. The selected wrapper stays fixed for the life of that filter.
+
+`Zlib_Header` parses a zlib wrapper: CMF/FLG header, Deflate payload, and
+Adler-32 trailer.
 
 `GZip` parses a gzip wrapper: gzip header, optional FEXTRA/FNAME/FCOMMENT/FHCRC
 fields, Deflate payload, and CRC32/ISIZE trailer.
 
-The gzip implementation accepts exactly one member. Extra bytes after the first
-completed member are not decoded as a second member.
+The gzip implementation accepts concatenated members by default. Extra bytes
+after the first completed member are rejected only when
+`GZip_Mode => Single_Member` is selected.
 
 ## One-shot bridge
 
@@ -197,16 +207,17 @@ failure, `Close (Ignore_Error => True)` is valid cleanup.
 
 ## Streaming gzip member boundaries
 
-`Inflate_Init` defaults to `GZip_Mode => Single_Member`. In this mode a gzip
-stream is complete after exactly one validated member; extra input supplied with
-`Flush => Finish` is rejected.
+`Inflate_Init (Filter, Header => GZip)` and detected gzip streams from
+`Inflate_Init (Filter, Header => Default)` default to
+`GZip_Mode => Multi_Member`. A validated member boundary is not necessarily
+`Stream_End`: the decoder resets its per-member gzip and Deflate state and
+continues when buffered input or caller input contains the next member.
+`Stream_End` becomes true only after `Finish` confirms that the logical
+concatenated gzip stream is complete and all pending output has been drained.
 
-`GZip_Mode => Multi_Member` enables concatenated gzip input. A validated member
-boundary is not necessarily `Stream_End`: the decoder resets its per-member gzip
-and Deflate state and continues when buffered input or caller input contains the
-next member. `Stream_End` becomes true only after `Finish` confirms that the
-logical concatenated gzip stream is complete and all pending output has been
-drained.
+`GZip_Mode => Single_Member` is the strict override. In this mode a gzip stream
+is complete after exactly one validated member; extra input supplied with
+`Flush => Finish` is rejected.
 
 In `Multi_Member` mode, completing one member under `No_Flush` returns control
 to the caller and does not imply `Stream_End`. A later `Translate` call may

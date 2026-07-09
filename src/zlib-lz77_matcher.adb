@@ -12,6 +12,7 @@ package body Zlib.LZ77_Matcher is
    function Chain_Limit_For_Level
      (Level : Compression_Level)
       return Natural
+     with SPARK_Mode => On
    is
    begin
       case Level is
@@ -28,19 +29,20 @@ package body Zlib.LZ77_Matcher is
          when 5 =>
             return 64;
          when 6 =>
-            return 128;
+            return 256;
          when 7 =>
-            return 512;
-         when 8 =>
             return 1_024;
+         when 8 =>
+            return 2_048;
          when 9 =>
-            return 4_096;
+            return 8_192;
       end case;
    end Chain_Limit_For_Level;
 
    function Strategy_For_Level
      (Level : Compression_Level)
       return Match_Strategy
+     with SPARK_Mode => On
    is
    begin
       case Level is
@@ -53,7 +55,18 @@ package body Zlib.LZ77_Matcher is
       end case;
    end Strategy_For_Level;
 
-   function Length_Extra_Bits (Length : Natural) return Natural is
+   function Matching_Enabled_For_Level
+     (Level : Compression_Level)
+      return Boolean
+     with SPARK_Mode => On
+   is
+   begin
+      return Chain_Limit_For_Level (Level) > 0;
+   end Matching_Enabled_For_Level;
+
+   function Length_Extra_Bits (Length : Natural) return Natural
+     with SPARK_Mode => On
+   is
    begin
       if Length = Max_Match_Length then
          return 0;
@@ -73,7 +86,9 @@ package body Zlib.LZ77_Matcher is
       return 0;
    end Length_Extra_Bits;
 
-   function Distance_Extra_Bits (Distance : Natural) return Natural is
+   function Distance_Extra_Bits (Distance : Natural) return Natural
+     with SPARK_Mode => On
+   is
    begin
       for Symbol in Zlib.Deflate_Tables.Distance_Symbol loop
          if Distance >= Zlib.Deflate_Tables.Distance_Base (Symbol)
@@ -92,7 +107,8 @@ package body Zlib.LZ77_Matcher is
    function Token_Cost
      (Len  : Natural;
       Dist : Natural)
-      return Natural
+     return Natural
+     with SPARK_Mode => On
    is
    begin
       if Len = 1 then
@@ -101,6 +117,34 @@ package body Zlib.LZ77_Matcher is
 
       return 12 + Length_Extra_Bits (Len) + Distance_Extra_Bits (Dist);
    end Token_Cost;
+
+   function Better_Match
+     (Length      : Natural;
+      Distance    : Natural;
+      Best_Length : Natural;
+      Best_Dist   : Natural)
+     return Boolean
+     with SPARK_Mode => On
+   is
+   begin
+      if Length > Best_Length then
+         return True;
+      elsif Length < Best_Length or else Length < Min_Match_Length then
+         return False;
+      end if;
+
+      if Best_Dist = 0 then
+         return True;
+      end if;
+
+      declare
+         Distance_Extra      : constant Natural := Distance_Extra_Bits (Distance);
+         Best_Distance_Extra : constant Natural := Distance_Extra_Bits (Best_Dist);
+      begin
+         return Distance_Extra < Best_Distance_Extra
+           or else (Distance_Extra = Best_Distance_Extra and then Distance < Best_Dist);
+      end;
+   end Better_Match;
 
    function Hash_At
      (Input : Byte_Array;
@@ -172,10 +216,11 @@ package body Zlib.LZ77_Matcher is
                      Length := Length + 1;
                   end loop;
 
-                  if Length >= Min_Match_Length and then Length > Best_Length then
+                  if Better_Match (Length, Distance, Best_Length, Best_Dist) then
                      Best_Length := Length;
                      Best_Dist := Distance;
-                     exit when Best_Length = Max_Match_Length;
+                     exit when Best_Length = Max_Match_Length
+                       and then Distance_Extra_Bits (Best_Dist) = 0;
                   end if;
                end if;
             end;
@@ -335,11 +380,15 @@ package body Zlib.LZ77_Matcher is
                      Find_Best_Match
                        (Input, Pos + 1, Head, Prev, Chain_Limit, Next_Len, Next_Dist);
 
-                     --  Next_Dist is deliberately computed with Next_Len so the
-                     --  lazy probe uses the same matcher path as the retained
-                     --  match case.  Only the length is needed for the lazy
-                     --  decision.
-                     if Next_Len > Len then
+                     if Next_Len > Len
+                       or else
+                         (Next_Len = Len
+                          and then Next_Len >= Min_Match_Length
+                          and then
+                            Token_Cost (1, 0) +
+                            Token_Cost (Next_Len, Next_Dist) <
+                            Token_Cost (Len, Dist))
+                     then
                         Emit_Literal (Input, Pos, Result, Count);
                         Pos := Pos + 1;
                      else

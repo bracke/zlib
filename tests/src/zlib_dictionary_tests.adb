@@ -1,7 +1,8 @@
+with Ada.Streams;
 with AUnit.Assertions; use AUnit.Assertions;
+with CryptoLib.Checksums;
 with Interfaces;
 with Zlib;
-with Zlib.Checksums;
 
 package body Zlib_Dictionary_Tests is
    use type Interfaces.Unsigned_32;
@@ -31,6 +32,19 @@ package body Zlib_Dictionary_Tests is
       end loop;
    end Assert_Same;
 
+   function Expected_Adler
+     (Input : Zlib.Byte_Array)
+      return Interfaces.Unsigned_32
+   is
+      State : CryptoLib.Checksums.Adler32_State;
+   begin
+      CryptoLib.Checksums.Adler32_Reset (State);
+      for B of Input loop
+         CryptoLib.Checksums.Adler32_Update (State, Ada.Streams.Stream_Element (B));
+      end loop;
+      return CryptoLib.Checksums.Adler32_Value (State);
+   end Expected_Adler;
+
    function Dictionary return Zlib.Byte_Array is
    begin
       return [104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100, 32,
@@ -50,7 +64,7 @@ package body Zlib_Dictionary_Tests is
       Dict   : constant Zlib.Byte_Array := Dictionary;
       Output : constant Zlib.Byte_Array :=
         Zlib.Deflate_With_Dictionary (Payload, Dict, Zlib.Stored, Status);
-      ID     : constant Interfaces.Unsigned_32 := Zlib.Checksums.Adler32 (Dict);
+      ID     : constant Interfaces.Unsigned_32 := Expected_Adler (Dict);
    begin
       Assert (Status = Zlib.Ok, "dictionary deflate must succeed");
       Assert (Output'Length >= 6, "dictionary stream must include header and DICTID");

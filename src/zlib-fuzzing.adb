@@ -57,6 +57,44 @@ package body Zlib.Fuzzing is
       end return;
    end To_Stream;
 
+   function Before_First
+     (Data : Ada.Streams.Stream_Element_Array)
+      return Ada.Streams.Stream_Element_Offset
+   is
+   begin
+      if Data'Length = 0 or else Data'First = Ada.Streams.Stream_Element_Offset'First then
+         return Data'First;
+      else
+         return Data'First - 1;
+      end if;
+   end Before_First;
+
+   function Produced
+     (Data : Ada.Streams.Stream_Element_Array;
+      Last : Ada.Streams.Stream_Element_Offset)
+      return Natural
+   is
+   begin
+      if Data'Length = 0 or else Last = Before_First (Data) then
+         return 0;
+      end if;
+
+      return Natural (Last - Data'First + 1);
+   end Produced;
+
+   function Consumed
+     (Data : Ada.Streams.Stream_Element_Array;
+      Last : Ada.Streams.Stream_Element_Offset)
+      return Natural
+   is
+   begin
+      if Data'Length = 0 or else Last = Before_First (Data) then
+         return 0;
+      end if;
+
+      return Natural (Last - Data'First + 1);
+   end Consumed;
+
    function Mix
      (Value : Interfaces.Unsigned_32;
       Byte_Value : Byte)
@@ -175,7 +213,10 @@ package body Zlib.Fuzzing is
       end case;
    end Mutated;
 
-   function Hex_Char (Value : Natural) return Character is
+   function Hex_Char (Value : Natural) return Character
+     with Pre => Value <= 15,
+          SPARK_Mode => On
+   is
       Hex : constant String := "0123456789ABCDEF";
    begin
       return Hex (Value + 1);
@@ -693,6 +734,166 @@ package body Zlib.Fuzzing is
          Account_Exception (Result);
    end Mutation_Once;
 
+   procedure Flush_Roundtrip_Once
+     (Result : in out Fuzz_Result;
+      Seed   : in out Interfaces.Unsigned_32) is
+      Payload      : constant Byte_Array := Patterned_Bytes (Seed, 160);
+      Header       : constant Header_Type :=
+        (case Pick (Seed, 3) is
+           when 0      => Zlib_Header,
+           when 1      => GZip,
+           when others => Raw_Deflate);
+      Mode         : constant Compression_Mode :=
+        Compression_Mode'Val
+          (Pick
+             (Seed, Compression_Mode'Pos (Compression_Mode'Last) + 1));
+      Input_Chunk  : constant Positive := Pick (Seed, 9) + 1;
+      Output_Chunk : constant Positive := Pick (Seed, 7) + 1;
+      Filter       : Compression_Filter_Type;
+      Encoded      : Byte_Array (0 .. 4095) := [others => 0];
+      Encoded_Len  : Natural := 0;
+      Position     : Natural := Payload'First;
+      Loops        : Natural := 0;
+
+      procedure Capture
+        (Data : Ada.Streams.Stream_Element_Array;
+         Last : Ada.Streams.Stream_Element_Offset)
+      is
+         Count : constant Natural := Produced (Data, Last);
+      begin
+         if Encoded_Len + Count > Encoded'Length then
+            raise Constraint_Error;
+         end if;
+
+         for I in 0 .. Count - 1 loop
+            Encoded (Encoded'First + Encoded_Len + I) :=
+              Byte (Data (Data'First + Ada.Streams.Stream_Element_Offset (I)));
+         end loop;
+         Encoded_Len := Encoded_Len + Count;
+      end Capture;
+
+      procedure Drain
+        (Flush : Flush_Mode)
+      is
+         Output   : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Output_Chunk));
+         Out_Last : Ada.Streams.Stream_Element_Offset;
+         Count    : Natural;
+      begin
+         loop
+            Compress_Flush (Filter, Output, Out_Last, Flush);
+            Count := Produced (Output, Out_Last);
+            Capture (Output, Out_Last);
+            Loops := Loops + 1;
+            exit when Count = 0;
+            if Loops >= 1_024 then
+               raise Constraint_Error;
+            end if;
+         end loop;
+      end Drain;
+   begin
+      Note_Input (Result, Payload);
+      Deflate_Init (Filter, Header => Header, Mode => Mode);
+
+      while Position <= Payload'Last loop
+         declare
+            Count      : constant Natural :=
+              Natural'Min (Input_Chunk, Payload'Last - Position + 1);
+            Input      : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Count));
+            Output     : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Output_Chunk));
+            In_Last    : Ada.Streams.Stream_Element_Offset;
+            Out_Last   : Ada.Streams.Stream_Element_Offset;
+            Flush_Pick : constant Natural := Pick (Seed, 5);
+            Flush      : constant Flush_Mode :=
+              (case Flush_Pick is
+                 when 0      => Sync_Flush,
+                 when 1      => Full_Flush,
+                 when others => No_Flush);
+            Used       : Natural;
+            Made       : Natural;
+         begin
+            for I in 0 .. Count - 1 loop
+               Input (Ada.Streams.Stream_Element_Offset (I + 1)) :=
+                 Ada.Streams.Stream_Element (Payload (Position + I));
+            end loop;
+
+            Compress (Filter, Input, In_Last, Output, Out_Last, Flush);
+            Capture (Output, Out_Last);
+            Used := Consumed (Input, In_Last);
+            Made := Produced (Output, Out_Last);
+
+            Result.Digest :=
+              Result.Digest + Interfaces.Unsigned_32 (Flush_Mode'Pos (Flush));
+
+            if Flush in Sync_Flush | Full_Flush then
+               Drain (No_Flush);
+            end if;
+
+            if Used > 0 then
+               Position := Position + Used;
+            elsif Made = 0 then
+               Account (Result, Output_File_Error);
+               Compress_Close (Filter, Ignore_Error => True);
+               return;
+            end if;
+
+            Loops := Loops + 1;
+            if Loops >= 1_024 then
+               Account (Result, Unexpected_End_Of_Input);
+               Compress_Close (Filter, Ignore_Error => True);
+               return;
+            end if;
+         end;
+      end loop;
+
+      while not Compress_Stream_End (Filter) loop
+         declare
+            Output   : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Output_Chunk));
+            Out_Last : Ada.Streams.Stream_Element_Offset;
+         begin
+            Compress_Flush (Filter, Output, Out_Last, Finish);
+            Capture (Output, Out_Last);
+         end;
+         Loops := Loops + 1;
+         if Loops >= 1_024 then
+            Account (Result, Unexpected_End_Of_Input);
+            Compress_Close (Filter, Ignore_Error => True);
+            return;
+         end if;
+      end loop;
+
+      Compress_Close (Filter);
+
+      declare
+         Status : Status_Code;
+         Plain  : constant Byte_Array :=
+           Inflate_With_Header
+             (Encoded (Encoded'First .. Encoded'First + Encoded_Len - 1),
+              Header,
+              Status);
+      begin
+         Result.Digest :=
+           Result.Digest + Interfaces.Unsigned_32 (Header_Type'Pos (Header));
+         Result.Digest :=
+           Result.Digest + Interfaces.Unsigned_32 (Compression_Mode'Pos (Mode));
+
+         if Status = Ok and then Plain = Payload then
+            Account (Result, Ok);
+         elsif Status = Ok then
+            Account (Result, Invalid_Checksum);
+         else
+            Account (Result, Status);
+         end if;
+      end;
+   exception
+      when others =>
+         Compress_Close (Filter, Ignore_Error => True);
+         Account_Exception (Result);
+   end Flush_Roundtrip_Once;
+
    procedure Decode_Tiny_Stream
      (Result      : in out Fuzz_Result;
       Input       : Byte_Array;
@@ -1093,6 +1294,8 @@ package body Zlib.Fuzzing is
                Lifecycle_Once (Result);
             when Mutation_Target =>
                Mutation_Once (Result, S);
+            when Flush_Target =>
+               Flush_Roundtrip_Once (Result, S);
             when Tiny_Buffer_Target =>
                Tiny_Buffer_Once (Result, S);
          end case;
@@ -1113,7 +1316,9 @@ package body Zlib.Fuzzing is
 
    function Expected_Failures_Are_Allowed
      (Target : Target_Kind)
-      return Boolean is
+      return Boolean
+     with SPARK_Mode => On
+   is
    begin
       return Target in Inflate_Target | Streaming_Inflate_Target | Mutation_Target;
    end Expected_Failures_Are_Allowed;
@@ -1121,7 +1326,9 @@ package body Zlib.Fuzzing is
    function Acceptable
      (Target : Target_Kind;
       Result : Fuzz_Result)
-      return Boolean is
+      return Boolean
+     with SPARK_Mode => On
+   is
    begin
       return Result.Crashes = 0
         and then (Expected_Failures_Are_Allowed (Target) or else Result.Failures = 0);
@@ -1130,7 +1337,9 @@ package body Zlib.Fuzzing is
    function Same_Result
      (Left  : Fuzz_Result;
       Right : Fuzz_Result)
-      return Boolean is
+      return Boolean
+     with SPARK_Mode => On
+   is
    begin
       return Left.Runs = Right.Runs
         and then Left.Success = Right.Success

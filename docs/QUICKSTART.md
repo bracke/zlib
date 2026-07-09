@@ -238,14 +238,18 @@ implementation details.
 
 ## Wrapper rules to remember
 
-- `Inflate` is zlib-wrapper-only.
-- `Inflate_With_Header` is the explicit wrapper-selection API.
-- `Inflate_Auto` is the explicit lightweight wrapper-discriminating convenience API.
-- `Default` means exactly `Zlib_Header`; strict inflate APIs do not auto-detect.
+- One-shot `Inflate`, `Inflate_With_Header (..., Header => Default, ...)`, and
+  streaming `Inflate_Init (..., Header => Default)` auto-detect zlib, gzip, or
+  raw Deflate input.
+- Concrete `Inflate_With_Header` modes (`Zlib_Header`, `GZip`, `Raw_Deflate`)
+  are wrapper-strict; `GZip` accepts concatenated members unless
+  `GZip_Mode => Single_Member` is requested.
+- Streaming compression `Default` means `Zlib_Header`.
 - `Deflate`, `Deflate_Stored`, `Deflate_Fixed`, and `Deflate_Dynamic` emit zlib streams.
 - `GZip` emits gzip streams.
 - `Deflate_Raw` emits raw Deflate payload bytes only.
-- Multi-member gzip input is explicit through `GZip_Member_Mode`; multi-member
-  gzip output is explicit through `GZip_Members` and `GZip_File_Members`.
+- Multi-member gzip input is implicit; strict single-member gzip input is
+  explicit through `GZip_Member_Mode`. Multi-member gzip output is explicit
+  through `GZip_Members` and `GZip_File_Members`.
 - ZIP output is explicit through `ZIP`, `ZIP_File`, and `ZIP_Files`; `ZIP_Files`
   supports multi-entry archives and explicit ZIP64 metadata.

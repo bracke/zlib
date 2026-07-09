@@ -246,16 +246,17 @@ package body Zlib_Deflate_Raw_Bridge_Tests is
       Assert (Status /= Zlib.Ok, Message);
    end Assert_Rejected;
 
-   procedure Assert_Default_Inflate_Rejected
+   procedure Assert_Default_Inflate_Accepts_Raw
      (Compressed : Zlib.Byte_Array;
+      Expected   : Zlib.Byte_Array;
       Message    : String)
    is
       Status : Zlib.Status_Code;
       Output : constant Zlib.Byte_Array := Zlib.Inflate (Compressed, Status);
-      pragma Unreferenced (Output);
    begin
-      Assert (Status /= Zlib.Ok, Message);
-   end Assert_Default_Inflate_Rejected;
+      Assert (Status = Zlib.Ok, Message & ": status");
+      Assert_Same (Output, Expected, Message);
+   end Assert_Default_Inflate_Accepts_Raw;
 
    procedure Assert_Raw_Mode
      (Mode    : Zlib.Compression_Mode;
@@ -267,7 +268,8 @@ package body Zlib_Deflate_Raw_Bridge_Tests is
    begin
       Assert (Status = Zlib.Ok, Label & ": Deflate_Raw status");
       Assert_Raw_Roundtrip (Output, Payload, Label & ": raw roundtrip");
-      Assert_Default_Inflate_Rejected (Output, Label & ": default Inflate rejects raw output");
+      Assert_Default_Inflate_Accepts_Raw
+        (Output, Payload, Label & ": default Inflate auto-detects raw output");
       Assert_Rejected (Output, Zlib.Zlib_Header, Label & ": zlib inflate rejects raw output");
       Assert_Rejected (Output, Zlib.GZip, Label & ": gzip inflate rejects raw output");
    end Assert_Raw_Mode;

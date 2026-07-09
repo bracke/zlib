@@ -13,9 +13,10 @@ package Zlib.LZ77_Matcher is
       Lazy,
       Optimal);
    --  Greedy emits the current best match immediately. Lazy emits a literal
-   --  at the current position only when the next position has a strictly
-   --  longer valid match. Optimal computes a deterministic block-local parse
-   --  over the bounded match candidates found by the same hash-chain search.
+   --  at the current position when the next position has a strictly longer
+   --  valid match or an equal-length match that is cheaper after paying for
+   --  the literal. Optimal computes a deterministic block-local parse over the
+   --  bounded match candidates found by the same hash-chain search.
 
    type Token_Kind is (Literal, Match);
 
@@ -30,13 +31,24 @@ package Zlib.LZ77_Matcher is
 
    function Chain_Limit_For_Level
      (Level : Compression_Level)
-      return Natural;
+      return Natural
+     with SPARK_Mode => On;
    --  Return the bounded hash-chain probe limit for Level.
    --  @param Level Level argument supplied to Chain_Limit_For_Level
    --  @return result produced by Chain_Limit_For_Level
+
+   function Matching_Enabled_For_Level
+     (Level : Compression_Level)
+      return Boolean
+     with SPARK_Mode => On;
+   --  Return True when Level uses LZ77 matching instead of stored-only output.
+   --  @param Level Level argument supplied to Matching_Enabled_For_Level
+   --  @return result produced by Matching_Enabled_For_Level
+
    function Strategy_For_Level
      (Level : Compression_Level)
-      return Match_Strategy;
+      return Match_Strategy
+     with SPARK_Mode => On;
    --  Return the documented token-selection strategy for Level.
    --  Levels 0 .. 3 remain non-lazy, levels 4 .. 7 use conservative lazy
    --  matching, and levels 8 .. 9 use bounded optimal parsing. Stored output

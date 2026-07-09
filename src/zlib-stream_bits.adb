@@ -170,6 +170,7 @@ package body Zlib.Stream_Bits is
    function Can_Represent_Bit_Count
      (Count : Natural)
       return Boolean
+     with SPARK_Mode => On
    is
       Max_Value : Natural := 0;
    begin
@@ -267,6 +268,28 @@ package body Zlib.Stream_Bits is
       Status := Ok;
       return Result;
    end Read_Byte_Aligned;
+
+   function Peek_Byte_Aligned
+     (Source : Bit_Source;
+      Offset : Natural;
+      Status : out Read_Status)
+      return Ada.Streams.Stream_Element
+   is
+      Index : constant Natural := Source.First + Offset;
+   begin
+      if Source.Bit /= 0 then
+         Status := Invalid_State;
+         return 0;
+      end if;
+
+      if Offset >= Length (Source) then
+         Status := Need_Input;
+         return 0;
+      end if;
+
+      Status := Ok;
+      return Source.Buffer (Index);
+   end Peek_Byte_Aligned;
 
    function Input_Consumed
      (Source : Bit_Source)

@@ -49,13 +49,14 @@ Zlib.Bit_Writer       LSB-first Deflate bit emission for compression output
 Zlib.Fixed_Compress   fixed-Huffman zlib compressor
 Zlib.Dynamic_Compress legacy internal dynamic-Huffman block compressor
 Zlib.Raw_Inflate      legacy internal raw Deflate decoder, not used by consumers
-Zlib.Checksums        one-shot and incremental Adler-32
-Zlib.CRC32_Internal            incremental gzip CRC32
+CryptoLib.Checksums            Adler-32 trailer, DICTID, gzip/ZIP/7z CRC-32
 ```
 
 The streaming engine handles zlib-wrapped, gzip-wrapped, and raw stored,
-fixed-Huffman, and dynamic-Huffman Deflate blocks. Wrapper mode is explicit;
-no auto-detection is performed.
+fixed-Huffman, and dynamic-Huffman Deflate blocks. Explicit streaming wrapper
+modes are wrapper-strict. `Header => Default` uses lightweight wrapper
+discrimination before entering the same inflate engine, matching one-shot
+`Inflate` and `Inflate_With_Header` default behavior.
 
 ## Streaming wrapper state
 
@@ -135,6 +136,50 @@ stored/fixed/dynamic payload emitters with wrapper/trailer emission suppressed
 by the public raw compression entry points. Generated output is
 validated by the existing one-shot and streaming inflate paths.
 
+## Archive and 7z internals
+
+Archive consumers still use only `with Zlib;`. Internal child packages split the
+7z implementation by concern:
+
+```text
+Zlib.Seven_Zip_Methods            method IDs, descriptors, arity, classification
+Zlib.Seven_Zip_Coders             writer coder descriptor bytes and properties
+Zlib.Seven_Zip_Container          7z header/envelope construction
+Zlib.Seven_Zip_Graphs             graph stream arithmetic and validation
+Zlib.Seven_Zip_Numbers            7z UInt64 and little-endian scalar helpers
+Zlib.Seven_Zip_Paths              safe entry and filesystem path validation
+Zlib.Seven_Zip_Properties         FilesInfo parsing, target lookup, metadata images
+Zlib.Seven_Zip_Filters            branch filters, Delta, and BCJ2 transforms
+Zlib.Seven_Zip_AES                AES-256/SHA-256/KDF/CBC support
+Zlib.PPMd7                        PPMd7 codec
+Zlib.Seven_Zip_Codec_Writing      single-entry codec and method-graph writers
+Zlib.Seven_Zip_File_Writing       file and file-list writer orchestration
+Zlib.Seven_Zip_BCJ2_Writing       BCJ2 writer orchestration
+Zlib.Seven_Zip_Encrypted_Writing  encrypted payload writer orchestration
+Zlib.Seven_Zip_Filtered_Writing   filter+codec writer orchestration
+Zlib.Seven_Zip_Header_Encryption  encrypted-header writer orchestration
+Zlib.Seven_Zip_Header_Reading     encoded-header read recovery and normalization
+Zlib.Seven_Zip_Folder_Decoding    read-side folder graph, decode policy, and slicing helpers
+Zlib.Seven_Zip_File_Extraction    filesystem extraction staging and metadata
+Zlib.Seven_Zip_Volumes            split-volume read/write/extract orchestration
+Zlib.Archive_Listing              ZIP/7z listing dispatch
+Zlib.Archive_Directory_Extraction ZIP/7z directory extraction dispatch
+```
+
+`src/zlib.adb` remains the public wrapper body and still owns root-only codec
+callbacks and the largest native 7z read-side folder decode loops. Passwords
+are now threaded through internal read/list/extract callbacks as explicit decode context instead of root-global state.
+Encoded-header recovery is shared by native extraction and listing through
+`Zlib.Seven_Zip_Header_Reading`; root-body callbacks supply codecs that still
+depend on root Deflate/LZMA entry points.
+Native folder graph analysis, bind-pair mapping, linear coder-chain execution,
+BCJ2 graph decode, PPMd fallback policy, folder payload validation, and solid
+substream slicing now flow through `Zlib.Seven_Zip_Folder_Decoding`; root-body
+callbacks supply Deflate, BZip2, LZMA, and LZMA2 codecs that still depend on
+root entry points. FilesInfo target-entry walking now flows through
+`Zlib.Seven_Zip_Properties`; the remaining read-side orchestration in the root
+body is section ordering, StreamsInfo parsing, and codec callback dispatch.
+
 ## Performance-sensitive internals
 
 Performance work must keep the public API and decompression semantics unchanged. The main
@@ -155,14 +200,14 @@ prevents accidental whole-body buffering.
 at the maximum known code length and avoid probing before the minimum known code
 length while preserving canonical Huffman validation.
 
-`Zlib.CRC32_Internal` uses a precomputed table generated at elaboration from the standard
-gzip polynomial. This replaces per-bit CRC updates on the gzip hot path without
-changing trailer validation semantics.
+`CryptoLib.Checksums` supplies the Adler-32 and CRC-32 implementations used by zlib wrapper
+validation and archive metadata. Zlib keeps only local byte-array adapters where child
+packages need to pass zlib's public `Byte_Array` representation to cryptolib.
 
 
 ## Raw Deflate release hardening
 
-Raw Deflate compression is release-hardened by `zlib_raw_release_tests`, `zlib_raw_cross_wrapper_conformance_tests`, the raw examples, and the raw tools. The contract remains unchanged: `Deflate_*` APIs emit zlib-wrapped streams, `GZip*` APIs emit gzip-wrapped streams, `Deflate_Raw*` APIs emit raw Deflate blocks only, `Seven_Zip_Stored*` APIs emit Copy-coder `.7z` archives including header-only directory entries and solid stored file-list archives with no-stream directory entries, `Seven_Zip_Deflate*` APIs emit Deflate `.7z` archives, `Seven_Zip_BZip2*` APIs emit BZip2 `.7z` archives, `Seven_Zip_LZMA*` APIs emit LZMA `.7z` archives, `Seven_Zip_LZMA2*` APIs emit LZMA2 `.7z` archives, `Extract_Seven_Zip*` APIs extract those supported native 7z layouts plus native PPMd empty/repeated-symbol/root-symbol/periodic-prefix, stock-7z multi-block streams with LZMA encoded headers, stock-7z no-stream empty-file entries, stock-7z BCJ+PPMd filter chains, and BCJ2 graphs with Copy, PPMd, or supported main pre-coders, `Seven_Zip_PPMd`, `Seven_Zip_PPMd_File`, and `Seven_Zip_PPMd_Files` emit native PPMd 7z archives for this crate's extractor without calling local `7z`, while `Seven_Zip_External_File` and `Extract_Seven_Zip_External_File` are compatibility placeholders that fail closed without invoking local `7z`, `ZIP`/`ZIP_File`/`ZIP_Files` emit ZIP archives, `Inflate` is zlib-wrapper-only, `Inflate_With_Header` performs explicit wrapper selection, and `Inflate_Auto` is the convenience wrapper-discriminating inflate API. `Auto` remains deterministic and block-local; the library still has no general-purpose 7z codec stack or zlib-compatible compression-ratio promise.
+Raw Deflate compression is release-hardened by `zlib_raw_release_tests`, `zlib_raw_cross_wrapper_conformance_tests`, the raw examples, and the raw tools. The contract remains unchanged: `Deflate_*` APIs emit zlib-wrapped streams, `GZip*` APIs emit gzip-wrapped streams, `Deflate_Raw*` APIs emit raw Deflate blocks only, `Seven_Zip_Stored*` APIs emit Copy-coder `.7z` archives including header-only directory entries and solid stored file-list archives with no-stream directory entries, `Seven_Zip_Deflate*` APIs emit Deflate `.7z` archives, `Seven_Zip_BZip2*` APIs emit BZip2 `.7z` archives, `Seven_Zip_LZMA*` APIs emit LZMA `.7z` archives, `Seven_Zip_LZMA2*` APIs emit LZMA2 `.7z` archives, `Seven_Zip_Filtered` emits single-entry compressed filtered `.7z` archives, `Seven_Zip_Method_Graph` emits low-level single-entry non-encrypted method-graph `.7z` containers from caller-supplied packed stream bytes, `Extract_Seven_Zip*` APIs extract those supported native 7z layouts plus native PPMd empty/repeated-symbol/root-symbol/periodic-prefix, stock-7z multi-block streams with LZMA encoded headers, stock-7z no-stream empty-file entries, stock-7z BCJ+PPMd filter chains, and BCJ2 graphs with Copy, PPMd, or supported main pre-coders, `Seven_Zip_PPMd`, `Seven_Zip_PPMd_File`, and `Seven_Zip_PPMd_Files` emit native PPMd 7z archives for this crate's extractor without calling local `7z`, `ZIP`/`ZIP_File`/`ZIP_Files` emit ZIP archives, `Inflate`, `Inflate_Auto`, `Inflate_With_Header` with `Header => Default`, and streaming `Inflate_Init` with `Header => Default` auto-detect zlib/gzip/raw input, gzip input accepts concatenated members unless `GZip_Mode => Single_Member` is requested, and concrete inflate modes remain wrapper-strict. `Auto` remains deterministic and block-local.
 
 ## Block chooser
 
@@ -179,9 +224,12 @@ to a bounded chain limit and a `Match_Strategy`.
 
 The lazy strategy is deliberately simple: find the best match at the current
 position, insert the current byte into legal history, and probe the next
-position. If the next match is strictly longer, emit the current byte as a
-literal; otherwise emit the current match. Equal-length candidates keep the
-current match, preserving stable tie-breaking. Levels 8 and 9 use bounded
-optimal parsing over the same block-local match candidates found by the
-configured hash-chain search. All matching remains block-local, bounded,
-deterministic, and constrained to Deflate-valid length and distance ranges.
+position. If the next match is strictly longer, or equal length and cheaper
+after paying for the literal, emit the current byte as a literal; otherwise emit
+the current match. Equal-length candidates prefer lower Deflate
+distance-extra-bit cost, then shorter absolute distance, preserving a stable
+deterministic tie-break while improving high-level ratio on repeated payloads.
+Levels 8 and 9 use bounded optimal parsing over the same block-local match
+candidates found by the configured hash-chain search. All matching remains
+block-local, bounded, deterministic, and constrained to Deflate-valid length and
+distance ranges.

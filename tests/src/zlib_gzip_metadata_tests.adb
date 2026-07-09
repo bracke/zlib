@@ -1,10 +1,10 @@
 with Ada.Directories;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
+with CryptoLib.Checksums;
 with Interfaces;
 with AUnit.Assertions; use AUnit.Assertions;
 with Zlib;
-with Zlib.CRC32_Internal;
 with Zlib_Fixture_Data;
 
 package body Zlib_GZip_Metadata_Tests is
@@ -54,13 +54,13 @@ package body Zlib_GZip_Metadata_Tests is
      (Input : Zlib.Byte_Array)
       return Interfaces.Unsigned_32
    is
-      State : Zlib.CRC32_Internal.CRC32_State;
+      State : CryptoLib.Checksums.CRC32_State;
    begin
-      Zlib.CRC32_Internal.Reset (State);
+      CryptoLib.Checksums.CRC32_Reset (State);
       for B of Input loop
-         Zlib.CRC32_Internal.Update (State, Ada.Streams.Stream_Element (B));
+         CryptoLib.Checksums.CRC32_Update (State, Ada.Streams.Stream_Element (B));
       end loop;
-      return Zlib.CRC32_Internal.Value (State);
+      return CryptoLib.Checksums.CRC32_Value (State);
    end CRC32_Of;
 
    procedure Delete_If_Exists

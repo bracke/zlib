@@ -297,13 +297,13 @@ package body Zlib_Lazy_Compression_Tests is
               "level 4 lazy effort");
       Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (5) = 64,
               "level 5 lazy effort");
-      Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (6) = 128,
+      Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (6) = 256,
               "level 6 lazy effort");
-      Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (7) = 512,
+      Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (7) = 1_024,
               "level 7 lazy effort");
-      Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (8) = 1_024,
+      Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (8) = 2_048,
               "level 8 optimal effort");
-      Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (9) = 4_096,
+      Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (9) = 8_192,
               "level 9 optimal effort");
    end Test_Level_Probe_Limits_Are_Granular;
 

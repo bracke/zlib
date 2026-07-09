@@ -368,16 +368,17 @@ package body Zlib_Streaming_Compress_Conformance_Tests is
       Assert (Status /= Zlib.Ok, Label & ": one-shot wrong-wrapper status must fail");
    end Assert_One_Shot_Fails;
 
-   procedure Assert_Inflate_Fails
+   procedure Assert_Inflate_OK
      (Compressed : Zlib.Byte_Array;
+      Expected   : Zlib.Byte_Array;
       Label      : String)
    is
       Status : Zlib.Status_Code;
       Output : constant Zlib.Byte_Array := Zlib.Inflate (Compressed, Status);
-      pragma Unreferenced (Output);
    begin
-      Assert (Status /= Zlib.Ok, Label & ": Inflate wrong-wrapper status must fail");
-   end Assert_Inflate_Fails;
+      Assert (Status = Zlib.Ok, Label & ": Inflate auto-detect status");
+      Assert_Same (Output, Expected, Label & ": Inflate auto-detect output");
+   end Assert_Inflate_OK;
 
    procedure Assert_Streaming_Fails
      (Compressed : Zlib.Byte_Array;
@@ -441,7 +442,7 @@ package body Zlib_Streaming_Compress_Conformance_Tests is
       Assert_Streaming_Fails (Zlib_Output, Zlib.GZip, "zlib output streaming as gzip");
       Assert_Streaming_Fails (Zlib_Output, Zlib.Raw_Deflate, "zlib output streaming as raw");
 
-      Assert_Inflate_Fails (GZip_Output, "gzip output as Inflate zlib default");
+      Assert_Inflate_OK (GZip_Output, F.Plain_Git_Blob, "gzip output as Inflate default");
       Assert_One_Shot_Fails (GZip_Output, Zlib.Zlib_Header, "gzip output as zlib");
       Assert_One_Shot_Fails (GZip_Output, Zlib.Raw_Deflate, "gzip output as raw");
       Assert_Streaming_Fails (GZip_Output, Zlib.Zlib_Header, "gzip output streaming as zlib");

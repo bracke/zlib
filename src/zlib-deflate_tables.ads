@@ -1,6 +1,8 @@
 with Zlib.Huffman;
 
-package Zlib.Deflate_Tables is
+package Zlib.Deflate_Tables
+  with SPARK_Mode => On
+is
    --  Support level: private internal implementation.
    --  Shared Deflate fixed-Huffman and length/distance tables used by both
    --  one-shot and streaming inflate decoders.
@@ -79,7 +81,8 @@ package Zlib.Deflate_Tables is
    procedure Build_Fixed_Tables
      (Lit_Len_Table : out Zlib.Huffman.Decode_Table;
       Dist_Table    : out Zlib.Huffman.Decode_Table;
-      Status        : out Zlib.Status_Code);
+      Status        : out Zlib.Status_Code)
+     with SPARK_Mode => Off;
    --  Build the standard Deflate fixed-Huffman decode tables.
    --  @param Lit_Len_Table Lit_Len_Table argument supplied to Build_Fixed_Tables
    --  @param Dist_Table Dist_Table argument supplied to Build_Fixed_Tables

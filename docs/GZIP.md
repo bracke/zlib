@@ -1,15 +1,15 @@
 # GZip inflate and output
 
-The public API supports explicit single-member gzip inflate through both
-streaming and one-shot wrapper selection:
+The public API supports implicit one-shot and streaming multi-member gzip
+inflate, plus explicit strict single-member policy:
 
 ```ada
 Zlib.Inflate_Init (Filter, Header => Zlib.GZip);
 Decoded := Zlib.Inflate_With_Header (Input, Zlib.GZip, Status);
 ```
 
-`Header => GZip` parses a single gzip member, reuses the same Deflate engine as
-zlib-wrapped streams, and validates the gzip trailer before reporting success.
+`Header => GZip` parses complete gzip input, reuses the same Deflate engine as
+zlib-wrapped streams, and validates every gzip trailer before reporting success.
 
 ## Header prefix helper
 
@@ -62,18 +62,18 @@ It does not become true immediately at Deflate end-of-block.
 
 ## Member policy
 
-Gzip inflate is strict single-member by default. Concatenated gzip members are
-accepted only through the explicit multi-member APIs; each member header,
+Gzip inflate accepts concatenated members by default; each member header,
 optional metadata area, Deflate payload, CRC32 trailer, and ISIZE trailer is
-validated independently.
+validated independently. Strict single-member input is available through APIs
+that take `GZip_Mode => Single_Member`.
 
 ## Streaming contract
 
-Streaming gzip inflate supports exactly one gzip member by default. Optional gzip header
-fields are parsed according to the gzip wrapper policy. In default single-member mode,
-`Stream_End` becomes `True` only after the gzip trailer is fully read and both CRC32 and
-ISIZE validate. Extra bytes after the first member are left unconsumed for the caller.
-In explicit multi-member mode, every member is validated before the logical stream ends.
+Streaming gzip inflate accepts concatenated gzip members by default. Optional
+gzip header fields are parsed according to the gzip wrapper policy. In default
+multi-member mode, every member is validated before the logical stream ends. In
+explicit single-member mode, extra bytes after the first member are left
+unconsumed for the caller and rejected under `Finish`.
 
 Bad gzip header fields, reserved flags, bad FHCRC, bad data CRC, bad ISIZE,
 and truncation under `Finish` raise `Zlib_Error` and place the filter in Failed
@@ -98,24 +98,26 @@ multi-member gzip output is available through `GZip_Members` and
 
 ## One-shot gzip inflate
 
-Use `Inflate_With_Header (Input, Header => GZip, Status => Status)` for a
-complete gzip member. The one-shot path uses the same wrapper validation as the
-streaming path: gzip header parsing is explicit, CRC32 and ISIZE are validated,
-and checksum or size failures map to `Invalid_Checksum`. Plain `Inflate` remains
-zlib-wrapper-only and intentionally rejects gzip input.
+Use `Inflate_With_Header (Input, Header => GZip, Status => Status)` for
+complete gzip input. The one-shot path validates each member: gzip header
+parsing is explicit, CRC32 and ISIZE are validated, and checksum or size
+failures map to `Invalid_Checksum`. Plain `Inflate`, `Inflate_Auto`, and
+`Inflate_With_Header` and streaming `Inflate_Init` with `Header => Default`
+also auto-detect gzip input.
 
-Optional gzip metadata output is explicit. Multi-member gzip input is accepted only through the explicit
-`GZip_Member_Mode => Multi_Member` APIs. Multi-member gzip output is explicit
-through `GZip_Members` and `GZip_File_Members`; strict inflate APIs still do not
-auto-detect wrappers, while `Inflate_Auto` provides lightweight one-shot
-wrapper discrimination.
+Optional gzip metadata output is explicit. Gzip input accepts concatenated
+members by default; pass `GZip_Mode => Single_Member` to reject a second
+member. Multi-member gzip output is explicit through `GZip_Members` and
+`GZip_File_Members`; concrete wrapper modes
+remain wrapper-strict, while default inflate paths provide lightweight wrapper
+discrimination.
 Gzip compression output is available only through the explicit gzip output APIs or streaming `Header => GZip`.
 
 ## Interoperability contract
 
-The wrapper mode is strict: gzip input is accepted only by `Header => GZip`,
-and zlib/raw inputs are rejected in gzip mode. The conformance tests include
-fixed-Huffman and dynamic-Huffman gzip fixtures,
+The concrete wrapper mode is strict: gzip input is accepted by `Header => GZip`
+and by auto-detected `Header => Default`; zlib/raw inputs are rejected in gzip
+mode. The conformance tests include fixed-Huffman and dynamic-Huffman gzip fixtures,
 binary body fixtures, bad ID bytes, unsupported compression method, reserved
 flag bits, truncated fixed and optional headers, bad CRC32, bad ISIZE, and
 missing trailer cases.
@@ -134,22 +136,24 @@ FHCRC field, including FEXTRA/FNAME/FCOMMENT when present.
 
 ## Multi-member inflate policy
 
-Gzip inflate is single-member strict by default. The existing
-`Inflate_With_Header (Input, GZip, Status)` overload accepts exactly one gzip
-member and rejects any trailing bytes after that member, including a second
-valid gzip member. This avoids silently concatenating unrelated compressed
-bodies.
+Gzip inflate accepts concatenated members by default. The existing
+`Inflate_With_Header (Input, GZip, Status)` overload and streaming
+`Inflate_Init (Filter, Header => GZip)`, plus gzip streams detected through
+`Header => Default`, validate every member and return or emit the byte
+concatenation of decoded payloads. Pass
+`GZip_Mode => Single_Member` when a protocol requires exactly one member and
+must reject any trailing bytes after that member, including a second valid gzip
+member.
 
-Concatenated gzip files are supported only when explicitly requested with
-`GZip_Mode => Multi_Member`. In multi-member mode, every member is parsed and
-validated independently: base header, optional metadata fields, optional FHCRC,
-Deflate payload, CRC32 trailer, and ISIZE trailer. The returned payload is the
-byte concatenation of all decoded members.
+In multi-member mode, every member is parsed and validated independently: base
+header, optional metadata fields, optional FHCRC, Deflate payload, CRC32
+trailer, and ISIZE trailer. The returned payload is the byte concatenation of
+all decoded members.
 
 Malformed second or later members fail with the same deterministic status codes
 as malformed first members. Non-gzip trailing bytes after a valid member are
 reported as `Invalid_Header`.
 
-## CRC32 utility
+## CRC32
 
-Consumers that need the same checksum used by gzip trailers can call `Zlib.CRC32` directly from the root package. It computes the standard gzip CRC-32 with polynomial `0xEDB88320` over the supplied bytes. The same byte-oriented rule applies to FHCRC-related data: bytes are included exactly, with no string conversion or character encoding assumption. `Zlib.CRC32` is only a checksum helper and does not validate a gzip member by itself.
+Gzip trailer CRC-32 and FHCRC calculation are internal zlib behavior backed by `CryptoLib.Checksums`. The root `Zlib` package does not expose standalone checksum helpers; consumers that need CRC-32 directly should use cryptolib.

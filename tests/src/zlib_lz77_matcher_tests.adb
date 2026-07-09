@@ -27,14 +27,20 @@ package body Zlib_LZ77_Matcher_Tests is
               "level 2 must use low Auto effort");
       Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (3) = 16,
               "level 3 must use higher greedy Auto effort");
-      Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (6) = 128,
+      Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (6) = 256,
               "level 6 must use default lazy effort");
-      Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (7) = 512,
+      Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (7) = 1_024,
               "level 7 must use expanded high effort");
-      Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (8) = 1_024,
+      Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (8) = 2_048,
               "level 8 must use expanded very high effort");
-      Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (9) = 4_096,
+      Assert (Zlib.LZ77_Matcher.Chain_Limit_For_Level (9) = 8_192,
               "level 9 must use highest bounded effort");
+      Assert (not Zlib.LZ77_Matcher.Matching_Enabled_For_Level (0),
+              "level 0 must report matching disabled");
+      for Level in Zlib.Compression_Level range 1 .. 9 loop
+         Assert (Zlib.LZ77_Matcher.Matching_Enabled_For_Level (Level),
+                 "non-stored level must report matching enabled");
+      end loop;
    end Test_Level_Chain_Limits;
 
    procedure Test_Repeated_Data_Produces_Match

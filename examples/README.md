@@ -39,7 +39,7 @@ for the raw and streaming examples and are intentionally not standalone mains.
 - `compress_with_level.adb` — broad `Compression_Level` policy for zlib, gzip, and raw output.
 - `gzip_with_metadata.adb` — one-shot gzip output with explicit `GZip_Metadata` and roundtrip verification.
 - `dictionary_roundtrip.adb` — preset-dictionary zlib compression and matching dictionary inflate.
-- `checksums.adb` — public Adler-32 and CRC-32 helpers.
+- `checksums.adb` — public compression-bound helpers.
 
 ## In-memory roundtrip examples
 

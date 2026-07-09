@@ -1,5 +1,7 @@
-with Interfaces; use Interfaces;
-package body Zlib.Wrapper is
+package body Zlib.Wrapper
+  with SPARK_Mode => On
+is
+   use type Interfaces.Unsigned_32;
 
    function To_U32
      (B : Zlib.Byte)

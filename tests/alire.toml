@@ -12,6 +12,9 @@ tags = ["zlib", "deflate", "gzip", "compression", "ada"]
 executables = ["tests"]
 
 [[depends-on]]
+gnat_native = "^15"
+
+[[depends-on]]
 zlib = "^1.3.0+."
 
 [[pins]]

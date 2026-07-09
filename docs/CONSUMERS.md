@@ -16,8 +16,6 @@ Do not use these implementation packages from consumer crates:
 ```ada
 Zlib.Bits
 Zlib.Bit_Writer
-Zlib.Checksums
-Zlib.CRC32_Internal
 Zlib.Deflate_Tables
 Zlib.Dynamic_Compress
 Zlib.Fixed_Compress
@@ -124,10 +122,9 @@ Future tools should choose the API according to data shape:
 - incremental known raw Deflate payload: use streaming
   `Inflate_Init (Header => Raw_Deflate)`
 
-The crate intentionally does not provide general solid-archive or
-general-purpose 7z support or default-zlib-equivalent ratio promises. File-list
-creation emits ordinary-file payloads plus no-stream directory entries, stored
-file payloads use solid Copy, and native PPMd output is available for
+The 7z APIs cover the explicitly documented native layouts. File-list creation
+emits ordinary-file payloads plus no-stream directory entries, stored file
+payloads use solid Copy, and native PPMd output is available for
 single-entry and file-list archives consumed by this crate's native extractor
 without calling local `7z`, using verified modeled stock-compatible candidates,
 repeated/periodic forms, and a native root-context fallback.
@@ -148,12 +145,14 @@ it by using `Deflate`, `Deflate (Auto)`, or `Deflate_File` in Auto mode.
 
 ## Wrapper selection rule
 
-No consumer-facing API auto-detects wrappers. `Default` means `Zlib_Header`.
-`Inflate` is zlib-wrapper-only. `Inflate_Raw` is a convenience wrapper for
-complete raw Deflate payloads and does not auto-detect zlib or gzip wrappers.
-`Inflate_With_Header` is the public general one-shot entry point for explicit
-zlib, gzip, or raw Deflate buffers. `Raw_Deflate` has no checksum validation;
-`GZip` validates CRC32 and ISIZE; `Zlib_Header` validates Adler-32.
+One-shot `Inflate`, `Inflate_Auto`, `Inflate_With_Header` with
+`Header => Default`, and streaming `Inflate_Init` with `Header => Default`
+auto-detect zlib, gzip, or raw Deflate input. Gzip accepts concatenated members
+unless `GZip_Mode => Single_Member` is requested. `Inflate_Raw` is a
+convenience wrapper for complete raw Deflate payloads and does not auto-detect
+zlib or gzip wrappers. Concrete `Inflate_With_Header` and `Inflate_Init` modes
+are wrapper-strict: `Raw_Deflate` has no checksum validation; `GZip` validates
+CRC32 and ISIZE; `Zlib_Header` validates Adler-32.
 
 ## Consumer fixtures
 
@@ -227,11 +226,12 @@ API that matches the protocol or container boundary:
 - use `Deflate_Raw` only when an outer format supplies its own framing and
   integrity checks.
 
-Inflate paths are equally explicit. `Inflate` is zlib-only. `Inflate_Raw` is
-raw-only. `Inflate_With_Header (..., GZip)` is gzip-only.
+Inflate paths are explicit when callers choose concrete modes. `Inflate`,
+one-shot `Header => Default`, and streaming `Header => Default` auto-detect
+zlib/gzip/raw input. `Inflate_Raw` is raw-only.
+`Inflate_With_Header (..., GZip)` is gzip-only.
 `Inflate_With_Header (..., Raw_Deflate)` is raw-only.
-Wrong-wrapper inputs are expected to fail deterministically rather than being
-silently auto-detected.
+Wrong-wrapper inputs to concrete modes are expected to fail deterministically.
 
 
 ## Consumer notes
@@ -259,14 +259,14 @@ timestamps, and extraction remain the responsibility of a ZIP-focused layer.
 
 ## Raw Deflate release hardening
 
-Raw Deflate compression is release-hardened by `zlib_raw_release_tests`, `zlib_raw_cross_wrapper_conformance_tests`, the raw examples, and the raw tools. Raw Deflate inflate convenience APIs are covered by `zlib_inflate_raw_api_tests`. The contract remains unchanged: `Deflate_*` APIs emit zlib-wrapped streams, `GZip*` APIs emit gzip-wrapped streams, `Deflate_Raw*` APIs emit raw Deflate blocks only, `Inflate_Raw*` APIs consume raw Deflate payloads only, `Seven_Zip_Stored*` APIs emit Copy-coder `.7z` archives including header-only directory entries and solid stored file-list archives with no-stream directory entries, `Seven_Zip_Deflate*` APIs emit Deflate `.7z` archives, `Seven_Zip_BZip2*` APIs emit BZip2 `.7z` archives, `Seven_Zip_LZMA*` APIs emit LZMA `.7z` archives, `Seven_Zip_LZMA2*` APIs emit LZMA2 `.7z` archives, `Extract_Seven_Zip*` APIs extract those supported native 7z layouts plus native PPMd empty/repeated-symbol/root-symbol/periodic-prefix, stock-7z multi-block streams with LZMA encoded headers, stock-7z no-stream empty-file entries, stock-7z BCJ+PPMd filter chains, and BCJ2 graphs with Copy, PPMd, or supported main pre-coders, `Seven_Zip_PPMd`, `Seven_Zip_PPMd_File`, and `Seven_Zip_PPMd_Files` emit native PPMd 7z archives for this crate's extractor without calling local `7z`, while `Seven_Zip_External_File` and `Extract_Seven_Zip_External_File` are compatibility placeholders that fail closed without invoking local `7z`, `ZIP`/`ZIP_File`/`ZIP_Files` emit ZIP archives, `Inflate` is zlib-wrapper-only, `Inflate_With_Header` performs explicit wrapper selection, and `Inflate_Auto` is the convenience wrapper-discriminating inflate API. `Auto` remains deterministic and block-local; the library still has no general-purpose 7z codec stack or zlib-compatible compression-ratio promise.
+Raw Deflate compression is release-hardened by `zlib_raw_release_tests`, `zlib_raw_cross_wrapper_conformance_tests`, the raw examples, and the raw tools. Raw Deflate inflate convenience APIs are covered by `zlib_inflate_raw_api_tests`. The contract remains unchanged: `Deflate_*` APIs emit zlib-wrapped streams, `GZip*` APIs emit gzip-wrapped streams, `Deflate_Raw*` APIs emit raw Deflate blocks only, `Inflate_Raw*` APIs consume raw Deflate payloads only, `Seven_Zip_Stored*` APIs emit Copy-coder `.7z` archives including header-only directory entries and solid stored file-list archives with no-stream directory entries, `Seven_Zip_Deflate*` APIs emit Deflate `.7z` archives, `Seven_Zip_BZip2*` APIs emit BZip2 `.7z` archives, `Seven_Zip_LZMA*` APIs emit LZMA `.7z` archives, `Seven_Zip_LZMA2*` APIs emit LZMA2 `.7z` archives, `Seven_Zip_Filtered` emits single-entry compressed filtered `.7z` archives, `Seven_Zip_Method_Graph` emits low-level single-entry non-encrypted method-graph `.7z` containers from caller-supplied packed stream bytes, `Extract_Seven_Zip*` APIs extract those supported native 7z layouts plus native PPMd empty/repeated-symbol/root-symbol/periodic-prefix, stock-7z multi-block streams with LZMA encoded headers, stock-7z no-stream empty-file entries, stock-7z BCJ+PPMd filter chains, and BCJ2 graphs with Copy, PPMd, or supported main pre-coders, `Seven_Zip_PPMd`, `Seven_Zip_PPMd_File`, and `Seven_Zip_PPMd_Files` emit native PPMd 7z archives for this crate's extractor without calling local `7z`, `ZIP`/`ZIP_File`/`ZIP_Files` emit ZIP archives, `Inflate`, `Inflate_Auto`, `Inflate_With_Header` with `Header => Default`, and streaming `Inflate_Init` with `Header => Default` auto-detect zlib/gzip/raw input, gzip input accepts concatenated members unless `GZip_Mode => Single_Member` is requested, and concrete inflate modes remain wrapper-strict. `Auto` remains deterministic and block-local.
 
 ## Gzip member policy for consumers
 
-HTTP and protocol consumers should normally use the default single-member gzip
-inflate behavior. Multi-member gzip is intended for gzip file semantics,
-`gzip -cat` style tools, archives, and inputs that are explicitly documented as
-concatenated gzip members.
+HTTP and protocol consumers that require exactly one gzip member should call
+gzip APIs with `GZip_Mode => Single_Member`. The default gzip path accepts
+concatenated members for gzip file semantics, `gzip -cat` style tools,
+archives, and inputs that are documented as concatenated gzip members.
 
 ## Choosing mode or level
 
@@ -303,10 +303,15 @@ Dictionary-aware zlib file streaming is available through `Inflate_File_With_Dic
 
 ## Direct checksum use
 
-Use `Zlib.Adler32` when a consumer needs the zlib Adler-32 value directly, such as for comparing a zlib trailer or computing a preset-dictionary DICTID. Use `Zlib.CRC32` when a consumer needs the gzip CRC32 value directly, such as for external gzip metadata checks or container-level compatibility tests. Both functions are available through `with Zlib;` only; consumers should not depend on internal checksum child packages.
+The root `Zlib` package does not expose standalone checksum helpers. Zlib Adler-32 trailers, preset-dictionary DICTID values, gzip CRC32 trailers, ZIP CRC32 fields, and 7z CRC32 fields are internal zlib behavior supplied by `CryptoLib.Checksums`. Consumers that need direct Adler-32 or CRC32 calculation should use cryptolib directly.
 
 The checksum helpers operate on bytes, not text. They include NUL bytes, bytes greater than `0x7F`, and CR/LF exactly. They do not compress, inflate, parse, or validate whole streams.
 
+Use `Deflate_Bound`, `GZip_Bound`, and `Deflate_Raw_Bound` when a consumer needs a conservative output-size bound before choosing an output buffer or file policy. The bound helpers are not exact compressed-size predictors.
+
 ## Wrapper prefix helpers
 
-Use `Looks_Like_Zlib_Header` and `Looks_Like_GZip_Header` only as lightweight prefix checks before selecting an explicit wrapper mode. They are not complete validators; `Inflate_Auto` uses this kind of lightweight discrimination for one-shot convenience, while `Inflate` and streaming decode APIs remain strict.
+Use `Looks_Like_Zlib_Header` and `Looks_Like_GZip_Header` only as lightweight
+prefix checks before selecting an explicit wrapper mode. They are not complete
+validators; `Inflate_Auto`, `Inflate`, and streaming `Header => Default` use
+this kind of lightweight discrimination.

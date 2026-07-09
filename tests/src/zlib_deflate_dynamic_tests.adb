@@ -1,8 +1,8 @@
 with Ada.Streams;
+with CryptoLib.Checksums;
 with Interfaces;
 with AUnit.Assertions; use AUnit.Assertions;
 with Zlib;
-with Zlib.Checksums;
 
 package body Zlib_Deflate_Dynamic_Tests is
    use type Ada.Streams.Stream_Element_Offset;
@@ -59,6 +59,19 @@ package body Zlib_Deflate_Dynamic_Tests is
         or Interfaces.Unsigned_32 (Data (First + 3));
    end Footer_Value;
 
+   function Expected_Adler
+     (Input : Zlib.Byte_Array)
+      return Interfaces.Unsigned_32
+   is
+      State : CryptoLib.Checksums.Adler32_State;
+   begin
+      CryptoLib.Checksums.Adler32_Reset (State);
+      for B of Input loop
+         CryptoLib.Checksums.Adler32_Update (State, Ada.Streams.Stream_Element (B));
+      end loop;
+      return CryptoLib.Checksums.Adler32_Value (State);
+   end Expected_Adler;
+
    procedure Assert_Roundtrip
      (Input   : Zlib.Byte_Array;
       Message : String;
@@ -86,7 +99,7 @@ package body Zlib_Deflate_Dynamic_Tests is
         (((Compressed (Compressed'First + 2) and 2#0000_0001#) /= 0) = First_Block_Final,
          Message & ": first Deflate block final flag");
       Assert
-        (Footer_Value (Compressed) = Zlib.Checksums.Adler32 (Input),
+        (Footer_Value (Compressed) = Expected_Adler (Input),
          Message & ": Adler-32 footer must match input");
    end Assert_Roundtrip;
 

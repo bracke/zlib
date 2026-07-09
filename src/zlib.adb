@@ -1,4 +1,3 @@
-with Ada.Calendar;
 with Ada.Containers.Vectors;
 with Ada.Directories;
 with Ada.Streams; use Ada.Streams;
@@ -7,22 +6,46 @@ with Ada.Unchecked_Deallocation;
 with Ada.Containers; use Ada.Containers;
 with Interfaces.C;
 with System.Address_To_Access_Conversions;
-with GNAT.OS_Lib;
 
-with Zlib.Checksums;
-with Zlib.Bit_Writer;
+with CryptoLib.Checksums;
 with Zlib.Block_Chooser; use Zlib.Block_Chooser;
-with Zlib.CRC32_Internal;
 with Zlib.Fixed_Compress;
 with Zlib.Deflate_Tables;
 with Zlib.Huffman_Builder;
 with Zlib.LZ77_Matcher;
+with Zlib.LZMA_Core;
+with Zlib.LZMA2_Decoder;
+with Zlib.LZMA2_Encoder;
+with Zlib.LZMA_Decoder;
+with Zlib.LZMA_Encoder;
+with Zlib.LZMA_Encoder_Selection;
+with Zlib.LZMA_Properties;
+with Zlib.LZMA_Raw;
 with Zlib.Stream_Bits;
 with Zlib.Stream_Inflate;
 with Zlib.Sliding_Window;
+with Zlib.Archive_Listing;
+with Zlib.Archive_Directory_Extraction;
+with Zlib.Seven_Zip_BCJ2_Writing;
+with Zlib.Seven_Zip_Codec_Packing;
+with Zlib.Seven_Zip_Codec_Writing;
 with Zlib.Seven_Zip_Filters;
+with Zlib.Seven_Zip_Container;
+with Zlib.Seven_Zip_Encrypted_Writing;
+with Zlib.Seven_Zip_File_Extraction;
+with Zlib.Seven_Zip_File_Writing;
+with Zlib.Seven_Zip_Filtered_Writing;
+with Zlib.Seven_Zip_Folder_Decoding;
+with Zlib.Seven_Zip_Header_Encryption;
+with Zlib.Seven_Zip_Header_Reading;
+with Zlib.Seven_Zip_Listing;
+with Zlib.Seven_Zip_Volumes;
 with Zlib.PPMd7;
 with Zlib.Seven_Zip_AES;
+with Zlib.Seven_Zip_Methods; use Zlib.Seven_Zip_Methods;
+with Zlib.Seven_Zip_Numbers;
+with Zlib.Seven_Zip_Paths;
+with Zlib.Seven_Zip_Properties;
 
 package body Zlib is
    use type Interfaces.Unsigned_16;
@@ -30,21 +53,13 @@ package body Zlib is
    use type Interfaces.Unsigned_64;
    use type Interfaces.C.int;
    use type Interfaces.C.unsigned;
-   use type Ada.Calendar.Time;
-   use type Ada.Directories.File_Kind;
    use type System.Address;
-   use type GNAT.OS_Lib.OS_Time;
 
    pragma Linker_Options ("-lbz2");
    pragma Linker_Options ("-lzstd");
 
    package SIO renames Ada.Streams.Stream_IO;
    package US renames Ada.Strings.Unbounded;
-
-   --  Active 7z password for AES-encrypted folders, set by the password-aware
-   --  Extract_Seven_Zip overload just before extraction (the deep extractor
-   --  call chain makes threading a parameter impractical).
-   Active_Seven_Zip_Password : US.Unbounded_String := US.Null_Unbounded_String;
 
    function BZ2_bzBuffToBuffCompress
      (Dest          : System.Address;
@@ -142,7 +157,9 @@ package body Zlib is
        (Object => Zlib.Stream_Inflate.Decoder,
         Name   => Decoder_Addresses.Object_Pointer);
 
-   function Contains_NUL (Text : String) return Boolean is
+   function Contains_NUL (Text : String) return Boolean
+     with SPARK_Mode => On
+   is
    begin
       for Ch of Text loop
          if Character'Pos (Ch) = 0 then
@@ -152,50 +169,51 @@ package body Zlib is
       return False;
    end Contains_NUL;
 
-   function Adler32 (Input : Byte_Array) return Interfaces.Unsigned_32 is
+   function Compute_Adler32 (Input : Byte_Array) return Interfaces.Unsigned_32 is
+      State : CryptoLib.Checksums.Adler32_State;
    begin
-      return Zlib.Checksums.Adler32 (Input);
-   end Adler32;
-
-   function CRC32 (Input : Byte_Array) return Interfaces.Unsigned_32 is
-      State : CRC32_State;
-   begin
-      CRC32_Reset (State);
-
-      for I in Input'Range loop
-         CRC32_Update (State, Ada.Streams.Stream_Element (Input (I)));
+      CryptoLib.Checksums.Adler32_Reset (State);
+      for B of Input loop
+         CryptoLib.Checksums.Adler32_Update (State, Ada.Streams.Stream_Element (B));
       end loop;
+      return CryptoLib.Checksums.Adler32_Value (State);
+   end Compute_Adler32;
 
-      return CRC32_Value (State);
-   end CRC32;
-
-   procedure CRC32_Reset (State : out CRC32_State) is
+   function Compute_CRC32 (Input : Byte_Array) return Interfaces.Unsigned_32 is
+      State : CryptoLib.Checksums.CRC32_State;
    begin
-      State.CRC := 16#FFFF_FFFF#;
-   end CRC32_Reset;
-
-   procedure CRC32_Update
-     (State : in out CRC32_State;
-      B     : Ada.Streams.Stream_Element)
-   is
-   begin
-      Zlib.CRC32_Internal.Update_Raw (State.CRC, B);
-   end CRC32_Update;
-
-   procedure CRC32_Update
-     (State : in out CRC32_State;
-      Data  : Ada.Streams.Stream_Element_Array)
-   is
-   begin
-      for I in Data'Range loop
-         CRC32_Update (State, Data (I));
+      CryptoLib.Checksums.CRC32_Reset (State);
+      for B of Input loop
+         CryptoLib.Checksums.CRC32_Update (State, Ada.Streams.Stream_Element (B));
       end loop;
-   end CRC32_Update;
+      return CryptoLib.Checksums.CRC32_Value (State);
+   end Compute_CRC32;
 
-   function CRC32_Value (State : CRC32_State) return Interfaces.Unsigned_32 is
+   function Saturating_Compression_Bound
+     (Input_Length : Natural;
+      Wrapper_Size : Natural) return Natural
+     with SPARK_Mode => On
+   is
+      Blocks : constant Natural :=
+        (if Input_Length = 0
+         then 1
+         else Input_Length / Max_Compress_Block_Size
+           + (if Input_Length mod Max_Compress_Block_Size = 0 then 0 else 1));
    begin
-      return State.CRC xor 16#FFFF_FFFF#;
-   end CRC32_Value;
+      if Input_Length > (Natural'Last - Wrapper_Size) / 2 then
+         return Natural'Last;
+      end if;
+
+      declare
+         Doubled : constant Natural := Input_Length * 2;
+      begin
+         if Blocks > (Natural'Last - Wrapper_Size - Doubled) / 512 then
+            return Natural'Last;
+         end if;
+
+         return Doubled + Blocks * 512 + Wrapper_Size;
+      end;
+   end Saturating_Compression_Bound;
 
    function Looks_Like_Zlib_Header (Input : Byte_Array) return Boolean
      with SPARK_Mode => On
@@ -290,19 +308,25 @@ package body Zlib is
    end Set_Comment;
 
    procedure Set_MTime
-     (Metadata : in out GZip_Metadata; MTime : Interfaces.Unsigned_32) is
+     (Metadata : in out GZip_Metadata; MTime : Interfaces.Unsigned_32)
+     with SPARK_Mode => On
+   is
    begin
       Metadata.Has_MTime := True;
       Metadata.MTime := MTime;
    end Set_MTime;
 
-   procedure Set_OS (Metadata : in out GZip_Metadata; OS : Byte) is
+   procedure Set_OS (Metadata : in out GZip_Metadata; OS : Byte)
+     with SPARK_Mode => On
+   is
    begin
       Metadata.Has_OS := True;
       Metadata.OS := OS;
    end Set_OS;
 
-   procedure Set_XFL (Metadata : in out GZip_Metadata; XFL : Byte) is
+   procedure Set_XFL (Metadata : in out GZip_Metadata; XFL : Byte)
+     with SPARK_Mode => On
+   is
    begin
       Metadata.Has_XFL := True;
       Metadata.XFL := XFL;
@@ -327,7 +351,9 @@ package body Zlib is
    end Set_Extra;
 
    procedure Set_Header_CRC
-     (Metadata : in out GZip_Metadata; Enabled : Boolean) is
+     (Metadata : in out GZip_Metadata; Enabled : Boolean)
+     with SPARK_Mode => On
+   is
    begin
       Metadata.Header_CRC := Enabled;
    end Set_Header_CRC;
@@ -367,7 +393,9 @@ package body Zlib is
       return True;
    end Stored_Raw_Deflate_Size;
 
-   function Has_Metadata (Metadata : GZip_Metadata) return Boolean is
+   function Has_Metadata (Metadata : GZip_Metadata) return Boolean
+     with SPARK_Mode => On
+   is
    begin
       return
         Metadata.Has_Name
@@ -427,7 +455,9 @@ package body Zlib is
 
    function Before_First
      (Data : Ada.Streams.Stream_Element_Array)
-      return Ada.Streams.Stream_Element_Offset is
+      return Ada.Streams.Stream_Element_Offset
+     with SPARK_Mode => On
+   is
    begin
       if Data'Length = 0 then
          return Data'First;
@@ -439,6 +469,7 @@ package body Zlib is
    end Before_First;
 
    function Mode_For_Level (Level : Compression_Level) return Compression_Mode
+     with SPARK_Mode => On
    is
    begin
       if Level = 0 then
@@ -582,11 +613,13 @@ package body Zlib is
          raise Status_Error;
       end if;
 
-      Filter.Dictionary_ID := Zlib.Checksums.Adler32 (Dictionary);
+      Filter.Dictionary_ID := Compute_Adler32 (Dictionary);
       Filter.Dictionary_Set := True;
    end Deflate_Set_Dictionary;
 
-   function Is_Open (Filter : Compression_Filter_Type) return Boolean is
+   function Is_Open (Filter : Compression_Filter_Type) return Boolean
+     with SPARK_Mode => On
+   is
    begin
       return
         Filter.State = Compression_Open
@@ -595,7 +628,9 @@ package body Zlib is
    end Is_Open;
 
    function Compression_Mode_Supported
-     (Filter : Compression_Filter_Type) return Boolean is
+     (Filter : Compression_Filter_Type) return Boolean
+     with SPARK_Mode => On
+   is
    begin
       if Filter.Header = Raw_Deflate then
          return
@@ -617,6 +652,7 @@ package body Zlib is
    end Compression_Mode_Supported;
 
    procedure Mark_Compression_Failed (Filter : in out Compression_Filter_Type)
+     with SPARK_Mode => On
    is
    begin
       Filter.State := Compression_Failed;
@@ -637,7 +673,7 @@ package body Zlib is
       Mod_Adler : constant Interfaces.Unsigned_32 := 65_521;
    begin
       if Filter.Header = Zlib.GZip then
-         Zlib.CRC32_Internal.Update_Raw (Filter.CRC, B);
+         CryptoLib.Checksums.CRC32_Update_Raw (Filter.CRC, B);
          Filter.ISIZE := Filter.ISIZE + 1;
       elsif Filter.Header = Zlib.Raw_Deflate then
          null;
@@ -649,13 +685,17 @@ package body Zlib is
    end Update_Compression_Checksum;
 
    function Compression_CRC32
-     (Filter : Compression_Filter_Type) return Interfaces.Unsigned_32 is
+     (Filter : Compression_Filter_Type) return Interfaces.Unsigned_32
+     with SPARK_Mode => On
+   is
    begin
       return Filter.CRC xor 16#FFFF_FFFF#;
    end Compression_CRC32;
 
    function Compression_Adler
-     (Filter : Compression_Filter_Type) return Interfaces.Unsigned_32 is
+     (Filter : Compression_Filter_Type) return Interfaces.Unsigned_32
+     with SPARK_Mode => On
+   is
    begin
       return Interfaces.Shift_Left (Filter.Adler_B, 16) or Filter.Adler_A;
    end Compression_Adler;
@@ -680,13 +720,17 @@ package body Zlib is
 
    function Compression_Output_Full
      (Out_Data : Ada.Streams.Stream_Element_Array;
-      Out_Last : Ada.Streams.Stream_Element_Offset) return Boolean is
+      Out_Last : Ada.Streams.Stream_Element_Offset) return Boolean
+     with SPARK_Mode => On
+   is
    begin
       return Out_Data'Length > 0 and then Out_Last = Out_Data'Last;
    end Compression_Output_Full;
 
    function Effective_Compression_Mode
-     (Filter : Compression_Filter_Type) return Compression_Mode is
+     (Filter : Compression_Filter_Type) return Compression_Mode
+     with SPARK_Mode => On
+   is
    begin
       if Filter.Mode = Auto then
          --  Streaming Auto collects a block first; Start_Auto_Block_Emission
@@ -699,13 +743,17 @@ package body Zlib is
    end Effective_Compression_Mode;
 
    function Using_Fixed_Compression
-     (Filter : Compression_Filter_Type) return Boolean is
+     (Filter : Compression_Filter_Type) return Boolean
+     with SPARK_Mode => On
+   is
    begin
       return Effective_Compression_Mode (Filter) = Fixed;
    end Using_Fixed_Compression;
 
    function Using_Dynamic_Compression
-     (Filter : Compression_Filter_Type) return Boolean is
+     (Filter : Compression_Filter_Type) return Boolean
+     with SPARK_Mode => On
+   is
    begin
       return Effective_Compression_Mode (Filter) = Dynamic;
    end Using_Dynamic_Compression;
@@ -772,7 +820,9 @@ package body Zlib is
       end loop;
    end Append_Dynamic_Bits;
 
-   function Reverse_Bits (Value : Natural; Count : Natural) return Natural is
+   function Reverse_Bits (Value : Natural; Count : Natural) return Natural
+     with SPARK_Mode => On
+   is
       Work   : Natural := Value;
       Result : Natural := 0;
    begin
@@ -827,7 +877,9 @@ package body Zlib is
       Append_Dynamic_Bits (Filter, Codes (Symbol), Lengths (Symbol));
    end Append_Dynamic_Code;
 
-   function Length_Symbol_For (Length : Natural) return Natural is
+   function Length_Symbol_For (Length : Natural) return Natural
+     with SPARK_Mode => On
+   is
    begin
       if Length = Zlib.LZ77_Matcher.Max_Match_Length then
          return 285;
@@ -847,7 +899,9 @@ package body Zlib is
       return 285;
    end Length_Symbol_For;
 
-   function Distance_Symbol_For (Distance : Natural) return Natural is
+   function Distance_Symbol_For (Distance : Natural) return Natural
+     with SPARK_Mode => On
+   is
    begin
       for Symbol in Zlib.Deflate_Tables.Distance_Symbol loop
          if Distance >= Zlib.Deflate_Tables.Distance_Base (Symbol)
@@ -1378,7 +1432,9 @@ package body Zlib is
    end Flush_Fixed_Final_Byte;
 
    function First_Collecting_State
-     (Filter : Compression_Filter_Type) return Stored_Compress_State is
+     (Filter : Compression_Filter_Type) return Stored_Compress_State
+     with SPARK_Mode => On
+   is
    begin
       if Using_Dynamic_Compression (Filter) then
          return Dynamic_Collecting_Block;
@@ -1390,7 +1446,9 @@ package body Zlib is
    end First_Collecting_State;
 
    function Is_Compression_Collecting
-     (Filter : Compression_Filter_Type) return Boolean is
+     (Filter : Compression_Filter_Type) return Boolean
+     with SPARK_Mode => On
+   is
    begin
       return
         Filter.Stored_Next = Collecting_Block
@@ -1399,7 +1457,9 @@ package body Zlib is
    end Is_Compression_Collecting;
 
    function Trailer_Start_State
-     (Filter : Compression_Filter_Type) return Stored_Compress_State is
+     (Filter : Compression_Filter_Type) return Stored_Compress_State
+     with SPARK_Mode => On
+   is
    begin
       if Filter.Header = Zlib.GZip then
          return Emit_GZip_CRC_0;
@@ -1412,6 +1472,7 @@ package body Zlib is
 
    function GZip_FLG
      (Metadata : GZip_Metadata) return Ada.Streams.Stream_Element
+     with SPARK_Mode => On
    is
       Result : Ada.Streams.Stream_Element := 0;
    begin
@@ -1437,11 +1498,13 @@ package body Zlib is
       B        : Ada.Streams.Stream_Element) is
    begin
       Put_Compressed_Byte (Out_Data, Out_Last, B);
-      Zlib.CRC32_Internal.Update_Raw (Filter.GZip_Header_CRC, B);
+      CryptoLib.Checksums.CRC32_Update_Raw (Filter.GZip_Header_CRC, B);
    end Put_GZip_Header_Byte;
 
    function GZip_Header_CRC16
-     (Filter : Compression_Filter_Type) return Interfaces.Unsigned_32 is
+     (Filter : Compression_Filter_Type) return Interfaces.Unsigned_32
+     with SPARK_Mode => On
+   is
    begin
       return (Filter.GZip_Header_CRC xor 16#FFFF_FFFF#) and 16#FFFF#;
    end GZip_Header_CRC16;
@@ -2232,7 +2295,9 @@ package body Zlib is
    end Compress_Flush;
 
    function Compress_Stream_End
-     (Filter : Compression_Filter_Type) return Boolean is
+     (Filter : Compression_Filter_Type) return Boolean
+     with SPARK_Mode => On
+   is
    begin
       return
         Filter.State = Compression_Ended and then Filter.Stored_Next = Done;
@@ -2307,7 +2372,9 @@ package body Zlib is
 
    function Produced
      (Data : Ada.Streams.Stream_Element_Array;
-      Last : Ada.Streams.Stream_Element_Offset) return Natural is
+      Last : Ada.Streams.Stream_Element_Offset) return Natural
+     with SPARK_Mode => On
+   is
    begin
       if Data'Length = 0 or else Last = Before_First (Data) then
          return 0;
@@ -2451,9 +2518,11 @@ package body Zlib is
 
    procedure Inflate_Init
      (Filter : in out Filter_Type; Header : Header_Type := Default) is
+      Mode : constant GZip_Member_Mode :=
+        (if Header = GZip or else Header = Default then Multi_Member else Single_Member);
    begin
       Inflate_Init
-        (Filter => Filter, Header => Header, GZip_Mode => Single_Member);
+        (Filter => Filter, Header => Header, GZip_Mode => Mode);
    end Inflate_Init;
 
    procedure Inflate_Init
@@ -2505,10 +2574,12 @@ package body Zlib is
       end;
 
       Zlib.Stream_Inflate.Set_Dictionary_ID
-        (Decoder_State (Filter).all, Zlib.Checksums.Adler32 (Dictionary));
+        (Decoder_State (Filter).all, Compute_Adler32 (Dictionary));
    end Inflate_Set_Dictionary;
 
-   function Is_Open (Filter : Filter_Type) return Boolean is
+   function Is_Open (Filter : Filter_Type) return Boolean
+     with SPARK_Mode => On
+   is
    begin
       return
         Filter.State = Open
@@ -2518,7 +2589,9 @@ package body Zlib is
 
    procedure Mark_Failed
      (Filter : in out Filter_Type;
-      Status : Status_Code := Unexpected_End_Of_Input) is
+      Status : Status_Code := Unexpected_End_Of_Input)
+     with SPARK_Mode => On
+   is
    begin
       Filter.Last_Status := Status;
       Filter.State := Failed;
@@ -2540,7 +2613,7 @@ package body Zlib is
    begin
       Action := Return_To_Caller;
 
-      if Filter.Header /= Zlib.GZip then
+      if Zlib.Stream_Inflate.Active_Header (Decoder_State (Filter).all) /= Zlib.GZip then
          Filter.State := Ended;
          Action := Logical_End;
          return;
@@ -3127,25 +3200,25 @@ package body Zlib is
    function Inflate
      (Input : Byte_Array; Status : out Status_Code) return Byte_Array is
    begin
-      declare
-         Empty : constant Byte_Array (1 .. 0) := [others => 0];
-      begin
-         return
-           Inflate_Internal
-             (Input, Zlib_Header, Single_Member, Status, Empty, False);
-      end;
+      return Inflate_Auto (Input, Status);
    end Inflate;
 
    function Inflate_With_Header
      (Input : Byte_Array; Header : Header_Type; Status : out Status_Code)
       return Byte_Array is
    begin
+      if Header = Default then
+         return Inflate_Auto (Input, Status);
+      end if;
+
       declare
          Empty : constant Byte_Array (1 .. 0) := [others => 0];
+         Mode  : constant GZip_Member_Mode :=
+           (if Header = GZip then Multi_Member else Single_Member);
       begin
          return
            Inflate_Internal
-             (Input, Header, Single_Member, Status, Empty, False);
+             (Input, Header, Mode, Status, Empty, False);
       end;
    end Inflate_With_Header;
 
@@ -3194,6 +3267,16 @@ package body Zlib is
       GZip_Mode : GZip_Member_Mode;
       Status    : out Status_Code) return Byte_Array is
    begin
+      if Header = Default then
+         if Looks_Like_Zlib_Header (Input) then
+            return Inflate_With_Header (Input, Zlib_Header, GZip_Mode, Status);
+         elsif Looks_Like_GZip_Header (Input) then
+            return Inflate_With_Header (Input, GZip, GZip_Mode, Status);
+         else
+            return Inflate_With_Header (Input, Raw_Deflate, GZip_Mode, Status);
+         end if;
+      end if;
+
       declare
          Empty : constant Byte_Array (1 .. 0) := [others => 0];
       begin
@@ -3320,7 +3403,9 @@ package body Zlib is
    end Write_File;
 
    function Is_ZIP_External_Method
-     (Method : Interfaces.Unsigned_16) return Boolean is
+     (Method : Interfaces.Unsigned_16) return Boolean
+     with SPARK_Mode => On
+   is
    begin
       return Method = 12
         or else Method = 14
@@ -3330,7 +3415,9 @@ package body Zlib is
    end Is_ZIP_External_Method;
 
    function ZIP_External_Method_Name
-     (Method : Interfaces.Unsigned_16) return String is
+     (Method : Interfaces.Unsigned_16) return String
+     with SPARK_Mode => On
+   is
    begin
       case Method is
          when 12 =>
@@ -3628,7 +3715,7 @@ package body Zlib is
                                     Plain (I) := Output (I);
                                  end loop;
 
-                                 if Zlib.CRC32 (Plain) /= Crc then
+                                 if Compute_CRC32 (Plain) /= Crc then
                                     Status := Invalid_Checksum;
                                     return Empty;
                                  end if;
@@ -3816,7 +3903,7 @@ package body Zlib is
                                     Plain (I) := Output (I);
                                  end loop;
 
-                                 if Zlib.CRC32 (Plain) /= Crc then
+                                 if Compute_CRC32 (Plain) /= Crc then
                                     Status := Invalid_Checksum;
                                     return Empty;
                                  end if;
@@ -3845,1563 +3932,18 @@ package body Zlib is
          return Empty;
    end Extract_ZIP_Native_Zstd_Entry;
 
-   LZMA_Bit_Model_Total : constant Interfaces.Unsigned_32 := 2 ** 11;
-   LZMA_Move_Bits       : constant Natural := 5;
-   LZMA_Top_Value       : constant Interfaces.Unsigned_32 := 2 ** 24;
-   LZMA_Num_States      : constant Natural := 12;
-   LZMA_Literal_Probs   : constant Natural := 16#300#;
-   LZMA_Num_Pos_States_Max : constant Natural := 16;
-   LZMA_Num_Len_To_Pos_States : constant Natural := 4;
-   LZMA_Len_Low_Symbols : constant Natural := 8;
-   LZMA_Len_Mid_Symbols : constant Natural := 8;
-   LZMA_Len_High_Symbols : constant Natural := 256;
-   LZMA_Min_Match_Length : constant Natural := 2;
-   LZMA_Default_LC      : constant Natural := 3;
-   LZMA_Default_LP      : constant Natural := 0;
-   LZMA_Default_PB      : constant Natural := 2;
-   LZMA_Default_Props   : constant Byte :=
-     Byte ((LZMA_Default_PB * 5 + LZMA_Default_LP) * 9 + LZMA_Default_LC);
-   LZMA_Default_Dict    : constant Interfaces.Unsigned_32 := 16#0080_0000#;
-   LZMA_Start_Pos_Model_Index : constant Natural := 4;
-   LZMA_End_Pos_Model_Index : constant Natural := 14;
-   LZMA_Num_Full_Distances : constant Natural := 2 ** (LZMA_End_Pos_Model_Index / 2);
-   LZMA_Num_Align_Bits : constant Natural := 4;
-   LZMA_Align_Table_Size : constant Natural := 2 ** LZMA_Num_Align_Bits;
+   LZMA_Default_Props   : constant Byte := Zlib.LZMA_Core.Default_Props;
+   LZMA_Default_Dict    : constant Interfaces.Unsigned_32 := Zlib.LZMA_Core.Default_Dict;
 
-   type LZMA_Prob_Array is array (Natural range <>) of Interfaces.Unsigned_32;
+   function Valid_LZMA_Props (Props : Byte) return Boolean
+     renames Zlib.LZMA_Properties.Valid_Props;
 
-   function Valid_LZMA_Props (Props : Byte) return Boolean is
-      Props_Value : constant Natural := Natural (Props);
-      LCLP        : constant Natural := Props_Value mod 9;
-      Rest        : constant Natural := Props_Value / 9;
-      LC          : constant Natural := LCLP;
-      LP          : constant Natural := Rest mod 5;
-      PB          : constant Natural := Rest / 5;
-   begin
-      return LC <= 8 and then LP <= 4 and then PB <= 4 and then LC + LP <= 4;
-   end Valid_LZMA_Props;
+   function LZMA_Encode_Selected_Impl is new
+     Zlib.LZMA_Encoder_Selection (Zlib.LZMA_Encoder.Encode_Bounded);
 
-   type LZMA_Len_Encoder is record
-      Choice : LZMA_Prob_Array (0 .. 1);
-      Low    : LZMA_Prob_Array
-        (0 .. LZMA_Num_Pos_States_Max * LZMA_Len_Low_Symbols - 1);
-      Mid    : LZMA_Prob_Array
-        (0 .. LZMA_Num_Pos_States_Max * LZMA_Len_Mid_Symbols - 1);
-      High   : LZMA_Prob_Array (0 .. LZMA_Len_High_Symbols - 1);
-   end record;
-
-   procedure LZMA_Init_Probs (Probs : out LZMA_Prob_Array) is
-   begin
-      for P of Probs loop
-         P := LZMA_Bit_Model_Total / 2;
-      end loop;
-   end LZMA_Init_Probs;
-
-   function LZMA_Literal_Context
-     (LC        : Natural;
-      LP        : Natural;
-      Position  : Natural;
-      Prev_Byte : Byte) return Natural
-   is
-      Pos_Part : constant Natural :=
-        (if LP = 0 then 0 else (Position mod (2 ** LP)) * (2 ** LC));
-      Prev_Part : constant Natural :=
-        (if LC = 0 then 0 else Natural (Prev_Byte) / (2 ** (8 - LC)));
-   begin
-      return Pos_Part + Prev_Part;
-   end LZMA_Literal_Context;
-
-   function LZMA_Literal_State_After (State : Natural) return Natural is
-   begin
-      if State < 4 then
-         return 0;
-      elsif State < 10 then
-         return State - 3;
-      else
-         return State - 6;
-      end if;
-   end LZMA_Literal_State_After;
-
-   function LZMA_Match_State_After (State : Natural) return Natural is
-   begin
-      if State < 7 then
-         return 7;
-      else
-         return 10;
-      end if;
-   end LZMA_Match_State_After;
-
-   function LZMA_Rep_State_After (State : Natural) return Natural is
-   begin
-      if State < 7 then
-         return 8;
-      else
-         return 11;
-      end if;
-   end LZMA_Rep_State_After;
-
-   function LZMA_Short_Rep_State_After (State : Natural) return Natural is
-   begin
-      if State < 7 then
-         return 9;
-      else
-         return 11;
-      end if;
-   end LZMA_Short_Rep_State_After;
-
-   type LZMA_Range_Encoder is record
-      Low        : Interfaces.Unsigned_64 := 0;
-      Range_Code : Interfaces.Unsigned_32 := Interfaces.Unsigned_32'Last;
-      Cache      : Interfaces.Unsigned_32 := 0;
-      Cache_Size : Natural := 1;
-      Writer     : Zlib.Bit_Writer.Writer;
-   end record;
-
-   procedure LZMA_Encoder_Shift_Low (E : in out LZMA_Range_Encoder) is
-      Low_Hi : constant Interfaces.Unsigned_32 :=
-        Interfaces.Unsigned_32 (Interfaces.Shift_Right (E.Low, 32));
-      Temp   : Interfaces.Unsigned_32;
-   begin
-      if E.Low < 16#FF00_0000# or else Low_Hi /= 0 then
-         Temp := E.Cache;
-         loop
-            Zlib.Bit_Writer.Write_Byte_Aligned
-              (E.Writer, Byte ((Temp + Low_Hi) and 16#FF#));
-            E.Cache_Size := E.Cache_Size - 1;
-            exit when E.Cache_Size = 0;
-            Temp := 16#FF#;
-         end loop;
-         E.Cache :=
-           Interfaces.Unsigned_32 (Interfaces.Shift_Right (E.Low, 24) and 16#FF#);
-      end if;
-
-      E.Cache_Size := E.Cache_Size + 1;
-      E.Low := Interfaces.Shift_Left (E.Low and 16#00FF_FFFF#, 8);
-   end LZMA_Encoder_Shift_Low;
-
-   procedure LZMA_Encode_Bit
-     (E     : in out LZMA_Range_Encoder;
-      Prob  : in out Interfaces.Unsigned_32;
-      Bit   : Natural)
-   is
-      Bound : constant Interfaces.Unsigned_32 :=
-        Interfaces.Shift_Right (E.Range_Code, 11) * Prob;
-   begin
-      if Bit = 0 then
-         E.Range_Code := Bound;
-         Prob := Prob + Interfaces.Shift_Right (LZMA_Bit_Model_Total - Prob,
-                                                LZMA_Move_Bits);
-      else
-         E.Low :=
-           E.Low + Interfaces.Unsigned_64 (Bound);
-         E.Range_Code := E.Range_Code - Bound;
-         Prob := Prob - Interfaces.Shift_Right (Prob, LZMA_Move_Bits);
-      end if;
-
-      if E.Range_Code < LZMA_Top_Value then
-         E.Range_Code := Interfaces.Shift_Left (E.Range_Code, 8);
-         LZMA_Encoder_Shift_Low (E);
-      end if;
-   end LZMA_Encode_Bit;
-
-   procedure LZMA_Encode_Bit_Tree
-     (E       : in out LZMA_Range_Encoder;
-      Probs   : in out LZMA_Prob_Array;
-      Offset  : Natural;
-      Bits    : Natural;
-      Symbol  : Natural)
-   is
-      Node : Natural := 1;
-   begin
-      for Bit_Index in reverse 0 .. Bits - 1 loop
-         declare
-            Bit : constant Natural := (Symbol / (2 ** Bit_Index)) mod 2;
-         begin
-            LZMA_Encode_Bit (E, Probs (Offset + Node), Bit);
-            Node := Node * 2 + Bit;
-         end;
-      end loop;
-   end LZMA_Encode_Bit_Tree;
-
-   procedure LZMA_Encode_Reverse_Bit_Tree
-     (E       : in out LZMA_Range_Encoder;
-      Probs   : in out LZMA_Prob_Array;
-      Offset  : Integer;
-      Bits    : Natural;
-      Symbol  : Natural)
-   is
-      Node : Natural := 1;
-   begin
-      for Bit_Index in 0 .. Bits - 1 loop
-         declare
-            Bit : constant Natural := (Symbol / (2 ** Bit_Index)) mod 2;
-         begin
-            LZMA_Encode_Bit (E, Probs (Natural (Offset + Node)), Bit);
-            Node := Node * 2 + Bit;
-         end;
-      end loop;
-   end LZMA_Encode_Reverse_Bit_Tree;
-
-   procedure LZMA_Encode_Direct_Bits
-     (E      : in out LZMA_Range_Encoder;
-      Value  : Natural;
-      Bits   : Natural)
-   is
-   begin
-      if Bits = 0 then
-         return;
-      end if;
-
-      for Bit_Index in reverse 0 .. Bits - 1 loop
-         declare
-            Bit : constant Natural := (Value / (2 ** Bit_Index)) mod 2;
-         begin
-            E.Range_Code := Interfaces.Shift_Right (E.Range_Code, 1);
-            if Bit /= 0 then
-               E.Low := E.Low + Interfaces.Unsigned_64 (E.Range_Code);
-            end if;
-
-            if E.Range_Code < LZMA_Top_Value then
-               E.Range_Code := Interfaces.Shift_Left (E.Range_Code, 8);
-               LZMA_Encoder_Shift_Low (E);
-            end if;
-         end;
-      end loop;
-   end LZMA_Encode_Direct_Bits;
-
-   function LZMA_Pos_Slot (Distance_Code : Natural) return Natural is
-   begin
-      if Distance_Code < LZMA_Start_Pos_Model_Index then
-         return Distance_Code;
-      end if;
-
-      for Slot in LZMA_Start_Pos_Model_Index .. 63 loop
-         declare
-            Footer_Bits : constant Natural := Slot / 2 - 1;
-            Base        : constant Natural :=
-              (2 + Slot mod 2) * (2 ** Footer_Bits);
-         begin
-            if Distance_Code < Base + 2 ** Footer_Bits then
-               return Slot;
-            end if;
-         end;
-      end loop;
-
-      return 63;
-   end LZMA_Pos_Slot;
-
-   procedure LZMA_Encode_Distance
-     (E             : in out LZMA_Range_Encoder;
-      Pos_Slot      : in out LZMA_Prob_Array;
-      Pos_Special   : in out LZMA_Prob_Array;
-      Pos_Align     : in out LZMA_Prob_Array;
-      Len           : Natural;
-      Distance      : Natural)
-   is
-      Distance_Code     : constant Natural := Distance - 1;
-      Pos_State_For_Len : constant Natural :=
-        Natural'Min (Len - LZMA_Min_Match_Length,
-                     LZMA_Num_Len_To_Pos_States - 1);
-      Slot              : constant Natural := LZMA_Pos_Slot (Distance_Code);
-   begin
-      LZMA_Encode_Bit_Tree
-        (E, Pos_Slot, Pos_State_For_Len * 64, 6, Slot);
-
-      if Slot >= LZMA_Start_Pos_Model_Index then
-         declare
-            Footer_Bits : constant Natural := Slot / 2 - 1;
-            Base        : constant Natural :=
-              (2 + Slot mod 2) * (2 ** Footer_Bits);
-            Reduced     : constant Natural := Distance_Code - Base;
-            Offset      : constant Integer := Integer (Base) - Integer (Slot) - 1;
-         begin
-            if Slot < LZMA_End_Pos_Model_Index then
-               LZMA_Encode_Reverse_Bit_Tree
-                 (E, Pos_Special, Offset, Footer_Bits, Reduced);
-            else
-               LZMA_Encode_Direct_Bits
-                 (E, Reduced / LZMA_Align_Table_Size,
-                  Footer_Bits - LZMA_Num_Align_Bits);
-               LZMA_Encode_Reverse_Bit_Tree
-                 (E, Pos_Align, 0, LZMA_Num_Align_Bits,
-                  Reduced mod LZMA_Align_Table_Size);
-            end if;
-         end;
-      end if;
-   end LZMA_Encode_Distance;
-
-   procedure LZMA_Init_Len (Len : out LZMA_Len_Encoder) is
-   begin
-      LZMA_Init_Probs (Len.Choice);
-      LZMA_Init_Probs (Len.Low);
-      LZMA_Init_Probs (Len.Mid);
-      LZMA_Init_Probs (Len.High);
-   end LZMA_Init_Len;
-
-   procedure LZMA_Encode_Len
-     (E         : in out LZMA_Range_Encoder;
-      Len       : in out LZMA_Len_Encoder;
-      Pos_State : Natural;
-      Symbol    : Natural)
-   is
-   begin
-      if Symbol < LZMA_Len_Low_Symbols then
-         LZMA_Encode_Bit (E, Len.Choice (0), 0);
-         LZMA_Encode_Bit_Tree
-           (E, Len.Low, Pos_State * LZMA_Len_Low_Symbols, 3, Symbol);
-      elsif Symbol < LZMA_Len_Low_Symbols + LZMA_Len_Mid_Symbols then
-         LZMA_Encode_Bit (E, Len.Choice (0), 1);
-         LZMA_Encode_Bit (E, Len.Choice (1), 0);
-         LZMA_Encode_Bit_Tree
-           (E, Len.Mid, Pos_State * LZMA_Len_Mid_Symbols, 3,
-            Symbol - LZMA_Len_Low_Symbols);
-      else
-         LZMA_Encode_Bit (E, Len.Choice (0), 1);
-         LZMA_Encode_Bit (E, Len.Choice (1), 1);
-         LZMA_Encode_Bit_Tree
-           (E, Len.High, 0, 8,
-            Symbol - LZMA_Len_Low_Symbols - LZMA_Len_Mid_Symbols);
-      end if;
-   end LZMA_Encode_Len;
-
-   --  Bit-price table (LZMA SDK method): Prob_Prices (Prob >> 4) gives the
-   --  cost, in 1/16-bit units, of coding a bit whose model probability of the
-   --  coded symbol is Prob/2048. Used by the optimal parser to compare the
-   --  cost of literals, matches, and repeated-distance matches.
-   type Price_Table is array (0 .. 127) of Natural;
-
-   function Compute_Prob_Prices return Price_Table is
-      T : Price_Table;
-   begin
-      for I in 0 .. 127 loop
-         declare
-            W         : Interfaces.Unsigned_32 := Interfaces.Unsigned_32 (I) * 16;
-            Bit_Count : Natural := 0;
-         begin
-            for J in 1 .. 4 loop
-               pragma Unreferenced (J);
-               W := W * W;
-               Bit_Count := Bit_Count * 2;
-               while W >= 2 ** 16 loop
-                  W := Interfaces.Shift_Right (W, 1);
-                  Bit_Count := Bit_Count + 1;
-               end loop;
-            end loop;
-            T (I) := 176 - 15 - Bit_Count;
-         end;
-      end loop;
-      return T;
-   end Compute_Prob_Prices;
-
-   Prob_Prices : constant Price_Table := Compute_Prob_Prices;
-
-   function Bit_Price
-     (Prob : Interfaces.Unsigned_32; Bit : Natural) return Natural
-   is
-     (Prob_Prices
-        (Natural
-           (Interfaces.Shift_Right
-              ((if Bit = 0 then Prob else Prob xor 2047), 4))));
-
-   function LZMA_Encode_Bounded (Plain : Byte_Array) return Byte_Array is
-      E             : LZMA_Range_Encoder;
-      Pos_States    : constant Natural := 2 ** LZMA_Default_PB;
-      Literal_Ctxs  : constant Natural := 2 ** (LZMA_Default_LC + LZMA_Default_LP);
-      Is_Match      : LZMA_Prob_Array (0 .. LZMA_Num_States * LZMA_Num_Pos_States_Max - 1);
-      Is_Rep        : LZMA_Prob_Array (0 .. LZMA_Num_States - 1);
-      Is_Rep_G0     : LZMA_Prob_Array (0 .. LZMA_Num_States - 1);
-      Is_Rep_G1     : LZMA_Prob_Array (0 .. LZMA_Num_States - 1);
-      Is_Rep_G2     : LZMA_Prob_Array (0 .. LZMA_Num_States - 1);
-      Is_Rep0_Long  : LZMA_Prob_Array (0 .. LZMA_Num_States * LZMA_Num_Pos_States_Max - 1);
-      Match_Len     : LZMA_Len_Encoder;
-      Rep_Len       : LZMA_Len_Encoder;
-      Pos_Slot      : LZMA_Prob_Array
-        (0 .. LZMA_Num_Len_To_Pos_States * 64 - 1);
-      Pos_Special   : LZMA_Prob_Array
-        (0 .. LZMA_Num_Full_Distances - LZMA_End_Pos_Model_Index - 1);
-      Pos_Align     : LZMA_Prob_Array (0 .. LZMA_Align_Table_Size - 1);
-      Literals      : LZMA_Prob_Array (0 .. Literal_Ctxs * LZMA_Literal_Probs - 1);
-      State         : Natural := 0;
-      Prev          : Byte := 0;
-      Position      : Natural := 0;
-      In_Index      : Natural := Plain'First;
-      Rep0          : Natural := 0;
-      Rep1          : Natural := 0;
-      Rep2          : Natural := 0;
-      Rep3          : Natural := 0;
-
-      --  Hash-chain (HC3) match finder. Each position is hashed on its next
-      --  three bytes into Head/Chain; Find_Match walks the chain for the
-      --  nearest longest match (extending to the LZMA maximum of 273), so long
-      --  repeats compress to a single match. This replaces the previous
-      --  brute-force scan that was both O(n*dict) and capped matches at 17.
-      Max_Match : constant Natural := 273;
-      Nice_Len  : constant Natural := 128;
-      Max_Chain : constant Natural := 128;
-      Hash_Bits : constant Natural := 16;
-      Dict_Sz   : constant Natural := Natural (LZMA_Default_Dict);
-      type Pos_Table is array (Natural range <>) of Natural;
-      Head  : Pos_Table (0 .. 2 ** Hash_Bits - 1) := [others => 0];
-      Chain : Pos_Table (1 .. Natural'Max (Plain'Length, 1)) := [others => 0];
-
-      function Hash3 (I : Natural) return Natural is
-         V : constant Interfaces.Unsigned_32 :=
-           Interfaces.Unsigned_32 (Plain (I))
-           or Interfaces.Shift_Left (Interfaces.Unsigned_32 (Plain (I + 1)), 8)
-           or Interfaces.Shift_Left
-                (Interfaces.Unsigned_32 (Plain (I + 2)), 16);
-      begin
-         return Natural
-           (Interfaces.Shift_Right (V * 16#9E37_79B1#, 32 - Hash_Bits));
-      end Hash3;
-
-      procedure Insert (I : Natural) is
-      begin
-         if I + 2 <= Plain'Last then
-            declare
-               H : constant Natural := Hash3 (I);
-               S : constant Natural := I - Plain'First + 1;
-            begin
-               Chain (S) := Head (H);
-               Head (H) := S;
-            end;
-         end if;
-      end Insert;
-
-      function Match_Length (I, D : Natural) return Natural is
-         L : Natural := 0;
-      begin
-         while I + L <= Plain'Last and then L < Max_Match
-           and then Plain (I + L) = Plain (I + L - D)
-         loop
-            L := L + 1;
-         end loop;
-         return L;
-      end Match_Length;
-
-      procedure Emit_Literal is
-         B         : constant Byte := Plain (In_Index);
-         Pos_State : constant Natural := Position mod Pos_States;
-         Context   : constant Natural :=
-           LZMA_Literal_Context
-             (LZMA_Default_LC, LZMA_Default_LP, Position, Prev);
-         Symbol    : Natural := 1;
-      begin
-         LZMA_Encode_Bit
-           (E, Is_Match (State * LZMA_Num_Pos_States_Max + Pos_State), 0);
-         if State >= 7 and then Rep0 > 0 and then Rep0 <= Position then
-            declare
-               Match_Byte : Natural := Natural (Plain (In_Index - Rep0));
-               Matched    : Boolean := True;
-            begin
-               for Bit_Index in reverse 0 .. 7 loop
-                  declare
-                     Bit : constant Natural :=
-                       (Natural (B) / (2 ** Bit_Index)) mod 2;
-                  begin
-                     if Matched then
-                        Match_Byte := Match_Byte * 2;
-                        declare
-                           Match_Bit_Literal : constant Natural :=
-                             ((Match_Byte / 16#100#) mod 2) * 16#100#;
-                        begin
-                           LZMA_Encode_Bit
-                             (E,
-                              Literals
-                                (Context * LZMA_Literal_Probs
-                                 + 16#100# + Match_Bit_Literal + Symbol),
-                              Bit);
-                           Symbol := Symbol * 2 + Bit;
-                           if Match_Bit_Literal /= Bit * 16#100# then
-                              Matched := False;
-                           end if;
-                        end;
-                     else
-                        LZMA_Encode_Bit
-                          (E,
-                           Literals (Context * LZMA_Literal_Probs + Symbol),
-                           Bit);
-                        Symbol := Symbol * 2 + Bit;
-                     end if;
-                  end;
-               end loop;
-            end;
-         else
-            for Bit_Index in reverse 0 .. 7 loop
-               declare
-                  Bit : constant Natural :=
-                    (Natural (B) / (2 ** Bit_Index)) mod 2;
-               begin
-                  LZMA_Encode_Bit
-                    (E, Literals (Context * LZMA_Literal_Probs + Symbol), Bit);
-                  Symbol := Symbol * 2 + Bit;
-               end;
-            end loop;
-         end if;
-         State := LZMA_Literal_State_After (State);
-         Prev := B;
-         Position := Position + 1;
-         In_Index := In_Index + 1;
-      end Emit_Literal;
-
-      ----------------------------------------------------------------------
-      --  Optimal parser: price-based shortest-path over each segment.
-      --  Pricing helpers mirror the encode routines exactly (in 1/16-bit
-      --  units); emission reuses the proven encoders, so a wrong price only
-      --  costs ratio, never correctness.
-      ----------------------------------------------------------------------
-
-      function Tree_Price
-        (Probs : LZMA_Prob_Array; Offset, Bits, Symbol : Natural) return Natural
-      is
-         Node : Natural := 1;
-         Pr   : Natural := 0;
-      begin
-         for Bit_Index in reverse 0 .. Bits - 1 loop
-            declare
-               Bit : constant Natural := (Symbol / (2 ** Bit_Index)) mod 2;
-            begin
-               Pr := Pr + Bit_Price (Probs (Offset + Node), Bit);
-               Node := Node * 2 + Bit;
-            end;
-         end loop;
-         return Pr;
-      end Tree_Price;
-
-      function Rev_Tree_Price
-        (Probs : LZMA_Prob_Array; Offset : Integer; Bits, Symbol : Natural)
-         return Natural
-      is
-         Node : Natural := 1;
-         Pr   : Natural := 0;
-      begin
-         for Bit_Index in 0 .. Bits - 1 loop
-            declare
-               Bit : constant Natural := (Symbol / (2 ** Bit_Index)) mod 2;
-            begin
-               Pr := Pr + Bit_Price (Probs (Natural (Offset + Node)), Bit);
-               Node := Node * 2 + Bit;
-            end;
-         end loop;
-         return Pr;
-      end Rev_Tree_Price;
-
-      function Len_Price_Of
-        (Len_Enc : LZMA_Len_Encoder; Pos_State, Symbol : Natural) return Natural
-      is
-      begin
-         if Symbol < LZMA_Len_Low_Symbols then
-            return Bit_Price (Len_Enc.Choice (0), 0)
-              + Tree_Price
-                  (Len_Enc.Low, Pos_State * LZMA_Len_Low_Symbols, 3, Symbol);
-         elsif Symbol < LZMA_Len_Low_Symbols + LZMA_Len_Mid_Symbols then
-            return Bit_Price (Len_Enc.Choice (0), 1)
-              + Bit_Price (Len_Enc.Choice (1), 0)
-              + Tree_Price
-                  (Len_Enc.Mid, Pos_State * LZMA_Len_Mid_Symbols, 3,
-                   Symbol - LZMA_Len_Low_Symbols);
-         else
-            return Bit_Price (Len_Enc.Choice (0), 1)
-              + Bit_Price (Len_Enc.Choice (1), 1)
-              + Tree_Price
-                  (Len_Enc.High, 0, 8,
-                   Symbol - LZMA_Len_Low_Symbols - LZMA_Len_Mid_Symbols);
-         end if;
-      end Len_Price_Of;
-
-      function Dist_Price (Len, Distance : Natural) return Natural is
-         Dcode : constant Natural := Distance - 1;
-         PSL   : constant Natural :=
-           Natural'Min (Len - LZMA_Min_Match_Length,
-                        LZMA_Num_Len_To_Pos_States - 1);
-         Slot  : constant Natural := LZMA_Pos_Slot (Dcode);
-         Pr    : Natural := Tree_Price (Pos_Slot, PSL * 64, 6, Slot);
-      begin
-         if Slot >= LZMA_Start_Pos_Model_Index then
-            declare
-               Footer  : constant Natural := Slot / 2 - 1;
-               Base    : constant Natural := (2 + Slot mod 2) * (2 ** Footer);
-               Reduced : constant Natural := Dcode - Base;
-            begin
-               if Slot < LZMA_End_Pos_Model_Index then
-                  Pr := Pr + Rev_Tree_Price
-                    (Pos_Special, Integer (Base) - Integer (Slot) - 1,
-                     Footer, Reduced);
-               else
-                  Pr := Pr + (Footer - LZMA_Num_Align_Bits) * 16
-                    + Rev_Tree_Price
-                        (Pos_Align, 0, LZMA_Num_Align_Bits,
-                         Reduced mod LZMA_Align_Table_Size);
-               end if;
-            end;
-         end if;
-         return Pr;
-      end Dist_Price;
-
-      function Lit_Price_At
-        (I : Natural; St : Natural; Rep0_D : Natural) return Natural
-      is
-         B       : constant Natural := Natural (Plain (I));
-         Prev_B  : constant Byte :=
-           (if I > Plain'First then Plain (I - 1) else 0);
-         Context : constant Natural :=
-           LZMA_Literal_Context
-             (LZMA_Default_LC, LZMA_Default_LP, I - Plain'First, Prev_B);
-         Symbol  : Natural := 1;
-         Pr      : Natural := 0;
-      begin
-         if St >= 7 and then Rep0_D > 0
-           and then I - Rep0_D >= Plain'First
-         then
-            declare
-               Match_Byte : Natural := Natural (Plain (I - Rep0_D));
-               Matched    : Boolean := True;
-            begin
-               for Bit_Index in reverse 0 .. 7 loop
-                  declare
-                     Bit : constant Natural := (B / (2 ** Bit_Index)) mod 2;
-                  begin
-                     if Matched then
-                        Match_Byte := Match_Byte * 2;
-                        declare
-                           MBL : constant Natural :=
-                             ((Match_Byte / 16#100#) mod 2) * 16#100#;
-                        begin
-                           Pr := Pr + Bit_Price
-                             (Literals
-                                (Context * LZMA_Literal_Probs
-                                 + 16#100# + MBL + Symbol), Bit);
-                           Symbol := Symbol * 2 + Bit;
-                           if MBL /= Bit * 16#100# then
-                              Matched := False;
-                           end if;
-                        end;
-                     else
-                        Pr := Pr + Bit_Price
-                          (Literals (Context * LZMA_Literal_Probs + Symbol), Bit);
-                        Symbol := Symbol * 2 + Bit;
-                     end if;
-                  end;
-               end loop;
-            end;
-         else
-            for Bit_Index in reverse 0 .. 7 loop
-               declare
-                  Bit : constant Natural := (B / (2 ** Bit_Index)) mod 2;
-               begin
-                  Pr := Pr + Bit_Price
-                    (Literals (Context * LZMA_Literal_Probs + Symbol), Bit);
-                  Symbol := Symbol * 2 + Bit;
-               end;
-            end loop;
-         end if;
-         return Pr;
-      end Lit_Price_At;
-
-      function Rep_Choice_Price
-        (St, Idx, Pos_State : Natural) return Natural is
-      begin
-         case Idx is
-            when 0 =>
-               return Bit_Price (Is_Rep_G0 (St), 0)
-                 + Bit_Price
-                     (Is_Rep0_Long (St * LZMA_Num_Pos_States_Max + Pos_State), 1);
-            when 1 =>
-               return Bit_Price (Is_Rep_G0 (St), 1)
-                 + Bit_Price (Is_Rep_G1 (St), 0);
-            when 2 =>
-               return Bit_Price (Is_Rep_G0 (St), 1)
-                 + Bit_Price (Is_Rep_G1 (St), 1)
-                 + Bit_Price (Is_Rep_G2 (St), 0);
-            when others =>
-               return Bit_Price (Is_Rep_G0 (St), 1)
-                 + Bit_Price (Is_Rep_G1 (St), 1)
-                 + Bit_Price (Is_Rep_G2 (St), 1);
-         end case;
-      end Rep_Choice_Price;
-
-      Max_Pairs : constant := 64;
-      type Len_Array is array (1 .. Max_Pairs) of Natural;
-
-      procedure Find_All_Matches
-        (I     : Natural;
-         Count : out Natural;
-         Lens  : out Len_Array;
-         Dists : out Len_Array)
-      is
-         I_Pos : constant Natural := I - Plain'First;
-         Cur   : Natural;
-         Depth : Natural := 0;
-         Best  : Natural := 0;
-      begin
-         Count := 0;
-         Lens  := [others => 0];
-         Dists := [others => 0];
-         if I + 2 > Plain'Last then
-            return;
-         end if;
-         Cur := Head (Hash3 (I));
-         while Cur /= 0 and then Depth < Max_Chain loop
-            declare
-               D : constant Natural := I_Pos - (Cur - 1);
-            begin
-               exit when D > Dict_Sz;
-               declare
-                  L : constant Natural := Match_Length (I, D);
-               begin
-                  if L > Best then
-                     Best := L;
-                     if Count < Max_Pairs then
-                        Count := Count + 1;
-                        Lens (Count) := L;
-                        Dists (Count) := D;
-                     end if;
-                     exit when L >= Nice_Len;
-                  end if;
-               end;
-            end;
-            Cur := Chain (Cur);
-            Depth := Depth + 1;
-         end loop;
-      end Find_All_Matches;
-
-      procedure Emit_Match (Dist, Len : Natural) is
-         Pos_State : constant Natural := Position mod Pos_States;
-      begin
-         LZMA_Encode_Bit
-           (E, Is_Match (State * LZMA_Num_Pos_States_Max + Pos_State), 1);
-         LZMA_Encode_Bit (E, Is_Rep (State), 0);
-         LZMA_Encode_Len
-           (E, Match_Len, Pos_State, Len - LZMA_Min_Match_Length);
-         LZMA_Encode_Distance
-           (E, Pos_Slot, Pos_Special, Pos_Align, Len, Dist);
-         Rep3 := Rep2;
-         Rep2 := Rep1;
-         Rep1 := Rep0;
-         Rep0 := Dist;
-         State := LZMA_Match_State_After (State);
-         Prev := Plain (In_Index + Len - 1);
-         Position := Position + Len;
-         In_Index := In_Index + Len;
-      end Emit_Match;
-
-      procedure Emit_Rep (Idx, Len : Natural) is
-         Pos_State : constant Natural := Position mod Pos_States;
-      begin
-         LZMA_Encode_Bit
-           (E, Is_Match (State * LZMA_Num_Pos_States_Max + Pos_State), 1);
-         LZMA_Encode_Bit (E, Is_Rep (State), 1);
-         case Idx is
-            when 0 =>
-               LZMA_Encode_Bit (E, Is_Rep_G0 (State), 0);
-               LZMA_Encode_Bit
-                 (E,
-                  Is_Rep0_Long (State * LZMA_Num_Pos_States_Max + Pos_State), 1);
-            when 1 =>
-               LZMA_Encode_Bit (E, Is_Rep_G0 (State), 1);
-               LZMA_Encode_Bit (E, Is_Rep_G1 (State), 0);
-               declare
-                  D : constant Natural := Rep1;
-               begin
-                  Rep1 := Rep0;
-                  Rep0 := D;
-               end;
-            when 2 =>
-               LZMA_Encode_Bit (E, Is_Rep_G0 (State), 1);
-               LZMA_Encode_Bit (E, Is_Rep_G1 (State), 1);
-               LZMA_Encode_Bit (E, Is_Rep_G2 (State), 0);
-               declare
-                  D : constant Natural := Rep2;
-               begin
-                  Rep2 := Rep1;
-                  Rep1 := Rep0;
-                  Rep0 := D;
-               end;
-            when others =>
-               LZMA_Encode_Bit (E, Is_Rep_G0 (State), 1);
-               LZMA_Encode_Bit (E, Is_Rep_G1 (State), 1);
-               LZMA_Encode_Bit (E, Is_Rep_G2 (State), 1);
-               declare
-                  D : constant Natural := Rep3;
-               begin
-                  Rep3 := Rep2;
-                  Rep2 := Rep1;
-                  Rep1 := Rep0;
-                  Rep0 := D;
-               end;
-         end case;
-         LZMA_Encode_Len (E, Rep_Len, Pos_State, Len - LZMA_Min_Match_Length);
-         State := LZMA_Rep_State_After (State);
-         Prev := Plain (In_Index + Len - 1);
-         Position := Position + Len;
-         In_Index := In_Index + Len;
-      end Emit_Rep;
-
-      type Rep_Quad is array (0 .. 3) of Natural;
-      type Opt_Kind is (Op_Lit, Op_Match, Op_Rep);
-      type Opt_Entry is record
-         Price   : Natural := Natural'Last;
-         From    : Natural := 0;
-         Kind    : Opt_Kind := Op_Lit;
-         Dist    : Natural := 0;
-         Len     : Natural := 1;
-         Rep_Idx : Natural := 0;
-         St      : Natural := 0;
-         Reps    : Rep_Quad := [others => 0];
-      end record;
-      --  Segment length for the optimal DP. Smaller segments refresh the
-      --  price model more often (better ratio on real data); larger ones split
-      --  fewer matches at segment boundaries (only helps degenerate inputs).
-      Seg_Len : constant Natural := 2048;
-      type Opt_Array is array (Natural range <>) of Opt_Entry;
-      Opt : Opt_Array (0 .. Seg_Len);
-
-      function Reorder_Reps (R : Rep_Quad; Idx : Natural) return Rep_Quad is
-         N : Rep_Quad := R;
-      begin
-         case Idx is
-            when 0 => null;
-            when 1 => N (0) := R (1); N (1) := R (0);
-            when 2 => N (0) := R (2); N (1) := R (0); N (2) := R (1);
-            when others =>
-               N (0) := R (3); N (1) := R (0); N (2) := R (1); N (3) := R (2);
-         end case;
-         return N;
-      end Reorder_Reps;
-
-      function Shift_Reps (R : Rep_Quad; Dist : Natural) return Rep_Quad is
-        ([0 => Dist, 1 => R (0), 2 => R (1), 3 => R (2)]);
-   begin
-      Zlib.Bit_Writer.Reset (E.Writer);
-      LZMA_Init_Probs (Is_Match);
-      LZMA_Init_Probs (Is_Rep);
-      LZMA_Init_Probs (Is_Rep_G0);
-      LZMA_Init_Probs (Is_Rep_G1);
-      LZMA_Init_Probs (Is_Rep_G2);
-      LZMA_Init_Probs (Is_Rep0_Long);
-      LZMA_Init_Len (Match_Len);
-      LZMA_Init_Len (Rep_Len);
-      LZMA_Init_Probs (Pos_Slot);
-      LZMA_Init_Probs (Pos_Special);
-      LZMA_Init_Probs (Pos_Align);
-      LZMA_Init_Probs (Literals);
-
-      while In_Index <= Plain'Last loop
-         declare
-            Base_Pos : constant Natural := Position;
-            Cur      : constant Natural := In_Index;
-            Span     : constant Natural :=
-              Natural'Min (Seg_Len, Plain'Last - Cur + 1);
-         begin
-            --  Initialise the DP for this segment from the live coder state.
-            Opt (0) :=
-              (Price => 0, From => 0, Kind => Op_Lit, Dist => 0, Len => 1,
-               Rep_Idx => 0, St => State, Reps => [Rep0, Rep1, Rep2, Rep3]);
-            for J in 1 .. Span loop
-               Opt (J).Price := Natural'Last;
-            end loop;
-
-            --  Forward relaxation over the segment.
-            for I in 0 .. Span - 1 loop
-               if Opt (I).Price < Natural'Last then
-                  declare
-                     S   : constant Natural := Opt (I).St;
-                     R   : constant Rep_Quad := Opt (I).Reps;
-                     P   : constant Natural := Opt (I).Price;
-                     CI  : constant Natural := Cur + I;
-                     Pos : constant Natural := Base_Pos + I;
-                     PS  : constant Natural := Pos mod Pos_States;
-                     Mbase : constant Natural :=
-                       P + Bit_Price
-                             (Is_Match (S * LZMA_Num_Pos_States_Max + PS), 1);
-
-                     procedure Relax
-                       (J, New_Price : Natural; Kind : Opt_Kind;
-                        Dist, Len, Ridx, New_St : Natural; New_R : Rep_Quad) is
-                     begin
-                        if New_Price < Opt (J).Price then
-                           Opt (J) :=
-                             (Price => New_Price, From => I, Kind => Kind,
-                              Dist => Dist, Len => Len, Rep_Idx => Ridx,
-                              St => New_St, Reps => New_R);
-                        end if;
-                     end Relax;
-                  begin
-                     --  Literal.
-                     Relax
-                       (I + 1,
-                        P + Bit_Price
-                              (Is_Match (S * LZMA_Num_Pos_States_Max + PS), 0)
-                          + Lit_Price_At (CI, S, R (0)),
-                        Op_Lit, 0, 1, 0, LZMA_Literal_State_After (S), R);
-
-                     --  Repeated-distance matches (every length).
-                     for Idx in 0 .. 3 loop
-                        if R (Idx) > 0 and then R (Idx) <= Pos then
-                           declare
-                              Max_L  : constant Natural :=
-                                Natural'Min (Match_Length (CI, R (Idx)),
-                                             Span - I);
-                              Base   : constant Natural :=
-                                Mbase + Bit_Price (Is_Rep (S), 1)
-                                + Rep_Choice_Price (S, Idx, PS);
-                              New_R  : constant Rep_Quad := Reorder_Reps (R, Idx);
-                              New_St : constant Natural := LZMA_Rep_State_After (S);
-                              --  A long match is taken whole; only short ones
-                              --  need every length explored (keeps the DP fast
-                              --  on repetitive data).
-                              From_L : constant Natural :=
-                                (if Max_L >= Nice_Len then Max_L
-                                 else LZMA_Min_Match_Length);
-                           begin
-                              for Len in From_L .. Max_L loop
-                                 Relax
-                                   (I + Len,
-                                    Base + Len_Price_Of
-                                             (Rep_Len, PS,
-                                              Len - LZMA_Min_Match_Length),
-                                    Op_Rep, R (Idx), Len, Idx, New_St, New_R);
-                              end loop;
-                           end;
-                        end if;
-                     end loop;
-
-                     --  Normal matches: each length at its shortest distance.
-                     declare
-                        Count       : Natural;
-                        Lens, Dists : Len_Array;
-                        Prev_L      : Natural := LZMA_Min_Match_Length - 1;
-                     begin
-                        Find_All_Matches (CI, Count, Lens, Dists);
-                        for K in 1 .. Count loop
-                           declare
-                              D      : constant Natural := Dists (K);
-                              Upto   : constant Natural :=
-                                Natural'Min (Lens (K), Span - I);
-                              New_R  : constant Rep_Quad := Shift_Reps (R, D);
-                              New_St : constant Natural :=
-                                LZMA_Match_State_After (S);
-                              Base   : constant Natural :=
-                                Mbase + Bit_Price (Is_Rep (S), 0);
-                              From_L : constant Natural :=
-                                (if Upto >= Nice_Len then Upto
-                                 else Natural'Max
-                                        (LZMA_Min_Match_Length, Prev_L + 1));
-                           begin
-                              for Len in From_L .. Upto loop
-                                 Relax
-                                   (I + Len,
-                                    Base
-                                    + Len_Price_Of
-                                        (Match_Len, PS,
-                                         Len - LZMA_Min_Match_Length)
-                                    + Dist_Price (Len, D),
-                                    Op_Match, D, Len, 0, New_St, New_R);
-                              end loop;
-                              Prev_L := Lens (K);
-                           end;
-                        end loop;
-                     end;
-                  end;
-               end if;
-               --  Insert the current position for subsequent match look-ups.
-               Insert (Cur + I);
-            end loop;
-
-            --  Backtrack the cheapest path, then emit it forwards.
-            declare
-               type Op_Rec is record
-                  Kind            : Opt_Kind;
-                  Dist, Len, Ridx : Natural;
-               end record;
-               Ops : array (1 .. Span) of Op_Rec;
-               N   : Natural := 0;
-               J   : Natural := Span;
-            begin
-               while J > 0 loop
-                  N := N + 1;
-                  Ops (N) :=
-                    (Opt (J).Kind, Opt (J).Dist, Opt (J).Len, Opt (J).Rep_Idx);
-                  J := Opt (J).From;
-               end loop;
-               for M in reverse 1 .. N loop
-                  case Ops (M).Kind is
-                     when Op_Lit   => Emit_Literal;
-                     when Op_Match => Emit_Match (Ops (M).Dist, Ops (M).Len);
-                     when Op_Rep   => Emit_Rep (Ops (M).Ridx, Ops (M).Len);
-                  end case;
-               end loop;
-            end;
-         end;
-      end loop;
-
-      for I in 1 .. 5 loop
-         LZMA_Encoder_Shift_Low (E);
-      end loop;
-
-      return Zlib.Bit_Writer.To_Array (E.Writer);
-   end LZMA_Encode_Bounded;
-
-   type LZMA_Range_Decoder is record
-      Code       : Interfaces.Unsigned_32 := 0;
-      Range_Code : Interfaces.Unsigned_32 := Interfaces.Unsigned_32'Last;
-      Pos        : Natural := 0;
-   end record;
-
-   function LZMA_Read_Stream_Byte
-     (D      : in out LZMA_Range_Decoder;
-      Stream : Byte_Array;
-      Status : in out Status_Code) return Interfaces.Unsigned_32
-   is
-   begin
-      if D.Pos >= Stream'Length then
-         Status := Unexpected_End_Of_Input;
-         return 0;
-      end if;
-
-      D.Pos := D.Pos + 1;
-      return Interfaces.Unsigned_32 (Stream (Stream'First + D.Pos - 1));
-   end LZMA_Read_Stream_Byte;
-
-   procedure LZMA_Decoder_Init
-     (D      : in out LZMA_Range_Decoder;
-      Stream : Byte_Array;
-      Status : in out Status_Code)
-   is
-   begin
-      D.Code := 0;
-      D.Range_Code := Interfaces.Unsigned_32'Last;
-      D.Pos := 0;
-
-      for I in 1 .. 5 loop
-         declare
-            Next_Byte : constant Interfaces.Unsigned_32 :=
-              LZMA_Read_Stream_Byte (D, Stream, Status);
-         begin
-            D.Code := Interfaces.Shift_Left (D.Code, 8) or Next_Byte;
-         end;
-         exit when Status /= Ok;
-      end loop;
-   end LZMA_Decoder_Init;
-
-   function LZMA_Decode_Bit
-     (D      : in out LZMA_Range_Decoder;
-      Stream : Byte_Array;
-      Prob   : in out Interfaces.Unsigned_32;
-      Status : in out Status_Code) return Natural
-   is
-      Bound : constant Interfaces.Unsigned_32 :=
-        Interfaces.Shift_Right (D.Range_Code, 11) * Prob;
-      Bit   : Natural;
-   begin
-      if Status /= Ok then
-         return 0;
-      end if;
-
-      if D.Code < Bound then
-         D.Range_Code := Bound;
-         Prob := Prob + Interfaces.Shift_Right (LZMA_Bit_Model_Total - Prob,
-                                                LZMA_Move_Bits);
-         Bit := 0;
-      else
-         D.Code := D.Code - Bound;
-         D.Range_Code := D.Range_Code - Bound;
-         Prob := Prob - Interfaces.Shift_Right (Prob, LZMA_Move_Bits);
-         Bit := 1;
-      end if;
-
-      if D.Range_Code < LZMA_Top_Value then
-         D.Range_Code := Interfaces.Shift_Left (D.Range_Code, 8);
-         declare
-            Next_Byte : constant Interfaces.Unsigned_32 :=
-              LZMA_Read_Stream_Byte (D, Stream, Status);
-         begin
-            D.Code := Interfaces.Shift_Left (D.Code, 8) or Next_Byte;
-         end;
-      end if;
-
-      return Bit;
-   end LZMA_Decode_Bit;
-
-   function LZMA_Decode_Bit_Tree
-     (D       : in out LZMA_Range_Decoder;
-      Stream  : Byte_Array;
-      Probs   : in out LZMA_Prob_Array;
-      Offset  : Natural;
-      Bits    : Natural;
-      Status  : in out Status_Code) return Natural
-   is
-      Node : Natural := 1;
-   begin
-      for I in 1 .. Bits loop
-         Node :=
-           Node * 2
-           + LZMA_Decode_Bit (D, Stream, Probs (Offset + Node), Status);
-         exit when Status /= Ok;
-      end loop;
-
-      return Node - 2 ** Bits;
-   end LZMA_Decode_Bit_Tree;
-
-   function LZMA_Decode_Reverse_Bit_Tree
-     (D       : in out LZMA_Range_Decoder;
-      Stream  : Byte_Array;
-      Probs   : in out LZMA_Prob_Array;
-      Offset  : Integer;
-      Bits    : Natural;
-      Status  : in out Status_Code) return Natural
-   is
-      Node   : Natural := 1;
-      Symbol : Natural := 0;
-   begin
-      for Bit_Index in 0 .. Bits - 1 loop
-         declare
-            Bit : constant Natural :=
-              LZMA_Decode_Bit
-                (D, Stream, Probs (Natural (Offset + Node)), Status);
-         begin
-            Symbol := Symbol + Bit * (2 ** Bit_Index);
-            Node := Node * 2 + Bit;
-         end;
-         exit when Status /= Ok;
-      end loop;
-
-      return Symbol;
-   end LZMA_Decode_Reverse_Bit_Tree;
-
-   function LZMA_Decode_Direct_Bits
-     (D       : in out LZMA_Range_Decoder;
-      Stream  : Byte_Array;
-      Bits    : Natural;
-      Status  : in out Status_Code) return Natural
-   is
-      Result : Natural := 0;
-   begin
-      if Bits = 0 then
-         return 0;
-      end if;
-
-      for I in 1 .. Bits loop
-         D.Range_Code := Interfaces.Shift_Right (D.Range_Code, 1);
-
-         declare
-            Bit : Natural := 0;
-         begin
-            if D.Code >= D.Range_Code then
-               D.Code := D.Code - D.Range_Code;
-               Bit := 1;
-            end if;
-
-            if D.Range_Code < LZMA_Top_Value then
-               D.Range_Code := Interfaces.Shift_Left (D.Range_Code, 8);
-               declare
-                  Next_Byte : constant Interfaces.Unsigned_32 :=
-                    LZMA_Read_Stream_Byte (D, Stream, Status);
-               begin
-                  D.Code := Interfaces.Shift_Left (D.Code, 8) or Next_Byte;
-               end;
-            end if;
-
-            Result := Result * 2 + Bit;
-         end;
-
-         exit when Status /= Ok;
-      end loop;
-
-      return Result;
-   end LZMA_Decode_Direct_Bits;
-
-   function LZMA_Decode_Distance
-     (D             : in out LZMA_Range_Decoder;
-      Stream        : Byte_Array;
-      Pos_Slot      : in out LZMA_Prob_Array;
-      Pos_Special   : in out LZMA_Prob_Array;
-      Pos_Align     : in out LZMA_Prob_Array;
-      Len           : Natural;
-      Status        : in out Status_Code) return Natural
-   is
-      Pos_State_For_Len : constant Natural :=
-        Natural'Min (Len - LZMA_Min_Match_Length,
-                     LZMA_Num_Len_To_Pos_States - 1);
-      Slot              : constant Natural :=
-        LZMA_Decode_Bit_Tree
-          (D, Stream, Pos_Slot, Pos_State_For_Len * 64, 6, Status);
-   begin
-      if Status /= Ok then
-         return 0;
-      end if;
-
-      if Slot < LZMA_Start_Pos_Model_Index then
-         return Slot + 1;
-      elsif Slot < LZMA_End_Pos_Model_Index then
-         declare
-            Footer_Bits : constant Natural := Slot / 2 - 1;
-            Base        : constant Natural :=
-              (2 + Slot mod 2) * (2 ** Footer_Bits);
-            Offset      : constant Integer := Integer (Base) - Integer (Slot) - 1;
-            Reduced     : constant Natural :=
-              LZMA_Decode_Reverse_Bit_Tree
-                (D, Stream, Pos_Special, Offset, Footer_Bits, Status);
-         begin
-            return Base + Reduced + 1;
-         end;
-      else
-         declare
-            Footer_Bits : constant Natural := Slot / 2 - 1;
-            Base        : constant Natural :=
-              (2 + Slot mod 2) * (2 ** Footer_Bits);
-            Direct      : constant Natural :=
-              LZMA_Decode_Direct_Bits
-                (D, Stream, Footer_Bits - LZMA_Num_Align_Bits, Status);
-            Align       : constant Natural :=
-              LZMA_Decode_Reverse_Bit_Tree
-                (D, Stream, Pos_Align, 0, LZMA_Num_Align_Bits, Status);
-         begin
-            return Base + Direct * LZMA_Align_Table_Size + Align + 1;
-         end;
-      end if;
-   end LZMA_Decode_Distance;
-
-   function LZMA_Decode_Len
-     (D         : in out LZMA_Range_Decoder;
-      Stream    : Byte_Array;
-      Len       : in out LZMA_Len_Encoder;
-      Pos_State : Natural;
-      Status    : in out Status_Code) return Natural
-   is
-   begin
-      if LZMA_Decode_Bit (D, Stream, Len.Choice (0), Status) = 0 then
-         return
-           LZMA_Decode_Bit_Tree
-             (D, Stream, Len.Low, Pos_State * LZMA_Len_Low_Symbols, 3,
-              Status);
-      end if;
-
-      if LZMA_Decode_Bit (D, Stream, Len.Choice (1), Status) = 0 then
-         return
-           LZMA_Len_Low_Symbols
-           + LZMA_Decode_Bit_Tree
-             (D, Stream, Len.Mid, Pos_State * LZMA_Len_Mid_Symbols, 3,
-              Status);
-      end if;
-
-      return
-        LZMA_Len_Low_Symbols + LZMA_Len_Mid_Symbols
-        + LZMA_Decode_Bit_Tree (D, Stream, Len.High, 0, 8, Status);
-   end LZMA_Decode_Len;
-
-   function Decode_LZMA_Payload
-     (Payload    : Byte_Array;
-      Plain_Len  : Natural;
-      Require_Full_Stream : Boolean;
-      Initial_Rep_Distance : Natural;
-      Use_Matched_Literals : Boolean;
-      Status     : out Status_Code) return Byte_Array
-   is
-      Empty : constant Byte_Array (1 .. 0) := [others => 0];
-   begin
-      Status := Unsupported_Method;
-
-      if Payload'Length < 9 then
-         Status := Unexpected_End_Of_Input;
-         return Empty;
-      end if;
-
-      declare
-         Props_Size : constant Natural :=
-           Natural (Payload (Payload'First + 2))
-           + 256 * Natural (Payload (Payload'First + 3));
-         Props_First : constant Natural := Payload'First + 4;
-         Stream_First : constant Natural := Props_First + Props_Size;
-      begin
-         if Props_Size /= 5
-           or else Stream_First > Payload'Last + 1
-         then
-            Status := Unsupported_Method;
-            return Empty;
-         end if;
-
-         declare
-            Props0 : constant Byte := Payload (Props_First);
-            LCLP   : constant Natural := Natural (Props0) mod 9;
-            Rest   : constant Natural := Natural (Props0) / 9;
-            LC     : constant Natural := LCLP;
-            LP     : constant Natural := Rest mod 5;
-            PB     : constant Natural := Rest / 5;
-         begin
-            if not Valid_LZMA_Props (Props0) then
-               Status := Unsupported_Method;
-               return Empty;
-            end if;
-
-            declare
-               Stream : constant Byte_Array :=
-                 (if Stream_First > Payload'Last then Empty
-                  else Payload (Stream_First .. Payload'Last));
-               Pos_States   : constant Natural := 2 ** PB;
-               Literal_Ctxs : constant Natural := 2 ** (LC + LP);
-               Is_Match     : LZMA_Prob_Array
-                 (0 .. LZMA_Num_States * LZMA_Num_Pos_States_Max - 1);
-               Is_Rep       : LZMA_Prob_Array (0 .. LZMA_Num_States - 1);
-               Is_Rep_G0    : LZMA_Prob_Array (0 .. LZMA_Num_States - 1);
-               Is_Rep_G1    : LZMA_Prob_Array (0 .. LZMA_Num_States - 1);
-               Is_Rep_G2    : LZMA_Prob_Array (0 .. LZMA_Num_States - 1);
-               Is_Rep0_Long : LZMA_Prob_Array
-                 (0 .. LZMA_Num_States * LZMA_Num_Pos_States_Max - 1);
-               Match_Len    : LZMA_Len_Encoder;
-               Rep_Len      : LZMA_Len_Encoder;
-               Pos_Slot     : LZMA_Prob_Array
-                 (0 .. LZMA_Num_Len_To_Pos_States * 64 - 1);
-               Pos_Special  : LZMA_Prob_Array
-                 (0 .. LZMA_Num_Full_Distances - LZMA_End_Pos_Model_Index - 1);
-               Pos_Align    : LZMA_Prob_Array (0 .. LZMA_Align_Table_Size - 1);
-               Literals     : LZMA_Prob_Array
-                 (0 .. Literal_Ctxs * LZMA_Literal_Probs - 1);
-               D            : LZMA_Range_Decoder;
-               State        : Natural := 0;
-               Prev         : Byte := 0;
-               Rep0         : Natural := Initial_Rep_Distance;
-               Rep1         : Natural := Initial_Rep_Distance;
-               Rep2         : Natural := Initial_Rep_Distance;
-               Rep3         : Natural := Initial_Rep_Distance;
-               Plain        : Byte_Array (1 .. Natural'Max (1, Plain_Len)) :=
-                 [others => 0];
-               Out_Pos      : Natural := 0;
-               Local_Status : Status_Code := Ok;
-            begin
-               if Stream'Length < 5 then
-                  Status := Unexpected_End_Of_Input;
-                  return Empty;
-               end if;
-
-               LZMA_Init_Probs (Is_Match);
-               LZMA_Init_Probs (Is_Rep);
-               LZMA_Init_Probs (Is_Rep_G0);
-               LZMA_Init_Probs (Is_Rep_G1);
-               LZMA_Init_Probs (Is_Rep_G2);
-               LZMA_Init_Probs (Is_Rep0_Long);
-               LZMA_Init_Len (Match_Len);
-               LZMA_Init_Len (Rep_Len);
-               LZMA_Init_Probs (Pos_Slot);
-               LZMA_Init_Probs (Pos_Special);
-               LZMA_Init_Probs (Pos_Align);
-               LZMA_Init_Probs (Literals);
-               LZMA_Decoder_Init (D, Stream, Local_Status);
-
-               while Local_Status = Ok and then Out_Pos < Plain_Len loop
-                  declare
-                     Pos_State : constant Natural := Out_Pos mod Pos_States;
-                     Match_Bit : constant Natural :=
-                       LZMA_Decode_Bit
-                         (D, Stream,
-                          Is_Match (State * LZMA_Num_Pos_States_Max + Pos_State),
-                          Local_Status);
-                  begin
-                     if Local_Status /= Ok then
-                        exit;
-                     end if;
-
-                     if Match_Bit = 0 then
-                        declare
-                           Context : constant Natural :=
-                             LZMA_Literal_Context (LC, LP, Out_Pos, Prev);
-                           Symbol  : Natural := 1;
-                        begin
-                           if Use_Matched_Literals
-                             and then State >= 7
-                             and then Rep0 > 0
-                             and then Rep0 <= Out_Pos
-                           then
-                              declare
-                                 Match_Byte : Natural :=
-                                   Natural (Plain (Out_Pos - Rep0 + 1));
-                              begin
-                                 while Symbol < 16#100# loop
-                                    Match_Byte := Match_Byte * 2;
-                                    declare
-                                       Match_Bit_Literal : constant Natural :=
-                                         ((Match_Byte / 16#100#) mod 2)
-                                         * 16#100#;
-                                       Decoded_Bit : constant Natural :=
-                                         LZMA_Decode_Bit
-                                           (D, Stream,
-                                            Literals
-                                              (Context * LZMA_Literal_Probs
-                                               + 16#100# + Match_Bit_Literal
-                                               + Symbol),
-                                            Local_Status);
-                                    begin
-                                       Symbol := Symbol * 2 + Decoded_Bit;
-                                       exit when Local_Status /= Ok
-                                         or else Match_Bit_Literal /=
-                                           Decoded_Bit * 16#100#;
-                                    end;
-                                 end loop;
-                              end;
-                           end if;
-
-                           while Symbol < 16#100# loop
-                              Symbol :=
-                                Symbol * 2
-                                + LZMA_Decode_Bit
-                                  (D, Stream,
-                                   Literals
-                                     (Context * LZMA_Literal_Probs + Symbol),
-                                   Local_Status);
-                              exit when Local_Status /= Ok;
-                           end loop;
-
-                           if Local_Status /= Ok then
-                              exit;
-                           end if;
-
-                           Out_Pos := Out_Pos + 1;
-                           Plain (Out_Pos) := Byte (Symbol - 16#100#);
-                           Prev := Plain (Out_Pos);
-                           State := LZMA_Literal_State_After (State);
-                        end;
-                     else
-                        if LZMA_Decode_Bit
-                          (D, Stream, Is_Rep (State), Local_Status) /= 0
-                        then
-                           declare
-                              Distance : Natural := Rep0;
-                              Len      : Natural := LZMA_Min_Match_Length;
-                           begin
-                              if LZMA_Decode_Bit
-                                (D, Stream, Is_Rep_G0 (State),
-                                 Local_Status) = 0
-                              then
-                                 if LZMA_Decode_Bit
-                                   (D, Stream,
-                                    Is_Rep0_Long
-                                      (State * LZMA_Num_Pos_States_Max + Pos_State),
-                                    Local_Status) = 0
-                                 then
-                                    Len := 1;
-                                    State := LZMA_Short_Rep_State_After (State);
-                                 else
-                                    Len :=
-                                      LZMA_Decode_Len
-                                        (D, Stream, Rep_Len, Pos_State,
-                                         Local_Status)
-                                      + LZMA_Min_Match_Length;
-                                    State := LZMA_Rep_State_After (State);
-                                 end if;
-                              else
-                                 if LZMA_Decode_Bit
-                                   (D, Stream, Is_Rep_G1 (State),
-                                    Local_Status) = 0
-                                 then
-                                    Distance := Rep1;
-                                 else
-                                    if LZMA_Decode_Bit
-                                      (D, Stream, Is_Rep_G2 (State),
-                                       Local_Status) = 0
-                                    then
-                                       Distance := Rep2;
-                                    else
-                                       Distance := Rep3;
-                                       Rep3 := Rep2;
-                                    end if;
-                                    Rep2 := Rep1;
-                                 end if;
-                                 Rep1 := Rep0;
-                                 Rep0 := Distance;
-                                 Len :=
-                                   LZMA_Decode_Len
-                                     (D, Stream, Rep_Len, Pos_State,
-                                      Local_Status)
-                                   + LZMA_Min_Match_Length;
-                                 State := LZMA_Rep_State_After (State);
-                              end if;
-
-                              if Local_Status /= Ok then
-                                 exit;
-                              end if;
-
-                              if Distance = 0
-                                or else Distance > Out_Pos
-                                or else Len > Plain_Len - Out_Pos
-                              then
-                                 Status := Unsupported_Method;
-                                 return Empty;
-                              end if;
-
-                              for I in 1 .. Len loop
-                                 Out_Pos := Out_Pos + 1;
-                                 Plain (Out_Pos) := Plain (Out_Pos - Distance);
-                              end loop;
-
-                              Prev := Plain (Out_Pos);
-                           end;
-                        else
-
-                           declare
-                              Len_Symbol : constant Natural :=
-                                LZMA_Decode_Len
-                                  (D, Stream, Match_Len, Pos_State,
-                                   Local_Status);
-                              Len        : constant Natural :=
-                                Len_Symbol + LZMA_Min_Match_Length;
-                              Distance   : constant Natural :=
-                                LZMA_Decode_Distance
-                                  (D, Stream, Pos_Slot, Pos_Special, Pos_Align,
-                                   Len, Local_Status);
-                           begin
-                              if Local_Status /= Ok then
-                                 exit;
-                              end if;
-
-                              if Distance > Out_Pos
-                                or else Len > Plain_Len - Out_Pos
-                              then
-                                 Status := Unsupported_Method;
-                                 return Empty;
-                              end if;
-
-                              for I in 1 .. Len loop
-                                 Out_Pos := Out_Pos + 1;
-                                 Plain (Out_Pos) := Plain (Out_Pos - Distance);
-                              end loop;
-
-                              Rep3 := Rep2;
-                              Rep2 := Rep1;
-                              Rep1 := Rep0;
-                              Rep0 := Distance;
-                              Prev := Plain (Out_Pos);
-                              State := LZMA_Match_State_After (State);
-                           end;
-                        end if;
-                     end if;
-                  end;
-               end loop;
-
-               if Local_Status /= Ok then
-                  Status := Local_Status;
-                  return Empty;
-               end if;
-
-               if Require_Full_Stream and then D.Pos /= Stream'Length then
-                  Status := Unsupported_Method;
-                  return Empty;
-               end if;
-
-               if Plain_Len = 0 then
-                  Status := Ok;
-                  return Empty;
-               end if;
-
-               Status := Ok;
-               return Plain (1 .. Plain_Len);
-            end;
-         end;
-      end;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return Empty;
-   end Decode_LZMA_Payload;
+   function LZMA_Encode_Selected
+     (Plain : Byte_Array; Props : out Byte) return Byte_Array
+     renames LZMA_Encode_Selected_Impl;
 
    function Decode_ZIP_LZMA_Payload
      (Payload    : Byte_Array;
@@ -5409,7 +3951,7 @@ package body Zlib is
       Status     : out Status_Code) return Byte_Array
    is
    begin
-      return Decode_LZMA_Payload
+      return Zlib.LZMA_Decoder.Decode_Payload
         (Payload, Plain_Len, Require_Full_Stream => True,
          Initial_Rep_Distance => 1, Use_Matched_Literals => True,
          Status => Status);
@@ -5549,7 +4091,7 @@ package body Zlib is
                                     return Empty;
                                  end if;
 
-                                 if Zlib.CRC32 (Plain) /= Crc then
+                                 if Compute_CRC32 (Plain) /= Crc then
                                     Status := Invalid_Checksum;
                                     return Empty;
                                  end if;
@@ -5580,13 +4122,11 @@ package body Zlib is
 
    function Extract_ZIP_External_Entry
      (Archive_Image : Byte_Array;
-      Temp_Base     : String;
       Entry_Name    : String;
       Password      : String;
       Status        : out Status_Code) return Byte_Array
    is
       Empty        : constant Byte_Array (1 .. 0) := [others => 0];
-      pragma Unreferenced (Temp_Base);
    begin
       Status := Unsupported_Method;
 
@@ -5668,7 +4208,9 @@ package body Zlib is
       return Result;
    end ZIP_U64_At;
 
-   function ZIP_Method_Id (Method_Name : String) return Interfaces.Unsigned_16 is
+   function ZIP_Method_Id (Method_Name : String) return Interfaces.Unsigned_16
+     with SPARK_Mode => On
+   is
    begin
       if Method_Name = "BZip2" or else Method_Name = "bzip2" then
          return 12;
@@ -5892,7 +4434,7 @@ package body Zlib is
                if Method /= 0 and then Method /= 8 then
                   --  Non-Deflate methods go through the codec bridge.
                   return Extract_ZIP_External_Entry
-                    (Archive_Image, "", Entry_Name, "", Status);
+                    (Archive_Image, Entry_Name, "", Status);
                end if;
 
                declare
@@ -5960,7 +4502,7 @@ package body Zlib is
                               return Empty;
                            end if;
                            if Plain'Length /= Unc_Len
-                             or else CRC32 (Plain) /= Crc
+                             or else Compute_CRC32 (Plain) /= Crc
                            then
                               Status := Invalid_Checksum;
                               return Empty;
@@ -6055,7 +4597,7 @@ package body Zlib is
                end loop;
 
                Method := 12;
-               Crc32 := Zlib.CRC32 (Plain);
+               Crc32 := Compute_CRC32 (Plain);
                Uncompressed_Size := Interfaces.Unsigned_64 (Plain'Length);
                Status := Ok;
                return Compressed;
@@ -6132,7 +4674,7 @@ package body Zlib is
                end loop;
 
                Method := 93;
-               Crc32 := Zlib.CRC32 (Plain);
+               Crc32 := Compute_CRC32 (Plain);
                Uncompressed_Size := Interfaces.Unsigned_64 (Plain'Length);
                Status := Ok;
                return Compressed;
@@ -6174,10 +4716,11 @@ package body Zlib is
          end if;
 
          declare
-            Raw_Output : constant Byte_Array := LZMA_Encode_Bounded (Plain);
+            LZMA_Props : Byte := LZMA_Default_Props;
+            Raw_Output : constant Byte_Array :=
+              LZMA_Encode_Selected (Plain, LZMA_Props);
             Props : constant Byte_Array (1 .. 5) :=
-              [1 => Byte ((LZMA_Default_PB * 5 + LZMA_Default_LP) * 9
-                          + LZMA_Default_LC),
+              [1 => LZMA_Props,
                2 => Byte (LZMA_Default_Dict and 16#FF#),
                3 => Byte (Interfaces.Shift_Right (LZMA_Default_Dict, 8)
                           and 16#FF#),
@@ -6199,7 +4742,7 @@ package body Zlib is
             end loop;
 
             Method := 14;
-            Crc32 := Zlib.CRC32 (Plain);
+            Crc32 := Compute_CRC32 (Plain);
             Uncompressed_Size := Interfaces.Unsigned_64 (Plain'Length);
             Status := Ok;
             return Payload;
@@ -6213,7 +4756,6 @@ package body Zlib is
 
    function Compress_ZIP_External_File
      (Input_Path        : String;
-      Temp_Base         : String;
       Method_Name       : String;
       Method            : out Interfaces.Unsigned_16;
       Crc32             : out Interfaces.Unsigned_32;
@@ -6221,7 +4763,6 @@ package body Zlib is
       Status            : out Status_Code) return Byte_Array
    is
       Empty        : constant Byte_Array (1 .. 0) := [others => 0];
-      pragma Unreferenced (Temp_Base);
       Expected     : constant Interfaces.Unsigned_16 := ZIP_Method_Id (Method_Name);
    begin
       Method := 0;
@@ -6256,87 +4797,8 @@ package body Zlib is
    function Seven_Zip_Output_File_Writable (Output_Path : String) return Boolean;
    function Seven_Zip_Input_Path_Readable (Input_Path : String) return Boolean;
 
-   procedure Seven_Zip_External_File
-     (Input_Path  : String;
-      Output_Path : String;
-      Method_Name : String;
-      Solid       : Boolean;
-      Password    : String;
-      Status      : out Status_Code)
-   is
-      pragma Unreferenced (Method_Name, Solid, Password);
-   begin
-      Status := Unsupported_Method;
-
-      if not Ada.Directories.Exists (Input_Path) then
-         Status := Input_File_Error;
-         return;
-      end if;
-
-      if Ada.Directories.Exists (Output_Path) then
-         if Ada.Directories.Kind (Output_Path) = Ada.Directories.Directory then
-            Status := Output_File_Error;
-            return;
-         end if;
-      end if;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-   end Seven_Zip_External_File;
-
-   function Seven_Zip_Source_Metadata
-     (Input_Path : String) return Seven_Zip_Entry_Metadata
-   is
-      Unix_Epoch          : constant Ada.Calendar.Time :=
-        Ada.Calendar.Time_Of (1970, 1, 1, 0.0);
-      Filetime_Unix_Epoch : constant Interfaces.Unsigned_64 :=
-        116_444_736_000_000_000;
-      Ticks_Per_Second    : constant Long_Long_Float := 10_000_000.0;
-      Metadata            : Seven_Zip_Entry_Metadata :=
-        No_Seven_Zip_Entry_Metadata;
-      Is_Directory        : constant Boolean :=
-        Ada.Directories.Kind (Input_Path) = Ada.Directories.Directory;
-      Seconds             : Duration;
-      Ticks               : Interfaces.Unsigned_64 := 0;
-   begin
-      Metadata.Is_Directory := Is_Directory;
-      Seconds := Ada.Directories.Modification_Time (Input_Path) - Unix_Epoch;
-      Metadata.Has_Modification_Time := True;
-
-      if Seconds >= 0.0 then
-         Ticks :=
-           Interfaces.Unsigned_64
-             (Long_Long_Integer (Long_Long_Float (Seconds) * Ticks_Per_Second));
-         Metadata.Modification_Time := Filetime_Unix_Epoch + Ticks;
-      else
-         Ticks :=
-           Interfaces.Unsigned_64
-             (Long_Long_Integer (Long_Long_Float (-Seconds) * Ticks_Per_Second));
-         if Ticks <= Filetime_Unix_Epoch then
-            Metadata.Modification_Time := Filetime_Unix_Epoch - Ticks;
-         else
-            Metadata.Has_Modification_Time := False;
-         end if;
-      end if;
-
-      Metadata.Has_Windows_Attributes := True;
-      Metadata.Windows_Attributes :=
-        (if Is_Directory then 16#0000_0010# else 16#0000_0020#);
-      if not GNAT.OS_Lib.Is_Owner_Writable_File (Input_Path) then
-         Metadata.Windows_Attributes := Metadata.Windows_Attributes or 16#0000_0001#;
-      end if;
-
-      return Metadata;
-   exception
-      when others =>
-         return No_Seven_Zip_Entry_Metadata;
-   end Seven_Zip_Source_Metadata;
-
-   type Seven_Zip_Metadata_Array is
-     array (Positive range <>) of Seven_Zip_Entry_Metadata;
-   type Seven_Zip_Boolean_Array is array (Positive range <>) of Boolean;
-
-   function Seven_Zip_Entry_Name_Valid (Entry_Name : String) return Boolean;
+   function Seven_Zip_Entry_Name_Valid (Entry_Name : String) return Boolean
+     with SPARK_Mode => On;
 
    procedure Seven_Zip_PPMd_File
      (Input_Path  : String;
@@ -6344,22 +4806,9 @@ package body Zlib is
       Status      : out Status_Code)
    is
    begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Output_File_Writable (Output_Path) then
-         Status := Output_File_Error;
-         return;
-      end if;
-      if not Seven_Zip_Input_Path_Readable (Input_Path) then
-         Status := Input_File_Error;
-         return;
-      end if;
-
-      Seven_Zip_PPMd_File
-        (Input_Path, Output_Path, Ada.Directories.Simple_Name (Input_Path),
-         Status);
-   exception
-      when others =>
-         Status := Input_File_Error;
+      Zlib.Seven_Zip_File_Writing.Write_PPMd_File_With_Basename
+        (Input_Path, Output_Path, Read_File'Access, Write_File'Access,
+         Zlib.Seven_Zip_Properties.Source_Metadata'Access, Status);
    end Seven_Zip_PPMd_File;
 
    procedure Seven_Zip_PPMd_File
@@ -6368,88 +4817,12 @@ package body Zlib is
       Entry_Name  : String;
       Status      : out Status_Code)
    is
-      Read_Status  : Status_Code := Ok;
-      Write_Status : Status_Code := Ok;
    begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return;
-      end if;
-      if not Seven_Zip_Output_File_Writable (Output_Path) then
-         Status := Output_File_Error;
-         return;
-      end if;
-      if not Seven_Zip_Input_Path_Readable (Input_Path) then
-         Status := Input_File_Error;
-         return;
-      end if;
-
-      declare
-         Metadata : constant Seven_Zip_Entry_Metadata :=
-           Seven_Zip_Source_Metadata (Input_Path);
-      begin
-         if Metadata.Is_Directory then
-            declare
-               Empty_Input : constant Byte_Array := [1 .. 0 => 0];
-               Archive     : constant Byte_Array :=
-                 Seven_Zip_PPMd (Empty_Input, Entry_Name, Metadata, Status);
-            begin
-               if Status = Ok then
-                  Write_File (Output_Path, Archive, Write_Status);
-                  Status := Write_Status;
-               end if;
-            end;
-
-         else
-            declare
-               Input_Data : constant Byte_Array :=
-                 Read_File (Input_Path, Read_Status);
-            begin
-               if Read_Status /= Ok then
-                  Status := Read_Status;
-                  return;
-               end if;
-
-               declare
-                  Archive : constant Byte_Array :=
-                    Seven_Zip_PPMd (Input_Data, Entry_Name, Metadata, Status);
-               begin
-                  if Status = Ok then
-                     Write_File (Output_Path, Archive, Write_Status);
-                     Status := Write_Status;
-                  end if;
-               end;
-            end;
-         end if;
-      end;
-   exception
-      when others =>
-         Status := Output_File_Error;
+      Zlib.Seven_Zip_File_Writing.Write_PPMd_File_Archive
+        (Input_Path, Output_Path, Entry_Name, Read_File'Access,
+         Write_File'Access, Zlib.Seven_Zip_Properties.Source_Metadata'Access,
+         Status);
    end Seven_Zip_PPMd_File;
-
-   procedure Extract_Seven_Zip_External_File
-     (Input_Path : String;
-      Output_Dir : String;
-      Password   : String;
-      Status     : out Status_Code)
-   is
-      pragma Unreferenced (Password);
-   begin
-      Status := Unsupported_Method;
-
-      if not Ada.Directories.Exists (Input_Path) then
-         Status := Input_File_Error;
-         return;
-      end if;
-
-      if Output_Dir'Length = 0 then
-         Status := Output_File_Error;
-         return;
-      end if;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-   end Extract_Seven_Zip_External_File;
 
    procedure Append_U32_LE
      (Output : in out Byte_Vectors.Vector;
@@ -6571,7 +4944,7 @@ package body Zlib is
               (if Mode = Stored then 0 else 8);
             Name_Length    : constant Interfaces.Unsigned_16 :=
               Interfaces.Unsigned_16 (Entry_Name'Length);
-            CRC            : constant Interfaces.Unsigned_32 := CRC32 (Input);
+            CRC            : constant Interfaces.Unsigned_32 := Compute_CRC32 (Input);
             Compressed     : constant Interfaces.Unsigned_32 :=
               Interfaces.Unsigned_32 (Payload'Length);
             Uncompressed   : constant Interfaces.Unsigned_32 :=
@@ -6793,7 +5166,7 @@ package body Zlib is
 
                   Infos (Index) :=
                     (Method       => (if Mode = Stored then 0 else 8),
-                     CRC          => CRC32 (Input_Data),
+                     CRC          => Compute_CRC32 (Input_Data),
                      Compressed   => Interfaces.Unsigned_64 (Payload'Length),
                      Uncompressed => Interfaces.Unsigned_64 (Input_Data'Length),
                      Local_Offset => Interfaces.Unsigned_64 (Output.Length));
@@ -6913,262 +5286,52 @@ package body Zlib is
          Status := Unsupported_Method;
    end ZIP_Files;
 
-   procedure Append_Seven_Zip_Number
-     (Output : in out Byte_Vectors.Vector;
-      Value  : Interfaces.Unsigned_64)
-   is
-      Extra_Bytes : Natural := 0;
-      Limit       : Interfaces.Unsigned_64 := 2 ** 7;
-   begin
-      while Extra_Bytes < 8 and then Value >= Limit loop
-         Extra_Bytes := Extra_Bytes + 1;
-         if Extra_Bytes < 8 then
-            Limit := Interfaces.Shift_Left (Limit, 7);
-         end if;
-      end loop;
-
-      if Extra_Bytes = 0 then
-         Output.Append (Byte (Value));
-      elsif Extra_Bytes = 8 then
-         Output.Append (16#FF#);
-         Append_U64_LE (Output, Value);
-      else
-         declare
-            Prefix : Natural := 0;
-            High   : constant Natural :=
-              Natural
-                (Interfaces.Shift_Right
-                   (Value, 8 * Extra_Bytes)
-                 and Interfaces.Unsigned_64 (16#FF# / (2 ** Extra_Bytes)));
-         begin
-            for I in 0 .. Extra_Bytes - 1 loop
-               Prefix := Prefix + 2 ** (7 - I);
-            end loop;
-
-            Output.Append (Byte (Prefix + High));
-            for I in 0 .. Extra_Bytes - 1 loop
-               Output.Append
-                 (Byte
-                    (Interfaces.Shift_Right (Value, 8 * I)
-                     and Interfaces.Unsigned_64 (16#FF#)));
-            end loop;
-         end;
-      end if;
-   end Append_Seven_Zip_Number;
-
-   function Seven_Zip_Header_CRC (Data : Byte_Array) return Interfaces.Unsigned_32
-     renames CRC32;
-
    function Seven_Zip_U32_At
      (Data : Byte_Array;
       Pos  : Natural) return Interfaces.Unsigned_32
-   is
-   begin
-      return Interfaces.Unsigned_32 (Data (Pos))
-        or Interfaces.Shift_Left (Interfaces.Unsigned_32 (Data (Pos + 1)), 8)
-        or Interfaces.Shift_Left (Interfaces.Unsigned_32 (Data (Pos + 2)), 16)
-        or Interfaces.Shift_Left (Interfaces.Unsigned_32 (Data (Pos + 3)), 24);
-   end Seven_Zip_U32_At;
-
-   function Seven_Zip_U64_At
-     (Data : Byte_Array;
-      Pos  : Natural) return Interfaces.Unsigned_64
-   is
-      Result : Interfaces.Unsigned_64 := 0;
-   begin
-      for I in 0 .. 7 loop
-         Result :=
-           Result
-           or Interfaces.Shift_Left
-             (Interfaces.Unsigned_64 (Data (Pos + I)), 8 * I);
-      end loop;
-      return Result;
-   end Seven_Zip_U64_At;
+      renames Zlib.Seven_Zip_Numbers.U32_At;
 
    function Read_Seven_Zip_Number
      (Data  : Byte_Array;
       Pos   : in out Natural;
       Last  : Natural;
       Value : out Interfaces.Unsigned_64) return Boolean
-   is
-      First : Natural;
-      Extra : Natural := 0;
-      Mask  : Natural := 16#80#;
-   begin
-      Value := 0;
-      if Pos > Last then
-         return False;
-      end if;
-
-      First := Natural (Data (Pos));
-      Pos := Pos + 1;
-
-      while Extra < 8 and then (First / Mask) mod 2 = 1 loop
-         Extra := Extra + 1;
-         Mask := Mask / 2;
-      end loop;
-
-      if Extra = 0 then
-         Value := Interfaces.Unsigned_64 (First);
-         return True;
-      end if;
-
-      if Pos > Last or else Last - Pos + 1 < Extra then
-         return False;
-      end if;
-
-      if Extra = 8 then
-         for I in 0 .. 7 loop
-            Value :=
-              Value
-              or Interfaces.Shift_Left
-                (Interfaces.Unsigned_64 (Data (Pos + I)), 8 * I);
-         end loop;
-         Pos := Pos + 8;
-      else
-         Value :=
-           Interfaces.Shift_Left
-             (Interfaces.Unsigned_64 (First mod Mask), 8 * Extra);
-         for I in 0 .. Extra - 1 loop
-            Value :=
-              Value
-              or Interfaces.Shift_Left
-                (Interfaces.Unsigned_64 (Data (Pos + I)), 8 * I);
-         end loop;
-         Pos := Pos + Extra;
-      end if;
-
-      return True;
-   exception
-      when others =>
-         Value := 0;
-         return False;
-   end Read_Seven_Zip_Number;
+      renames Zlib.Seven_Zip_Numbers.Read_Number;
 
    function Seven_Zip_Read_Byte
      (Data : Byte_Array;
       Pos  : in out Natural;
       Last : Natural;
       B    : out Byte) return Boolean
-   is
-   begin
-      if Pos > Last then
-         B := 0;
-         return False;
-      end if;
-
-      B := Data (Pos);
-      Pos := Pos + 1;
-      return True;
-   end Seven_Zip_Read_Byte;
+      renames Zlib.Seven_Zip_Container.Read_Byte;
 
    function Seven_Zip_Expect_Byte
      (Data     : Byte_Array;
       Pos      : in out Natural;
       Last     : Natural;
       Expected : Byte) return Boolean
-   is
-      Actual : Byte := 0;
-   begin
-      return Seven_Zip_Read_Byte (Data, Pos, Last, Actual)
-        and then Actual = Expected;
-   end Seven_Zip_Expect_Byte;
+      renames Zlib.Seven_Zip_Container.Expect_Byte;
 
    function Seven_Zip_Has_Bytes
      (Pos   : Natural;
       Last  : Natural;
       Count : Natural) return Boolean is
-   begin
-      return Count = 0
-        or else (Pos <= Last and then Count <= Last - Pos + 1);
-   end Seven_Zip_Has_Bytes;
+     (Zlib.Seven_Zip_Container.Has_Bytes (Pos, Last, Count))
+     with SPARK_Mode => On;
 
    function Seven_Zip_Find_Signature
      (Data : Byte_Array;
       Pos  : out Natural) return Boolean
-   is
-   begin
-      Pos := 0;
-
-      if Data'Length < 33 then
-         return False;
-      end if;
-
-      for I in Data'First .. Data'Last - 31 loop
-         if Data (I) = 16#37#
-           and then Data (I + 1) = 16#7A#
-           and then Data (I + 2) = 16#BC#
-           and then Data (I + 3) = 16#AF#
-           and then Data (I + 4) = 16#27#
-           and then Data (I + 5) = 16#1C#
-           and then Data (I + 6) = 0
-           and then Data (I + 7) = 4
-           and then (I = Data'First
-                     or else Seven_Zip_U32_At (Data, I + 8) =
-                       CRC32 (Data (I + 12 .. I + 31)))
-         then
-            Pos := I;
-            return True;
-         end if;
-      end loop;
-
-      return False;
-   end Seven_Zip_Find_Signature;
+      renames Zlib.Seven_Zip_Container.Find_Signature;
 
    function Seven_Zip_Skip_Properties
      (Data : Byte_Array;
       Pos  : in out Natural;
       Last : Natural) return Boolean
-   is
-      Property : Byte := 0;
-      Size     : Interfaces.Unsigned_64 := 0;
-   begin
-      loop
-         if not Seven_Zip_Read_Byte (Data, Pos, Last, Property) then
-            return False;
-         end if;
+      renames Zlib.Seven_Zip_Container.Skip_Properties;
 
-         exit when Property = 0;
-
-         if not Read_Seven_Zip_Number (Data, Pos, Last, Size)
-           or else Size > Interfaces.Unsigned_64 (Natural'Last)
-           or else Size > Interfaces.Unsigned_64 (Last - Pos + 1)
-         then
-            return False;
-         end if;
-
-         Pos := Pos + Natural (Size);
-      end loop;
-
-      return True;
-   end Seven_Zip_Skip_Properties;
-
-   type Seven_Zip_U32_Array is array (Positive range <>) of Interfaces.Unsigned_32;
-   type Seven_Zip_U64_Array is array (Positive range <>) of Interfaces.Unsigned_64;
-   type Seven_Zip_Coder_Method is
-     (Seven_Zip_Copy, Seven_Zip_Deflate_Method, Seven_Zip_BZip2_Method,
-      Seven_Zip_LZMA_Method, Seven_Zip_LZMA2_Method,
-      Seven_Zip_Delta_Method, Seven_Zip_BCJ_X86_Method,
-      Seven_Zip_BCJ_ARM_Method, Seven_Zip_BCJ_ARMT_Method,
-      Seven_Zip_BCJ_ARM64_Method,
-      Seven_Zip_BCJ_PPC_Method, Seven_Zip_BCJ_SPARC_Method,
-      Seven_Zip_BCJ_IA64_Method,
-      Seven_Zip_BCJ2_Method, Seven_Zip_PPMd_Method,
-      Seven_Zip_AES_Method);
-
-   --  Map a branch-filter coder method to its filter architecture.
-   function Branch_Arch_Of
-     (Method : Seven_Zip_Coder_Method)
-      return Zlib.Seven_Zip_Filters.Branch_Arch
-   is (case Method is
-          when Seven_Zip_BCJ_ARM_Method   => Zlib.Seven_Zip_Filters.ARM,
-          when Seven_Zip_BCJ_ARMT_Method  => Zlib.Seven_Zip_Filters.ARMT,
-          when Seven_Zip_BCJ_ARM64_Method => Zlib.Seven_Zip_Filters.ARM64,
-          when Seven_Zip_BCJ_PPC_Method   => Zlib.Seven_Zip_Filters.PPC,
-          when Seven_Zip_BCJ_SPARC_Method => Zlib.Seven_Zip_Filters.SPARC,
-          when others                     => Zlib.Seven_Zip_Filters.IA64);
-   --  @param Method a branch-filter coder method
-   --  @return the corresponding Seven_Zip_Filters architecture
+   subtype Seven_Zip_U32_Array is Zlib.Seven_Zip_Container.U32_Array;
+   subtype Seven_Zip_U64_Array is Zlib.Seven_Zip_Container.U64_Array;
    type Seven_Zip_Coder_Method_Array is
      array (Positive range <>) of Seven_Zip_Coder_Method;
    type Seven_Zip_LZMA_Props is array (Positive range 1 .. 5) of Byte;
@@ -7178,991 +5341,20 @@ package body Zlib is
      (Seven_Zip_File_Entry, Seven_Zip_Directory_Entry);
    function Seven_Zip_Valid_PPMd_Props
      (Order  : Natural;
-      Memory : Interfaces.Unsigned_32) return Boolean is
+      Memory : Interfaces.Unsigned_32) return Boolean
+     with SPARK_Mode => On
+   is
    begin
       return Order in 2 .. 64
         and then Memory >= 2 ** 11
         and then Memory <= Interfaces.Unsigned_32'Last - 36;
    end Seven_Zip_Valid_PPMd_Props;
 
-   PPMd_Default_Order  : constant Natural := 6;
-   PPMd_Default_Memory : constant Interfaces.Unsigned_32 := 16#0100_0000#;
-
    function Seven_Zip_Bit_Is_Set
      (Data  : Byte_Array;
       First : Natural;
       Index : Natural) return Boolean
-   is
-      Byte_Pos : constant Natural := First + (Index - 1) / 8;
-      Mask     : constant Byte :=
-        Byte
-          (Interfaces.Shift_Right
-             (Interfaces.Unsigned_8'(16#80#), (Index - 1) mod 8));
-   begin
-      return (Data (Byte_Pos) and Mask) /= 0;
-   exception
-      when others =>
-         return False;
-   end Seven_Zip_Bit_Is_Set;
-
-   function Seven_Zip_U64_LE
-     (Data : Byte_Array;
-      Pos  : Natural) return Interfaces.Unsigned_64
-   is
-      Result : Interfaces.Unsigned_64 := 0;
-   begin
-      for I in 0 .. 7 loop
-         Result :=
-           Result
-           or Interfaces.Shift_Left
-             (Interfaces.Unsigned_64 (Data (Pos + I)), 8 * I);
-      end loop;
-      return Result;
-   exception
-      when others =>
-         return 0;
-   end Seven_Zip_U64_LE;
-
-   function Seven_Zip_U32_LE
-     (Data : Byte_Array;
-      Pos  : Natural) return Interfaces.Unsigned_32
-   is
-      Result : Interfaces.Unsigned_32 := 0;
-   begin
-      for I in 0 .. 3 loop
-         Result :=
-           Result
-           or Interfaces.Shift_Left
-             (Interfaces.Unsigned_32 (Data (Pos + I)), 8 * I);
-      end loop;
-      return Result;
-   exception
-      when others =>
-         return 0;
-   end Seven_Zip_U32_LE;
-
-   function Seven_Zip_Read_File_Time_Property
-     (Data       : Byte_Array;
-      First      : Natural;
-      Count      : Natural;
-      File_Count : Natural;
-      Target     : Natural;
-      Has_Time   : out Boolean;
-      Time       : out Interfaces.Unsigned_64) return Boolean
-   is
-      Last        : constant Natural := First + Count - 1;
-      Pos         : Natural := First;
-      All_Defined : Boolean;
-      Defined_Pos : Natural := 0;
-   begin
-      Has_Time := False;
-      Time := 0;
-
-      if Count = 0
-        or else File_Count = 0
-        or else Target not in 1 .. File_Count
-      then
-         return False;
-      end if;
-
-      All_Defined := Data (Pos) /= 0;
-      Pos := Pos + 1;
-
-      if not All_Defined then
-         if Count < 1 + (File_Count + 7) / 8 then
-            return False;
-         end if;
-         Defined_Pos := Pos;
-         Pos := Pos + (File_Count + 7) / 8;
-      end if;
-
-      if Pos > Last or else Data (Pos) /= 0 then
-         return False;
-      end if;
-      Pos := Pos + 1;
-
-      for I in 1 .. File_Count loop
-         declare
-            Defined : constant Boolean :=
-              All_Defined or else Seven_Zip_Bit_Is_Set (Data, Defined_Pos, I);
-         begin
-            if Defined then
-               if Pos > Last or else Last - Pos + 1 < 8 then
-                  return False;
-               end if;
-
-               if I = Target then
-                  Has_Time := True;
-                  Time := Seven_Zip_U64_LE (Data, Pos);
-               end if;
-
-               Pos := Pos + 8;
-            elsif I = Target then
-               Has_Time := False;
-               Time := 0;
-            end if;
-         end;
-      end loop;
-
-      return Pos = Last + 1;
-   exception
-      when others =>
-         Has_Time := False;
-         Time := 0;
-         return False;
-   end Seven_Zip_Read_File_Time_Property;
-
-   function Seven_Zip_Read_U32_Property
-     (Data       : Byte_Array;
-      First      : Natural;
-      Count      : Natural;
-      File_Count : Natural;
-      Target     : Natural;
-      Has_Value  : out Boolean;
-      Value      : out Interfaces.Unsigned_32) return Boolean
-   is
-      Last        : constant Natural := First + Count - 1;
-      Pos         : Natural := First;
-      All_Defined : Boolean;
-      Defined_Pos : Natural := 0;
-      Defined_Count : Natural := 0;
-   begin
-      Has_Value := False;
-      Value := 0;
-
-      if Count = 0
-        or else File_Count = 0
-        or else Target not in 1 .. File_Count
-      then
-         return False;
-      end if;
-
-      All_Defined := Data (Pos) /= 0;
-      Pos := Pos + 1;
-
-      if not All_Defined then
-         if Count < 1 + (File_Count + 7) / 8 then
-            return False;
-         end if;
-         Defined_Pos := Pos;
-         Pos := Pos + (File_Count + 7) / 8;
-      end if;
-
-      for I in 1 .. File_Count loop
-         if All_Defined or else Seven_Zip_Bit_Is_Set (Data, Defined_Pos, I) then
-            Defined_Count := Defined_Count + 1;
-         end if;
-      end loop;
-
-      if Pos <= Last
-        and then Data (Pos) = 0
-        and then Last - Pos = 4 * Defined_Count
-      then
-         Pos := Pos + 1;
-      end if;
-
-      for I in 1 .. File_Count loop
-         declare
-            Defined : constant Boolean :=
-              All_Defined or else Seven_Zip_Bit_Is_Set (Data, Defined_Pos, I);
-         begin
-            if Defined then
-               if Pos > Last or else Last - Pos + 1 < 4 then
-                  return False;
-               end if;
-
-               if I = Target then
-                  Has_Value := True;
-                  Value := Seven_Zip_U32_LE (Data, Pos);
-               end if;
-
-               Pos := Pos + 4;
-            elsif I = Target then
-               Has_Value := False;
-               Value := 0;
-            end if;
-         end;
-      end loop;
-
-      return Pos = Last + 1;
-   exception
-      when others =>
-         Has_Value := False;
-         Value := 0;
-         return False;
-   end Seven_Zip_Read_U32_Property;
-
-   function Seven_Zip_Leap_Year (Year : Natural) return Boolean is
-   begin
-      return (Year mod 4 = 0 and then Year mod 100 /= 0)
-        or else Year mod 400 = 0;
-   end Seven_Zip_Leap_Year;
-
-   function Seven_Zip_Filetime_To_OS_Time
-     (File_Time : Interfaces.Unsigned_64;
-      OS_Time   : out GNAT.OS_Lib.OS_Time) return Boolean
-   is
-      Ticks_Per_Second : constant Interfaces.Unsigned_64 := 10_000_000;
-      Unix_Epoch_Delta : constant Interfaces.Unsigned_64 := 11_644_473_600;
-      Seconds          : Interfaces.Unsigned_64;
-      Days             : Natural;
-      Seconds_Of_Day   : Natural;
-      Year             : Natural := 1970;
-      Month            : Natural := 1;
-      Day              : Natural;
-      Month_Lengths    : constant array (1 .. 12) of Natural :=
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-   begin
-      OS_Time := GNAT.OS_Lib.Invalid_Time;
-      Seconds := File_Time / Ticks_Per_Second;
-      if Seconds < Unix_Epoch_Delta then
-         return False;
-      end if;
-
-      Seconds := Seconds - Unix_Epoch_Delta;
-      if Seconds > Interfaces.Unsigned_64 (Natural'Last) then
-         return False;
-      end if;
-
-      Days := Natural (Seconds / 86_400);
-      Seconds_Of_Day := Natural (Seconds mod 86_400);
-
-      loop
-         declare
-            Year_Days : constant Natural :=
-              (if Seven_Zip_Leap_Year (Year) then 366 else 365);
-         begin
-            exit when Days < Year_Days;
-            Days := Days - Year_Days;
-            Year := Year + 1;
-            if Year > GNAT.OS_Lib.Year_Type'Last then
-               return False;
-            end if;
-         end;
-      end loop;
-
-      loop
-         declare
-            Month_Days : constant Natural :=
-              (if Month = 2 and then Seven_Zip_Leap_Year (Year)
-               then 29
-               else Month_Lengths (Month));
-         begin
-            exit when Days < Month_Days;
-            Days := Days - Month_Days;
-            Month := Month + 1;
-         end;
-      end loop;
-
-      Day := Days + 1;
-      OS_Time :=
-        GNAT.OS_Lib.GM_Time_Of
-          (GNAT.OS_Lib.Year_Type (Year),
-           GNAT.OS_Lib.Month_Type (Month),
-           GNAT.OS_Lib.Day_Type (Day),
-           GNAT.OS_Lib.Hour_Type (Seconds_Of_Day / 3_600),
-           GNAT.OS_Lib.Minute_Type ((Seconds_Of_Day / 60) mod 60),
-           GNAT.OS_Lib.Second_Type (Seconds_Of_Day mod 60));
-      return OS_Time /= GNAT.OS_Lib.Invalid_Time;
-   exception
-      when others =>
-         OS_Time := GNAT.OS_Lib.Invalid_Time;
-         return False;
-   end Seven_Zip_Filetime_To_OS_Time;
-
-   procedure Seven_Zip_Apply_Metadata
-     (Path     : String;
-      Metadata : Seven_Zip_Entry_Metadata)
-   is
-      OS_Time : GNAT.OS_Lib.OS_Time := GNAT.OS_Lib.Invalid_Time;
-   begin
-      if Metadata.Has_Modification_Time
-        and then Seven_Zip_Filetime_To_OS_Time
-          (Metadata.Modification_Time, OS_Time)
-      then
-         GNAT.OS_Lib.Set_File_Last_Modify_Time_Stamp (Path, OS_Time);
-      end if;
-
-      if Metadata.Has_Windows_Attributes
-        and then (Metadata.Windows_Attributes and 16#0000_0001#) /= 0
-      then
-         GNAT.OS_Lib.Set_Read_Only (Path);
-      end if;
-   end Seven_Zip_Apply_Metadata;
-
-   function Seven_Zip_Name_Index
-     (Data       : Byte_Array;
-      First      : Natural;
-      Count      : Natural;
-      File_Count : Natural;
-      Entry_Name : String;
-      Index      : out Natural) return Boolean
-   is
-      Last : constant Natural := First + Count - 1;
-      Pos  : Natural := First;
-      Found : Boolean := False;
-   begin
-      Index := 0;
-
-      if Count = 0 or else File_Count = 0 or else Data (Pos) /= 0 then
-         return False;
-      end if;
-      Pos := Pos + 1;
-
-      for File_Index in 1 .. File_Count loop
-         declare
-            Match    : Boolean := True;
-            Name_Pos : Natural := Entry_Name'First;
-         begin
-            loop
-               if Pos + 1 > Last then
-                  return False;
-               end if;
-
-               exit when Data (Pos) = 0 and then Data (Pos + 1) = 0;
-
-               if Name_Pos > Entry_Name'Last
-                 or else Data (Pos) /=
-                   Byte (Character'Pos (Entry_Name (Name_Pos)) mod 256)
-                 or else Data (Pos + 1) /=
-                   Byte (Character'Pos (Entry_Name (Name_Pos)) / 256)
-               then
-                  Match := False;
-               end if;
-
-               if Name_Pos <= Entry_Name'Last then
-                  Name_Pos := Name_Pos + 1;
-               end if;
-
-               Pos := Pos + 2;
-            end loop;
-
-            if Match and then Name_Pos = Entry_Name'Last + 1 then
-               if Found then
-                  Index := 0;
-                  return False;
-               end if;
-               Found := True;
-               Index := File_Index;
-            end if;
-
-            Pos := Pos + 2;
-         end;
-      end loop;
-
-      return Pos = Last + 1 and then Found;
-   exception
-      when others =>
-         Index := 0;
-         return False;
-   end Seven_Zip_Name_Index;
-
-   procedure Append_UTF16LE_NT
-     (Output : in out Byte_Vectors.Vector;
-      Text   : String)
-   is
-   begin
-      for Ch of Text loop
-         Output.Append (Byte (Character'Pos (Ch) mod 256));
-         Output.Append (Byte (Character'Pos (Ch) / 256));
-      end loop;
-
-      Output.Append (0);
-      Output.Append (0);
-   end Append_UTF16LE_NT;
-
-   procedure Append_Seven_Zip_Coder
-     (Header : in out Byte_Vectors.Vector;
-      Method : Seven_Zip_Coder_Method) is
-   begin
-      case Method is
-         when Seven_Zip_Copy =>
-            Header.Append (1);
-            Header.Append (0);
-
-         when Seven_Zip_Deflate_Method =>
-            Header.Append (3);
-            Header.Append (16#04#);
-            Header.Append (16#01#);
-            Header.Append (16#08#);
-
-         when Seven_Zip_BZip2_Method =>
-            Header.Append (3);
-            Header.Append (16#04#);
-            Header.Append (16#02#);
-            Header.Append (16#02#);
-
-         when Seven_Zip_LZMA_Method =>
-            Header.Append (16#23#);
-            Header.Append (16#03#);
-            Header.Append (16#01#);
-            Header.Append (16#01#);
-            Header.Append (5);
-            Header.Append (LZMA_Default_Props);
-            Header.Append (Byte (LZMA_Default_Dict mod 256));
-            Header.Append (Byte ((LZMA_Default_Dict / 256) mod 256));
-            Header.Append (Byte ((LZMA_Default_Dict / 65_536) mod 256));
-            Header.Append (Byte ((LZMA_Default_Dict / 16#0100_0000#) mod 256));
-
-         when Seven_Zip_LZMA2_Method =>
-            Header.Append (16#21#);
-            Header.Append (16#21#);
-            Header.Append (1);
-            Header.Append (16#16#);
-
-         when Seven_Zip_Delta_Method =>
-            Header.Append (16#21#);
-            Header.Append (16#03#);
-            Header.Append (1);
-            Header.Append (0);
-
-         when Seven_Zip_BCJ_X86_Method =>
-            Header.Append (4);
-            Header.Append (16#03#);
-            Header.Append (16#03#);
-            Header.Append (16#01#);
-            Header.Append (16#03#);
-
-         when Seven_Zip_BCJ_ARM_Method | Seven_Zip_BCJ_ARMT_Method
-            | Seven_Zip_BCJ_PPC_Method | Seven_Zip_BCJ_SPARC_Method
-            | Seven_Zip_BCJ_IA64_Method =>
-            --  Classic 4-byte BCJ branch-filter id, no streams, no props.
-            Header.Append (4);
-            Header.Append (16#03#);
-            Header.Append (16#03#);
-            case Method is
-               when Seven_Zip_BCJ_ARM_Method =>
-                  Header.Append (16#05#);
-                  Header.Append (16#01#);
-               when Seven_Zip_BCJ_ARMT_Method =>
-                  Header.Append (16#07#);
-                  Header.Append (16#01#);
-               when Seven_Zip_BCJ_PPC_Method =>
-                  Header.Append (16#02#);
-                  Header.Append (16#05#);
-               when Seven_Zip_BCJ_SPARC_Method =>
-                  Header.Append (16#08#);
-                  Header.Append (16#05#);
-               when others =>  --  IA64 (03030401)
-                  Header.Append (16#04#);
-                  Header.Append (16#01#);
-            end case;
-
-         when Seven_Zip_BCJ_ARM64_Method =>
-            --  ARM64 has only the compact 1-byte id 0A, no streams/props.
-            Header.Append (1);
-            Header.Append (16#0A#);
-
-         when Seven_Zip_BCJ2_Method =>
-            Header.Append (16#14#);
-            Header.Append (16#03#);
-            Header.Append (16#03#);
-            Header.Append (16#01#);
-            Header.Append (16#1B#);
-            Header.Append (4);
-            Header.Append (1);
-
-         when Seven_Zip_PPMd_Method =>
-            Header.Append (16#23#);
-            Header.Append (16#03#);
-            Header.Append (16#04#);
-            Header.Append (16#01#);
-            Header.Append (5);
-            Header.Append (Byte (PPMd_Default_Order));
-            Append_U32_LE (Header, PPMd_Default_Memory);
-
-         when Seven_Zip_AES_Method =>
-            --  AES coder bytes are emitted by the encryption writer, which
-            --  carries the per-archive salt/iv/cycles props.
-            null;
-      end case;
-   end Append_Seven_Zip_Coder;
-
-   function Seven_Zip_Delta_Decode
-     (Input    : Byte_Array;
-      Distance : Natural;
-      Status   : out Status_Code) return Byte_Array
-   is
-      Empty : constant Byte_Array (1 .. 0) := [others => 0];
-   begin
-      if Distance = 0 or else Distance > 256 then
-         Status := Unsupported_Method;
-         return Empty;
-      end if;
-
-      declare
-         Output : Byte_Array (1 .. Input'Length) := [others => 0];
-      begin
-         for Offset in 0 .. Input'Length - 1 loop
-            declare
-               Previous : constant Byte :=
-                 (if Offset >= Distance
-                  then Output (Output'First + Offset - Distance)
-                  else 0);
-            begin
-               Output (Output'First + Offset) :=
-                 Byte ((Natural (Input (Input'First + Offset))
-                       + Natural (Previous)) mod 256);
-            end;
-         end loop;
-
-         Status := Ok;
-         return Output;
-      end;
-   end Seven_Zip_Delta_Decode;
-
-   --  PPMd decode now delegates to the real Zlib.PPMd7 codec. These thin
-   --  shims preserve the historic signatures used across the extractor.
-   Seven_Zip_PPMd_Decode_Mode_Count : constant Positive := 8;
-
-   function PPMd_Decode_Shim
-     (Input       : Byte_Array;
-      Output_Size : Natural;
-      Order       : Natural;
-      Memory      : Interfaces.Unsigned_32;
-      Status      : out Status_Code) return Byte_Array is
-   begin
-      if Order < 2 or else Order > 64 then
-         Status := Invalid_Block_Type;
-         return [1 .. 0 => 0];
-      end if;
-      return Zlib.PPMd7.Decompress (Input, Output_Size, Order, Memory, Status);
-   end PPMd_Decode_Shim;
-
-   function Seven_Zip_PPMd_Decode
-     (Input       : Byte_Array;
-      Output_Size : Natural;
-      Order       : Natural;
-      Memory      : Interfaces.Unsigned_32;
-      Remaining_Symbols_From_Root : Boolean;
-      General_Root : Boolean;
-      Full_Update_Model : Boolean;
-      Status      : out Status_Code;
-      Use_State_Blocks : Boolean := False) return Byte_Array
-   is
-      pragma Unreferenced
-        (Remaining_Symbols_From_Root, General_Root, Full_Update_Model,
-         Use_State_Blocks);
-   begin
-      return PPMd_Decode_Shim (Input, Output_Size, Order, Memory, Status);
-   end Seven_Zip_PPMd_Decode;
-
-   function Seven_Zip_PPMd_Decode_Mode
-     (Input       : Byte_Array;
-      Output_Size : Natural;
-      Order       : Natural;
-      Memory      : Interfaces.Unsigned_32;
-      Mode        : Positive;
-      Status      : out Status_Code) return Byte_Array
-   is
-      pragma Unreferenced (Mode);
-   begin
-      return PPMd_Decode_Shim (Input, Output_Size, Order, Memory, Status);
-   end Seven_Zip_PPMd_Decode_Mode;
-
-   function Seven_Zip_PPMd_Decode_Verified
-     (Input        : Byte_Array;
-      Output_Size  : Natural;
-      Order        : Natural;
-      Memory       : Interfaces.Unsigned_32;
-      Verify_CRC   : Boolean;
-      Expected_CRC : Interfaces.Unsigned_32;
-      Status       : out Status_Code) return Byte_Array
-   is
-      Result : constant Byte_Array :=
-        PPMd_Decode_Shim (Input, Output_Size, Order, Memory, Status);
-   begin
-      if Status = Ok and then Verify_CRC
-        and then CRC32 (Result) /= Expected_CRC
-      then
-         Status := Invalid_Checksum;
-         return [1 .. 0 => 0];
-      end if;
-      return Result;
-   end Seven_Zip_PPMd_Decode_Verified;
-
-   function Seven_Zip_BCJ_X86_Decode
-     (Input  : Byte_Array;
-      Status : out Status_Code) return Byte_Array is
-   begin
-      --  Use the full masked x86 BCJ converter (interop-correct with stock
-      --  7z); the previous inline version was a simplified non-masked variant
-      --  that mis-decoded real archives.
-      Status := Ok;
-      return Zlib.Seven_Zip_Filters.Branch_Convert
-        (Zlib.Seven_Zip_Filters.X86, Input, Encoding => False);
-   end Seven_Zip_BCJ_X86_Decode;
-
-   function Seven_Zip_BCJ2_Decode
-     (Main_Stream : Byte_Array;
-      Call_Stream : Byte_Array;
-      Jump_Stream : Byte_Array;
-      RC_Stream   : Byte_Array;
-      Expected    : Natural;
-      Status      : out Status_Code) return Byte_Array
-   is
-      Empty : constant Byte_Array (1 .. 0) := [others => 0];
-
-      subtype Prob_Index is Natural range 0 .. 257;
-      type Prob_Array is array (Prob_Index) of Interfaces.Unsigned_16;
-
-      Top_Value       : constant Interfaces.Unsigned_32 := 16#0100_0000#;
-      Bit_Model_Total : constant Interfaces.Unsigned_32 := 2048;
-      Move_Bits       : constant Natural := 5;
-
-      Output : Byte_Array (1 .. Expected) := [others => 0];
-      Probs  : Prob_Array := [others => 1024];
-      RC_Range : Interfaces.Unsigned_32 := Interfaces.Unsigned_32'Last;
-      Code   : Interfaces.Unsigned_32 := 0;
-      IP     : Interfaces.Unsigned_32 := 0;
-      V      : Interfaces.Unsigned_32 := 0;
-      Main_Pos : Natural := Main_Stream'First;
-      Call_Pos : Natural := Call_Stream'First;
-      Jump_Pos : Natural := Jump_Stream'First;
-      RC_Pos   : Natural := RC_Stream'First;
-      Out_Pos  : Natural := Output'First;
-
-      function Has_Byte (Pos : Natural; Data : Byte_Array) return Boolean is
-      begin
-         return Pos in Data'Range;
-      end Has_Byte;
-
-      function Read_RC_Byte return Boolean is
-      begin
-         if not Has_Byte (RC_Pos, RC_Stream) then
-            return False;
-         end if;
-
-         Code :=
-           Interfaces.Shift_Left (Code, 8)
-           or Interfaces.Unsigned_32 (RC_Stream (RC_Pos));
-         RC_Pos := RC_Pos + 1;
-         return True;
-      end Read_RC_Byte;
-
-      function Read_BE32
-        (Data : Byte_Array;
-         Pos  : in out Natural;
-         Value : out Interfaces.Unsigned_32) return Boolean is
-      begin
-         if Pos not in Data'Range
-           or else Pos + 3 > Data'Last
-         then
-            Value := 0;
-            return False;
-         end if;
-
-         Value :=
-           Interfaces.Shift_Left (Interfaces.Unsigned_32 (Data (Pos)), 24)
-           or Interfaces.Shift_Left
-             (Interfaces.Unsigned_32 (Data (Pos + 1)), 16)
-           or Interfaces.Shift_Left
-             (Interfaces.Unsigned_32 (Data (Pos + 2)), 8)
-           or Interfaces.Unsigned_32 (Data (Pos + 3));
-         Pos := Pos + 4;
-         return True;
-      end Read_BE32;
-
-      procedure Put_Byte (B : Byte) is
-      begin
-         Output (Out_Pos) := B;
-         Out_Pos := Out_Pos + 1;
-         IP := IP + 1;
-      end Put_Byte;
-
-      function Candidate (Value : Interfaces.Unsigned_32) return Boolean is
-         B : constant Interfaces.Unsigned_32 := Value and 16#FF#;
-      begin
-         return ((B + 16#18#) and 16#FE#) = 0
-           or else
-             ((Value - 16#0F00_0080#) and 16#FFFFFFF0#) = 0;
-      end Candidate;
-
-      function Prob_For
-        (Value : Interfaces.Unsigned_32) return Prob_Index
-      is
-         C : constant Interfaces.Unsigned_32 :=
-           Interfaces.Shift_Right (Value + 16#17#, 6) and 1;
-         High : constant Interfaces.Unsigned_32 :=
-           Interfaces.Shift_Right (Value, 24) and 16#FF#;
-         Low  : constant Interfaces.Unsigned_32 :=
-           Interfaces.Shift_Right (Value, 5) and 1;
-      begin
-         return Prob_Index (((0 - C) and High) + C + Low);
-      end Prob_For;
-
-      function Jump_Stream_For
-        (Value : Interfaces.Unsigned_32) return Natural
-      is
-      begin
-         return Natural
-           ((Interfaces.Shift_Right (Value + 16#57#, 6) and 1));
-      end Jump_Stream_For;
-   begin
-      Status := Unexpected_End_Of_Input;
-
-      for I in 1 .. 5 loop
-         if not Read_RC_Byte then
-            return Empty;
-         end if;
-
-         if I = 2 and then Code /= Interfaces.Unsigned_32 (RC_Stream (RC_Pos - 1))
-         then
-            return Empty;
-         end if;
-      end loop;
-
-      if Code = Interfaces.Unsigned_32'Last then
-         Status := Invalid_Block_Type;
-         return Empty;
-      end if;
-
-      while Out_Pos <= Output'Last loop
-         if RC_Range < Top_Value then
-            if not Read_RC_Byte then
-               return Empty;
-            end if;
-            RC_Range := Interfaces.Shift_Left (RC_Range, 8);
-         end if;
-
-         if not Has_Byte (Main_Pos, Main_Stream) then
-            return Empty;
-         end if;
-
-         declare
-            B : constant Byte := Main_Stream (Main_Pos);
-         begin
-            Main_Pos := Main_Pos + 1;
-            Put_Byte (B);
-            V :=
-              (Interfaces.Shift_Left (V, 24)
-               or Interfaces.Unsigned_32 (B));
-         end;
-
-         if Out_Pos <= Output'Last and then Candidate (V) then
-            declare
-               P_Index : constant Prob_Index := Prob_For (V);
-               Prob    : constant Interfaces.Unsigned_32 :=
-                 Interfaces.Unsigned_32 (Probs (P_Index));
-               Bound   : constant Interfaces.Unsigned_32 :=
-                 Interfaces.Shift_Right (RC_Range, 11) * Prob;
-            begin
-               if Code < Bound then
-                  RC_Range := Bound;
-                  Probs (P_Index) :=
-                    Interfaces.Unsigned_16
-                      (Prob + Interfaces.Shift_Right
-                         (Bit_Model_Total - Prob, Move_Bits));
-               else
-                  RC_Range := RC_Range - Bound;
-                  Code := Code - Bound;
-                  Probs (P_Index) :=
-                    Interfaces.Unsigned_16
-                      (Prob - Interfaces.Shift_Right (Prob, Move_Bits));
-
-                  declare
-                     Encoded : Interfaces.Unsigned_32 := 0;
-                     Source  : constant Natural := Jump_Stream_For (V);
-                     Ok_Read : Boolean;
-                  begin
-                     if Source = 0 then
-                        Ok_Read := Read_BE32
-                          (Call_Stream, Call_Pos, Encoded);
-                     else
-                        Ok_Read := Read_BE32
-                          (Jump_Stream, Jump_Pos, Encoded);
-                     end if;
-
-                     if not Ok_Read or else Out_Pos + 3 > Output'Last + 1 then
-                        return Empty;
-                     end if;
-
-                     Encoded := Encoded - (IP + 4);
-                     for I in 0 .. 3 loop
-                        Output (Out_Pos + I) :=
-                          Byte
-                            (Interfaces.Shift_Right
-                               (Encoded, 8 * I) and 16#FF#);
-                     end loop;
-                     Out_Pos := Out_Pos + 4;
-                     IP := IP + 4;
-                     V := Interfaces.Shift_Right (Encoded, 24);
-                  end;
-               end if;
-            end;
-         end if;
-      end loop;
-
-      if Main_Pos /= Main_Stream'Last + 1
-        or else Call_Pos /= Call_Stream'Last + 1
-        or else Jump_Pos /= Jump_Stream'Last + 1
-      then
-         Status := Invalid_Checksum;
-         return Empty;
-      end if;
-
-      Status := Ok;
-      return Output;
-   end Seven_Zip_BCJ2_Decode;
-
-   --  Inverse of Seven_Zip_BCJ2_Decode: split x86 code into the four BCJ2
-   --  streams (main, call, jump, range-coded control). Converts an E8/E9/0F8x
-   --  branch when its 4-byte displacement's high byte passes the x86 BCJ test
-   --  (0x00 or 0xFF); the decision is range-coded so any policy round-trips.
-   procedure Seven_Zip_BCJ2_Encode
-     (Input : Byte_Array;
-      Main  : out Byte_Vectors.Vector;
-      Call  : out Byte_Vectors.Vector;
-      Jump  : out Byte_Vectors.Vector;
-      RC    : out Byte_Vectors.Vector)
-   is
-      subtype Prob_Index is Natural range 0 .. 257;
-      type Prob_Array is array (Prob_Index) of Interfaces.Unsigned_32;
-
-      Top_Value       : constant Interfaces.Unsigned_32 := 16#0100_0000#;
-      Bit_Model_Total : constant Interfaces.Unsigned_32 := 2048;
-      Move_Bits       : constant Natural := 5;
-
-      Probs      : Prob_Array := [others => 1024];
-      Rng        : Interfaces.Unsigned_32 := Interfaces.Unsigned_32'Last;
-      Low        : Interfaces.Unsigned_64 := 0;
-      Cache      : Byte := 0;
-      Cache_Size : Interfaces.Unsigned_64 := 1;
-
-      Total : constant Natural := Input'Length;
-      IP    : Interfaces.Unsigned_32 := 0;
-      V     : Interfaces.Unsigned_32 := 0;
-      I     : Natural := Input'First;
-
-      function Candidate (Value : Interfaces.Unsigned_32) return Boolean is
-         B : constant Interfaces.Unsigned_32 := Value and 16#FF#;
-      begin
-         return ((B + 16#18#) and 16#FE#) = 0
-           or else ((Value - 16#0F00_0080#) and 16#FFFFFFF0#) = 0;
-      end Candidate;
-
-      function Prob_For (Value : Interfaces.Unsigned_32) return Prob_Index is
-         C    : constant Interfaces.Unsigned_32 :=
-           Interfaces.Shift_Right (Value + 16#17#, 6) and 1;
-         High : constant Interfaces.Unsigned_32 :=
-           Interfaces.Shift_Right (Value, 24) and 16#FF#;
-         Lo   : constant Interfaces.Unsigned_32 :=
-           Interfaces.Shift_Right (Value, 5) and 1;
-      begin
-         return Prob_Index (((0 - C) and High) + C + Lo);
-      end Prob_For;
-
-      function Jump_Stream_For (Value : Interfaces.Unsigned_32) return Natural is
-        (Natural (Interfaces.Shift_Right (Value + 16#57#, 6) and 1));
-
-      procedure Shift_Low is
-      begin
-         if Low < 16#FF00_0000#
-           or else Low > 16#FFFF_FFFF#
-         then
-            declare
-               Temp : Byte := Cache;
-            begin
-               loop
-                  RC.Append
-                    (Byte ((Interfaces.Unsigned_64 (Temp) +
-                            Interfaces.Shift_Right (Low, 32)) and 16#FF#));
-                  Temp := 16#FF#;
-                  Cache_Size := Cache_Size - 1;
-                  exit when Cache_Size = 0;
-               end loop;
-               Cache :=
-                 Byte (Interfaces.Shift_Right (Low, 24) and 16#FF#);
-            end;
-         end if;
-         Cache_Size := Cache_Size + 1;
-         Low := Interfaces.Shift_Left (Low and 16#00FF_FFFF#, 8);
-      end Shift_Low;
-
-      procedure Encode_Bit (Idx : Prob_Index; Bit : Natural) is
-         Prob  : constant Interfaces.Unsigned_32 := Probs (Idx);
-         Bound : constant Interfaces.Unsigned_32 :=
-           Interfaces.Shift_Right (Rng, 11) * Prob;
-      begin
-         if Bit = 0 then
-            Rng := Bound;
-            Probs (Idx) :=
-              Prob + Interfaces.Shift_Right (Bit_Model_Total - Prob, Move_Bits);
-         else
-            Low := Low + Interfaces.Unsigned_64 (Bound);
-            Rng := Rng - Bound;
-            Probs (Idx) := Prob - Interfaces.Shift_Right (Prob, Move_Bits);
-         end if;
-         if Rng < Top_Value then
-            Rng := Interfaces.Shift_Left (Rng, 8);
-            Shift_Low;
-         end if;
-      end Encode_Bit;
-
-      procedure Append_BE32
-        (To : in out Byte_Vectors.Vector; Value : Interfaces.Unsigned_32) is
-      begin
-         To.Append (Byte (Interfaces.Shift_Right (Value, 24) and 16#FF#));
-         To.Append (Byte (Interfaces.Shift_Right (Value, 16) and 16#FF#));
-         To.Append (Byte (Interfaces.Shift_Right (Value, 8) and 16#FF#));
-         To.Append (Byte (Value and 16#FF#));
-      end Append_BE32;
-   begin
-      while I <= Input'Last loop
-         declare
-            B : constant Byte := Input (I);
-         begin
-            I := I + 1;
-            Main.Append (B);
-            IP := IP + 1;
-            V := Interfaces.Shift_Left (V, 24) or Interfaces.Unsigned_32 (B);
-         end;
-
-         if Natural (IP) < Total and then Candidate (V) then
-            declare
-               P_Idx   : constant Prob_Index := Prob_For (V);
-               Convert : Boolean := False;
-               Rel     : Interfaces.Unsigned_32 := 0;
-            begin
-               --  Need 4 displacement bytes to convert.
-               if I + 3 <= Input'Last then
-                  Rel :=
-                    Interfaces.Unsigned_32 (Input (I))
-                    or Interfaces.Shift_Left
-                         (Interfaces.Unsigned_32 (Input (I + 1)), 8)
-                    or Interfaces.Shift_Left
-                         (Interfaces.Unsigned_32 (Input (I + 2)), 16)
-                    or Interfaces.Shift_Left
-                         (Interfaces.Unsigned_32 (Input (I + 3)), 24);
-                  Convert := Input (I + 3) = 0 or else Input (I + 3) = 16#FF#;
-               end if;
-
-               if Convert then
-                  Encode_Bit (P_Idx, 1);
-                  declare
-                     Abs_Addr : constant Interfaces.Unsigned_32 :=
-                       Rel + IP + 4;
-                  begin
-                     if Jump_Stream_For (V) = 0 then
-                        Append_BE32 (Call, Abs_Addr);
-                     else
-                        Append_BE32 (Jump, Abs_Addr);
-                     end if;
-                  end;
-                  I := I + 4;
-                  IP := IP + 4;
-                  V := Interfaces.Shift_Right (Rel, 24);
-               else
-                  Encode_Bit (P_Idx, 0);
-               end if;
-            end;
-         end if;
-      end loop;
-
-      for K in 1 .. 5 loop
-         Shift_Low;
-      end loop;
-   end Seven_Zip_BCJ2_Encode;
+      renames Zlib.Seven_Zip_Properties.Bit_Is_Set;
 
    function BZip2_Compress (Plain : Byte_Array; Status : out Status_Code)
                             return Byte_Array
@@ -8325,82 +5517,13 @@ package body Zlib is
          return Empty;
    end BZip2_Decompress;
 
-   LZMA2_Default_Props : constant Byte := LZMA_Default_Props;
-   LZMA2_Max_Chunk     : constant Natural := 4096;
-
-   procedure LZMA2_Append_Uncompressed_Chunk
-     (Output    : in out Byte_Vectors.Vector;
-      Chunk     : Byte_Array;
-      First     : Boolean)
-   is
-      Stored : constant Natural := Chunk'Length - 1;
-   begin
-      Output.Append (if First then 16#01# else 16#02#);
-      Output.Append (Byte (Stored / 256));
-      Output.Append (Byte (Stored mod 256));
-      for B of Chunk loop
-         Output.Append (B);
-      end loop;
-   end LZMA2_Append_Uncompressed_Chunk;
-
-   procedure LZMA2_Append_Compressed_Chunk
-     (Output : in out Byte_Vectors.Vector;
-      Plain  : Byte_Array;
-      Coded  : Byte_Array)
-   is
-      Unpacked_Size : constant Natural := Plain'Length - 1;
-      Packed_Size   : constant Natural := Coded'Length - 1;
-   begin
-      Output.Append (Byte (16#E0# + Unpacked_Size / 65_536));
-      Output.Append (Byte ((Unpacked_Size / 256) mod 256));
-      Output.Append (Byte (Unpacked_Size mod 256));
-      Output.Append (Byte (Packed_Size / 256));
-      Output.Append (Byte (Packed_Size mod 256));
-      Output.Append (LZMA2_Default_Props);
-      for B of Coded loop
-         Output.Append (B);
-      end loop;
-   end LZMA2_Append_Compressed_Chunk;
-
-   function LZMA2_Encode (Plain : Byte_Array) return Byte_Array is
-      Output : Byte_Vectors.Vector;
-      Pos    : Natural := Plain'First;
-   begin
-      while Pos <= Plain'Last loop
-         declare
-            Remaining : constant Natural := Plain'Last - Pos + 1;
-            Chunk_Len : constant Natural :=
-              Natural'Min (Remaining, LZMA2_Max_Chunk);
-            Chunk     : constant Byte_Array := Plain (Pos .. Pos + Chunk_Len - 1);
-            Coded     : constant Byte_Array := LZMA_Encode_Bounded (Chunk);
-         begin
-            if Coded'Length + 6 < Chunk'Length + 3 then
-               LZMA2_Append_Compressed_Chunk (Output, Chunk, Coded);
-            else
-               LZMA2_Append_Uncompressed_Chunk
-                 (Output, Chunk, Pos = Plain'First);
-            end if;
-            Pos := Pos + Chunk_Len;
-         end;
-      end loop;
-
-      Output.Append (0);
-      return To_Byte_Array (Output);
-   end LZMA2_Encode;
+   function LZMA2_Encode is new
+     Zlib.LZMA2_Encoder (LZMA_Encode_Selected);
 
    function LZMA_Decode_Raw
      (Stream    : Byte_Array;
       Props     : Seven_Zip_LZMA_Props;
       Plain_Len : Natural;
-      Status    : out Status_Code) return Byte_Array;
-
-   function LZMA_Decode_Raw_With
-     (Stream    : Byte_Array;
-      Props     : Seven_Zip_LZMA_Props;
-      Plain_Len : Natural;
-      Require_Full_Stream : Boolean;
-      Initial_Rep_Distance : Natural;
-      Use_Matched_Literals : Boolean;
       Status    : out Status_Code) return Byte_Array;
 
    function LZMA_Decode_Raw_Encoded_Header
@@ -8416,837 +5539,38 @@ package body Zlib is
       Status    : out Status_Code) return Byte_Array
    is
    begin
-      return LZMA_Decode_Raw_With
-        (Stream, Props, Plain_Len,
-         Require_Full_Stream => True,
-         Initial_Rep_Distance => 1,
-         Use_Matched_Literals => True,
-         Status => Status);
+      return Zlib.LZMA_Raw.Decode
+        (Stream, Zlib.LZMA_Properties.LZMA_Properties (Props),
+         Plain_Len, Status);
    end LZMA_Decode_Raw;
 
-   function LZMA_Decode_Raw_With
-     (Stream    : Byte_Array;
-      Props     : Seven_Zip_LZMA_Props;
-      Plain_Len : Natural;
-      Require_Full_Stream : Boolean;
-      Initial_Rep_Distance : Natural;
-      Use_Matched_Literals : Boolean;
-      Status    : out Status_Code) return Byte_Array
-   is
-      Header : Byte_Vectors.Vector;
-   begin
-      Header.Append (0);
-      Header.Append (0);
-      Header.Append (5);
-      Header.Append (0);
-      for B of Props loop
-         Header.Append (B);
-      end loop;
-      for B of Stream loop
-         Header.Append (B);
-      end loop;
-      return Decode_LZMA_Payload
-        (To_Byte_Array (Header), Plain_Len,
-         Require_Full_Stream => Require_Full_Stream,
-         Initial_Rep_Distance => Initial_Rep_Distance,
-         Use_Matched_Literals => Use_Matched_Literals,
-         Status => Status);
-   end LZMA_Decode_Raw_With;
-
    function LZMA_Decode_Raw_Encoded_Header
      (Stream    : Byte_Array;
       Props     : Seven_Zip_LZMA_Props;
       Plain_Len : Natural;
       Status    : out Status_Code) return Byte_Array
    is
-      Local_Status : Status_Code := Ok;
-      Strict_Default : constant Byte_Array :=
-        LZMA_Decode_Raw_With
-          (Stream, Props, Plain_Len,
-           Require_Full_Stream => True,
-           Initial_Rep_Distance => 1,
-           Use_Matched_Literals => True,
-           Status => Local_Status);
    begin
-      if Local_Status = Ok then
-         Status := Ok;
-         return Strict_Default;
-      end if;
-
-      declare
-         Strict_Seven_Zip : constant Byte_Array :=
-           LZMA_Decode_Raw_With
-             (Stream, Props, Plain_Len,
-              Require_Full_Stream => True,
-              Initial_Rep_Distance => 1,
-              Use_Matched_Literals => True,
-              Status => Local_Status);
-      begin
-         if Local_Status = Ok then
-            Status := Ok;
-            return Strict_Seven_Zip;
-         end if;
-      end;
-
-      return LZMA_Decode_Raw_With
-        (Stream, Props, Plain_Len,
-         Require_Full_Stream => False,
-         Initial_Rep_Distance => 1,
-         Use_Matched_Literals => True,
-         Status => Status);
+      return Zlib.LZMA_Raw.Decode_Encoded_Header
+        (Stream, Zlib.LZMA_Properties.LZMA_Properties (Props),
+         Plain_Len, Status);
    end LZMA_Decode_Raw_Encoded_Header;
-
-   type LZMA2_Decode_Context is record
-      LC           : Natural := LZMA_Default_LC;
-      LP           : Natural := LZMA_Default_LP;
-      PB           : Natural := LZMA_Default_PB;
-      Props_Seen   : Boolean := False;
-      Dict_Base    : Natural := 0;
-      State        : Natural := 0;
-      Prev         : Byte := 0;
-      Rep0         : Natural := 0;
-      Rep1         : Natural := 0;
-      Rep2         : Natural := 0;
-      Rep3         : Natural := 0;
-      Is_Match     : LZMA_Prob_Array
-        (0 .. LZMA_Num_States * LZMA_Num_Pos_States_Max - 1);
-      Is_Rep       : LZMA_Prob_Array (0 .. LZMA_Num_States - 1);
-      Is_Rep_G0    : LZMA_Prob_Array (0 .. LZMA_Num_States - 1);
-      Is_Rep_G1    : LZMA_Prob_Array (0 .. LZMA_Num_States - 1);
-      Is_Rep_G2    : LZMA_Prob_Array (0 .. LZMA_Num_States - 1);
-      Is_Rep0_Long : LZMA_Prob_Array
-        (0 .. LZMA_Num_States * LZMA_Num_Pos_States_Max - 1);
-      Match_Len    : LZMA_Len_Encoder;
-      Rep_Len      : LZMA_Len_Encoder;
-      Pos_Slot     : LZMA_Prob_Array
-        (0 .. LZMA_Num_Len_To_Pos_States * 64 - 1);
-      Pos_Special  : LZMA_Prob_Array
-        (0 .. LZMA_Num_Full_Distances - LZMA_End_Pos_Model_Index - 1);
-      Pos_Align    : LZMA_Prob_Array (0 .. LZMA_Align_Table_Size - 1);
-      Literals     : LZMA_Prob_Array
-        (0 .. (2 ** 4) * LZMA_Literal_Probs - 1);
-   end record;
-
-   function LZMA2_Set_Properties
-     (Ctx   : in out LZMA2_Decode_Context;
-      Props : Byte) return Boolean
-   is
-      Props_Value : constant Natural := Natural (Props);
-      LCLP        : constant Natural := Props_Value mod 9;
-      Rest        : constant Natural := Props_Value / 9;
-      LC          : constant Natural := LCLP;
-      LP          : constant Natural := Rest mod 5;
-      PB          : constant Natural := Rest / 5;
-   begin
-      if not Valid_LZMA_Props (Props) then
-         return False;
-      end if;
-
-      Ctx.LC := LC;
-      Ctx.LP := LP;
-      Ctx.PB := PB;
-      Ctx.Props_Seen := True;
-      return True;
-   end LZMA2_Set_Properties;
-
-   procedure LZMA2_Reset_State (Ctx : in out LZMA2_Decode_Context) is
-   begin
-      Ctx.State := 0;
-      Ctx.Prev := 0;
-      --  Standard LZMA initial reps: 0-based 0 == distance 1 (our 1-based
-      --  convention). Only used by an early rep before any normal match.
-      Ctx.Rep0 := 1;
-      Ctx.Rep1 := 1;
-      Ctx.Rep2 := 1;
-      Ctx.Rep3 := 1;
-      LZMA_Init_Probs (Ctx.Is_Match);
-      LZMA_Init_Probs (Ctx.Is_Rep);
-      LZMA_Init_Probs (Ctx.Is_Rep_G0);
-      LZMA_Init_Probs (Ctx.Is_Rep_G1);
-      LZMA_Init_Probs (Ctx.Is_Rep_G2);
-      LZMA_Init_Probs (Ctx.Is_Rep0_Long);
-      LZMA_Init_Len (Ctx.Match_Len);
-      LZMA_Init_Len (Ctx.Rep_Len);
-      LZMA_Init_Probs (Ctx.Pos_Slot);
-      LZMA_Init_Probs (Ctx.Pos_Special);
-      LZMA_Init_Probs (Ctx.Pos_Align);
-      LZMA_Init_Probs (Ctx.Literals);
-   end LZMA2_Reset_State;
-
-   procedure LZMA2_Decode_Compressed_Chunk
-     (Ctx       : in out LZMA2_Decode_Context;
-      Stream    : Byte_Array;
-      Plain     : in out Byte_Array;
-      Out_Pos   : in out Natural;
-      Chunk_Len : Natural;
-      Status    : in out Status_Code)
-   is
-      D          : LZMA_Range_Decoder;
-      Target_Pos : constant Natural := Out_Pos + Chunk_Len;
-      Pos_States : constant Natural := 2 ** Ctx.PB;
-   begin
-      if Status /= Ok then
-         return;
-      end if;
-
-      if not Ctx.Props_Seen or else Stream'Length < 5 then
-         Status := Unexpected_End_Of_Input;
-         return;
-      end if;
-
-      LZMA_Decoder_Init (D, Stream, Status);
-
-      while Status = Ok and then Out_Pos < Target_Pos loop
-         declare
-            Pos_State : constant Natural := Out_Pos mod Pos_States;
-            Match_Bit : constant Natural :=
-              LZMA_Decode_Bit
-                (D, Stream,
-                 Ctx.Is_Match (Ctx.State * LZMA_Num_Pos_States_Max
-                               + Pos_State),
-                 Status);
-         begin
-            if Status /= Ok then
-               exit;
-            end if;
-
-            if Match_Bit = 0 then
-               declare
-                  Context : constant Natural :=
-                    LZMA_Literal_Context (Ctx.LC, Ctx.LP, Out_Pos, Ctx.Prev);
-                  Symbol  : Natural := 1;
-               begin
-                  if Ctx.State >= 7
-                    and then Ctx.Rep0 > 0
-                    and then Ctx.Rep0 <= Out_Pos - Ctx.Dict_Base
-                  then
-                     --  Matched literal (standard LZMA): decode bits against
-                     --  the byte Rep0 back until they diverge.
-                     declare
-                        Match_Byte : Natural :=
-                          Natural (Plain (Out_Pos - Ctx.Rep0 + 1));
-                     begin
-                        while Symbol < 16#100# loop
-                           Match_Byte := Match_Byte * 2;
-                           declare
-                              Match_Bit_Literal : constant Natural :=
-                                ((Match_Byte / 16#100#) mod 2) * 16#100#;
-                              Decoded_Bit : constant Natural :=
-                                LZMA_Decode_Bit
-                                  (D, Stream,
-                                   Ctx.Literals
-                                     (Context * LZMA_Literal_Probs
-                                      + 16#100# + Match_Bit_Literal + Symbol),
-                                   Status);
-                           begin
-                              Symbol := Symbol * 2 + Decoded_Bit;
-                              exit when Status /= Ok
-                                or else Match_Bit_Literal /=
-                                  Decoded_Bit * 16#100#;
-                           end;
-                        end loop;
-                     end;
-                  end if;
-
-                  while Symbol < 16#100# loop
-                     Symbol :=
-                       Symbol * 2
-                       + LZMA_Decode_Bit
-                         (D, Stream,
-                          Ctx.Literals
-                            (Context * LZMA_Literal_Probs + Symbol),
-                          Status);
-                     exit when Status /= Ok;
-                  end loop;
-
-                  if Status /= Ok then
-                     exit;
-                  end if;
-
-                  Out_Pos := Out_Pos + 1;
-                  Plain (Out_Pos) := Byte (Symbol - 16#100#);
-                  Ctx.Prev := Plain (Out_Pos);
-                  Ctx.State := LZMA_Literal_State_After (Ctx.State);
-               end;
-            else
-               if LZMA_Decode_Bit
-                 (D, Stream, Ctx.Is_Rep (Ctx.State), Status) /= 0
-               then
-                  declare
-                     Distance : Natural := Ctx.Rep0;
-                     Len      : Natural := LZMA_Min_Match_Length;
-                  begin
-                     if LZMA_Decode_Bit
-                       (D, Stream, Ctx.Is_Rep_G0 (Ctx.State), Status) = 0
-                     then
-                        if LZMA_Decode_Bit
-                          (D, Stream,
-                           Ctx.Is_Rep0_Long
-                             (Ctx.State * LZMA_Num_Pos_States_Max
-                              + Pos_State),
-                           Status) = 0
-                        then
-                           Len := 1;
-                           Ctx.State := LZMA_Short_Rep_State_After (Ctx.State);
-                        else
-                           Len :=
-                             LZMA_Decode_Len
-                               (D, Stream, Ctx.Rep_Len, Pos_State, Status)
-                             + LZMA_Min_Match_Length;
-                           Ctx.State := LZMA_Rep_State_After (Ctx.State);
-                        end if;
-                     else
-                        if LZMA_Decode_Bit
-                          (D, Stream, Ctx.Is_Rep_G1 (Ctx.State),
-                           Status) = 0
-                        then
-                           Distance := Ctx.Rep1;
-                        else
-                           if LZMA_Decode_Bit
-                             (D, Stream, Ctx.Is_Rep_G2 (Ctx.State),
-                              Status) = 0
-                           then
-                              Distance := Ctx.Rep2;
-                           else
-                              Distance := Ctx.Rep3;
-                              Ctx.Rep3 := Ctx.Rep2;
-                           end if;
-                           Ctx.Rep2 := Ctx.Rep1;
-                        end if;
-                        Ctx.Rep1 := Ctx.Rep0;
-                        Ctx.Rep0 := Distance;
-                        Len :=
-                          LZMA_Decode_Len
-                            (D, Stream, Ctx.Rep_Len, Pos_State, Status)
-                          + LZMA_Min_Match_Length;
-                        Ctx.State := LZMA_Rep_State_After (Ctx.State);
-                     end if;
-
-                     if Status /= Ok then
-                        exit;
-                     end if;
-
-                     if Distance = 0
-                       or else Distance > Out_Pos - Ctx.Dict_Base
-                       or else Len > Target_Pos - Out_Pos
-                     then
-                        Status := Unsupported_Method;
-                        return;
-                     end if;
-
-                     for I in 1 .. Len loop
-                        Out_Pos := Out_Pos + 1;
-                        Plain (Out_Pos) := Plain (Out_Pos - Distance);
-                     end loop;
-
-                     Ctx.Prev := Plain (Out_Pos);
-                  end;
-               else
-                  declare
-                     Len_Symbol : constant Natural :=
-                       LZMA_Decode_Len
-                         (D, Stream, Ctx.Match_Len, Pos_State, Status);
-                     Len        : constant Natural :=
-                       Len_Symbol + LZMA_Min_Match_Length;
-                     Distance   : constant Natural :=
-                       LZMA_Decode_Distance
-                         (D, Stream, Ctx.Pos_Slot, Ctx.Pos_Special,
-                          Ctx.Pos_Align, Len, Status);
-                  begin
-                     if Status /= Ok then
-                        exit;
-                     end if;
-
-                     if Distance > Out_Pos - Ctx.Dict_Base
-                       or else Len > Target_Pos - Out_Pos
-                     then
-                        Status := Unsupported_Method;
-                        return;
-                     end if;
-
-                     for I in 1 .. Len loop
-                        Out_Pos := Out_Pos + 1;
-                        Plain (Out_Pos) := Plain (Out_Pos - Distance);
-                     end loop;
-
-                     Ctx.Rep3 := Ctx.Rep2;
-                     Ctx.Rep2 := Ctx.Rep1;
-                     Ctx.Rep1 := Ctx.Rep0;
-                     Ctx.Rep0 := Distance;
-                     Ctx.Prev := Plain (Out_Pos);
-                     Ctx.State := LZMA_Match_State_After (Ctx.State);
-                  end;
-               end if;
-            end if;
-         end;
-      end loop;
-
-      if Status = Ok and then D.Pos /= Stream'Length then
-         Status := Unsupported_Method;
-      end if;
-   end LZMA2_Decode_Compressed_Chunk;
 
    function LZMA2_Decode
      (Payload   : Byte_Array;
       Plain_Len : Natural;
       Status    : out Status_Code) return Byte_Array
-   is
-      Empty   : constant Byte_Array (1 .. 0) := [others => 0];
-      Plain   : Byte_Array (1 .. Natural'Max (1, Plain_Len));
-      Pos     : Natural := Payload'First;
-      Out_Pos : Natural := 0;
-      First   : Boolean := True;
-      Ctx     : LZMA2_Decode_Context;
-   begin
-      Status := Unsupported_Method;
-      LZMA2_Reset_State (Ctx);
-
-      loop
-         if Pos > Payload'Last then
-            Status := Unexpected_End_Of_Input;
-            return Empty;
-         end if;
-
-         declare
-            Control : constant Byte := Payload (Pos);
-         begin
-            Pos := Pos + 1;
-            if Control = 0 then
-               exit;
-            end if;
-
-            if Control = 16#01# or else Control = 16#02# then
-               if (First and then Control /= 16#01#)
-                 or else Pos + 1 > Payload'Last
-               then
-                  Status := Unsupported_Method;
-                  return Empty;
-               end if;
-
-               declare
-                  Chunk_Len : constant Natural :=
-                    Natural (Payload (Pos)) * 256
-                    + Natural (Payload (Pos + 1)) + 1;
-               begin
-                  Pos := Pos + 2;
-                  if Chunk_Len > Plain_Len - Out_Pos
-                    or else Pos + Chunk_Len - 1 > Payload'Last
-                  then
-                     Status := Unexpected_End_Of_Input;
-                     return Empty;
-                  end if;
-
-                  for I in 1 .. Chunk_Len loop
-                     Plain (Out_Pos + I) := Payload (Pos + I - 1);
-                  end loop;
-                  Out_Pos := Out_Pos + Chunk_Len;
-                  Pos := Pos + Chunk_Len;
-                  if Control = 16#01# then
-                     Ctx.Dict_Base := Out_Pos;
-                  end if;
-                  First := False;
-               end;
-            elsif Control >= 16#80# then
-               declare
-                  Need_Props : constant Boolean := Control >= 16#C0#;
-               begin
-                  if Pos + 3 + (if Need_Props then 1 else 0) > Payload'Last then
-                     Status := Unexpected_End_Of_Input;
-                     return Empty;
-                  end if;
-               end;
-
-               declare
-                  Need_Props : constant Boolean := Control >= 16#C0#;
-                  Reset_State : constant Boolean := Control >= 16#A0#;
-                  Reset_Dict  : constant Boolean := Control >= 16#E0#;
-                  Chunk_Len   : constant Natural :=
-                    Natural (Control and 16#1F#) * 65_536
-                    + Natural (Payload (Pos)) * 256
-                    + Natural (Payload (Pos + 1)) + 1;
-                  Packed_Len  : constant Natural :=
-                    Natural (Payload (Pos + 2)) * 256
-                    + Natural (Payload (Pos + 3)) + 1;
-                  Props       : Byte := 0;
-                  Local_Status : Status_Code := Ok;
-               begin
-                  Pos := Pos + 4;
-
-                  if Reset_Dict then
-                     Ctx.Dict_Base := Out_Pos;
-                  end if;
-
-                  if Reset_State then
-                     LZMA2_Reset_State (Ctx);
-                  end if;
-
-                  if Need_Props then
-                     Props := Payload (Pos);
-                     Pos := Pos + 1;
-                     if not LZMA2_Set_Properties (Ctx, Props) then
-                        Status := Unsupported_Method;
-                        return Empty;
-                     end if;
-                  elsif not Ctx.Props_Seen then
-                     Status := Unsupported_Method;
-                     return Empty;
-                  end if;
-
-                  if Chunk_Len > Plain_Len - Out_Pos
-                    or else Pos + Packed_Len - 1 > Payload'Last
-                  then
-                     Status := Unexpected_End_Of_Input;
-                     return Empty;
-                  end if;
-
-                  LZMA2_Decode_Compressed_Chunk
-                    (Ctx, Payload (Pos .. Pos + Packed_Len - 1),
-                     Plain, Out_Pos, Chunk_Len, Local_Status);
-
-                  if Local_Status /= Ok then
-                     Status := Local_Status;
-                     return Empty;
-                  end if;
-
-                  Pos := Pos + Packed_Len;
-                  First := False;
-               end;
-            else
-               Status := Unsupported_Method;
-               return Empty;
-            end if;
-         end;
-      end loop;
-
-      if Out_Pos /= Plain_Len or else Pos /= Payload'Last + 1 then
-         Status := Unsupported_Method;
-         return Empty;
-      end if;
-
-      Status := Ok;
-      if Plain_Len = 0 then
-         return Empty;
-      end if;
-      return Plain (1 .. Plain_Len);
-   exception
-      when Constraint_Error =>
-         Status := Unexpected_End_Of_Input;
-         return Empty;
-      when others =>
-         Status := Unsupported_Method;
-         return Empty;
-   end LZMA2_Decode;
+     renames Zlib.LZMA2_Decoder.Decode;
 
    function Seven_Zip_Entry_Name_Valid (Entry_Name : String) return Boolean is
-   begin
-      return Entry_Name'Length > 0 and then not Contains_NUL (Entry_Name);
-   exception
-      when others =>
-         return False;
-   end Seven_Zip_Entry_Name_Valid;
+     (Zlib.Seven_Zip_Paths.Entry_Name_Valid (Entry_Name))
+     with SPARK_Mode => On;
 
-   function Seven_Zip_Output_File_Writable (Output_Path : String) return Boolean is
-   begin
-      if Output_Path'Length = 0 then
-         return False;
-      end if;
+   function Seven_Zip_Output_File_Writable (Output_Path : String) return Boolean
+      renames Zlib.Seven_Zip_Paths.Output_File_Writable;
 
-      if Ada.Directories.Exists (Output_Path)
-        and then Ada.Directories.Kind (Output_Path) = Ada.Directories.Directory
-      then
-         return False;
-      end if;
-
-      declare
-         Parent_Path : constant String :=
-           Ada.Directories.Containing_Directory (Output_Path);
-      begin
-         return not Ada.Directories.Exists (Parent_Path)
-           or else Ada.Directories.Kind (Parent_Path) = Ada.Directories.Directory;
-      end;
-   exception
-      when others =>
-         return False;
-   end Seven_Zip_Output_File_Writable;
-
-   function Seven_Zip_Input_Path_Readable (Input_Path : String) return Boolean is
-   begin
-      return Input_Path'Length > 0
-        and then Ada.Directories.Exists (Input_Path)
-        and then Ada.Directories.Kind (Input_Path) in
-          Ada.Directories.Ordinary_File | Ada.Directories.Directory;
-   exception
-      when others =>
-         return False;
-   end Seven_Zip_Input_Path_Readable;
-
-   function Seven_Zip_Output_Directory_Writable
-     (Output_Dir : String) return Boolean
-   is
-   begin
-      if Output_Dir'Length = 0 then
-         return False;
-      end if;
-
-      if Ada.Directories.Exists (Output_Dir) then
-         return Ada.Directories.Kind (Output_Dir) = Ada.Directories.Directory;
-      end if;
-
-      declare
-         Parent_Path : constant String :=
-           Ada.Directories.Containing_Directory (Output_Dir);
-      begin
-         return not Ada.Directories.Exists (Parent_Path)
-           or else Ada.Directories.Kind (Parent_Path) = Ada.Directories.Directory;
-      end;
-   exception
-      when others =>
-      return False;
-   end Seven_Zip_Output_Directory_Writable;
-
-   function Seven_Zip_Input_Paths_Readable
-     (Input_Paths : Text_Array) return Boolean
-   is
-   begin
-      for Input_Path_Text of Input_Paths loop
-         declare
-            Input_Path : constant String := US.To_String (Input_Path_Text);
-         begin
-            if Input_Path'Length = 0
-              or else not Ada.Directories.Exists (Input_Path)
-              or else Ada.Directories.Kind (Input_Path) not in
-                Ada.Directories.Ordinary_File | Ada.Directories.Directory
-            then
-               return False;
-            end if;
-         end;
-      end loop;
-
-      return True;
-   exception
-      when others =>
-         return False;
-   end Seven_Zip_Input_Paths_Readable;
-
-   procedure Append_Seven_Zip_File_Metadata
-     (Header   : in out Byte_Vectors.Vector;
-      Metadata : Seven_Zip_Entry_Metadata);
-
-   procedure Append_Seven_Zip_Bits
-     (Data  : in out Byte_Vectors.Vector;
-      Bits  : Seven_Zip_Boolean_Array;
-      Count : Natural)
-   is
-      Byte_Value : Natural := 0;
-   begin
-      if Count = 0 then
-         return;
-      end if;
-
-      for I in 1 .. Count loop
-         if Bits (Bits'First + I - 1) then
-            Byte_Value := Byte_Value + 2 ** (7 - ((I - 1) mod 8));
-         end if;
-
-         if I mod 8 = 0 then
-            Data.Append (Byte (Byte_Value));
-            Byte_Value := 0;
-         end if;
-      end loop;
-
-      if Count mod 8 /= 0 then
-         Data.Append (Byte (Byte_Value));
-      end if;
-   end Append_Seven_Zip_Bits;
-
-   function Seven_Zip_Header_Only_Entry
-     (Entry_Name : String;
-      Metadata   : Seven_Zip_Entry_Metadata;
-      Status     : out Status_Code) return Byte_Array
-   is
-      Empty      : constant Byte_Array (1 .. 0) := [others => 0];
-      Header     : Byte_Vectors.Vector;
-      Name_Field : Byte_Vectors.Vector;
-   begin
-      Status := Unsupported_Method;
-
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name)
-        or else not Metadata.Is_Directory
-      then
-         return Empty;
-      end if;
-
-      Header.Append (16#01#); --  Header
-      Header.Append (16#05#); --  FilesInfo
-      Append_Seven_Zip_Number (Header, 1);
-      Header.Append (16#11#); --  Name
-      Name_Field.Append (0);
-      Append_UTF16LE_NT (Name_Field, Entry_Name);
-      Append_Seven_Zip_Number
-        (Header, Interfaces.Unsigned_64 (Name_Field.Length));
-      Header.Append_Vector (Name_Field);
-      Header.Append (16#0E#); --  EmptyStream
-      Append_Seven_Zip_Number (Header, 1);
-      Header.Append (16#80#);
-      Header.Append (16#0F#); --  EmptyFile
-      Append_Seven_Zip_Number (Header, 1);
-      Header.Append (0);
-      Append_Seven_Zip_File_Metadata (Header, Metadata);
-      Header.Append (0);
-      Header.Append (0);
-
-      declare
-         Header_Image : constant Byte_Array := To_Byte_Array (Header);
-         Header_CRC   : constant Interfaces.Unsigned_32 :=
-           Seven_Zip_Header_CRC (Header_Image);
-         Start_Header : Byte_Vectors.Vector;
-      begin
-         Append_U64_LE (Start_Header, 0);
-         Append_U64_LE
-           (Start_Header, Interfaces.Unsigned_64 (Header_Image'Length));
-         Append_U32_LE (Start_Header, Header_CRC);
-
-         declare
-            Start_Header_Image : constant Byte_Array :=
-              To_Byte_Array (Start_Header);
-            Start_CRC          : constant Interfaces.Unsigned_32 :=
-              Seven_Zip_Header_CRC (Start_Header_Image);
-            Archive            : Byte_Vectors.Vector;
-         begin
-            Archive.Append (16#37#);
-            Archive.Append (16#7A#);
-            Archive.Append (16#BC#);
-            Archive.Append (16#AF#);
-            Archive.Append (16#27#);
-            Archive.Append (16#1C#);
-            Archive.Append (0);
-            Archive.Append (4);
-            Append_U32_LE (Archive, Start_CRC);
-            Archive.Append_Vector (Start_Header);
-            Archive.Append_Vector (Header);
-
-            Status := Ok;
-            return To_Byte_Array (Archive);
-         end;
-      end;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return Empty;
-   end Seven_Zip_Header_Only_Entry;
-
-   function Seven_Zip_Single_File
-     (Packed_Data   : Byte_Array;
-      Unpacked_Data : Byte_Array;
-      Entry_Name    : String;
-      Method        : Seven_Zip_Coder_Method;
-      Metadata      : Seven_Zip_Entry_Metadata;
-      Status        : out Status_Code) return Byte_Array
-   is
-      Empty : constant Byte_Array (1 .. 0) := [others => 0];
-   begin
-      Status := Unsupported_Method;
-
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name)
-      then
-         return Empty;
-      end if;
-
-      if Metadata.Is_Directory then
-         return Seven_Zip_Header_Only_Entry (Entry_Name, Metadata, Status);
-      end if;
-
-      declare
-         Packed_CRC   : constant Interfaces.Unsigned_32 := CRC32 (Packed_Data);
-         Unpacked_CRC : constant Interfaces.Unsigned_32 := CRC32 (Unpacked_Data);
-         Header       : Byte_Vectors.Vector;
-         Name_Field   : Byte_Vectors.Vector;
-      begin
-         Header.Append (16#01#); --  Header
-
-         Header.Append (16#04#); --  MainStreamsInfo
-         Header.Append (16#06#); --  PackInfo
-         Append_Seven_Zip_Number (Header, 0);
-         Append_Seven_Zip_Number (Header, 1);
-         Header.Append (16#09#); --  Size
-         Append_Seven_Zip_Number
-           (Header, Interfaces.Unsigned_64 (Packed_Data'Length));
-         Header.Append (16#0A#); --  CRC
-         Header.Append (1);
-         Append_U32_LE (Header, Packed_CRC);
-         Header.Append (0);
-
-         Header.Append (16#07#); --  UnPackInfo
-         Header.Append (16#0B#); --  Folder
-         Append_Seven_Zip_Number (Header, 1);
-         Header.Append (0);
-         Append_Seven_Zip_Number (Header, 1);
-         Append_Seven_Zip_Coder (Header, Method);
-         Header.Append (16#0C#); --  CodersUnPackSize
-         Append_Seven_Zip_Number
-           (Header, Interfaces.Unsigned_64 (Unpacked_Data'Length));
-         Header.Append (16#0A#); --  CRC
-         Header.Append (1);
-         Append_U32_LE (Header, Unpacked_CRC);
-         Header.Append (0);
-         Header.Append (0);
-
-         Header.Append (16#05#); --  FilesInfo
-         Append_Seven_Zip_Number (Header, 1);
-         Header.Append (16#11#); --  Name
-         Name_Field.Append (0);
-         Append_UTF16LE_NT (Name_Field, Entry_Name);
-         Append_Seven_Zip_Number
-           (Header, Interfaces.Unsigned_64 (Name_Field.Length));
-         Header.Append_Vector (Name_Field);
-         Append_Seven_Zip_File_Metadata (Header, Metadata);
-         Header.Append (0);
-         Header.Append (0);
-
-         declare
-            Header_Image : constant Byte_Array := To_Byte_Array (Header);
-            Header_CRC   : constant Interfaces.Unsigned_32 :=
-              Seven_Zip_Header_CRC (Header_Image);
-            Start_Header : Byte_Vectors.Vector;
-         begin
-            Append_U64_LE
-              (Start_Header, Interfaces.Unsigned_64 (Packed_Data'Length));
-            Append_U64_LE
-              (Start_Header, Interfaces.Unsigned_64 (Header_Image'Length));
-            Append_U32_LE (Start_Header, Header_CRC);
-
-            declare
-               Start_Header_Image : constant Byte_Array :=
-                 To_Byte_Array (Start_Header);
-               Start_CRC          : constant Interfaces.Unsigned_32 :=
-                 Seven_Zip_Header_CRC (Start_Header_Image);
-               Archive            : Byte_Vectors.Vector;
-            begin
-               Archive.Append (16#37#);
-               Archive.Append (16#7A#);
-               Archive.Append (16#BC#);
-               Archive.Append (16#AF#);
-               Archive.Append (16#27#);
-               Archive.Append (16#1C#);
-               Archive.Append (0);
-               Archive.Append (4);
-               Append_U32_LE (Archive, Start_CRC);
-               Archive.Append_Vector (Start_Header);
-               for B of Packed_Data loop
-                  Archive.Append (B);
-               end loop;
-               Archive.Append_Vector (Header);
-
-               Status := Ok;
-               return To_Byte_Array (Archive);
-            end;
-         end;
-      end;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return Empty;
-   end Seven_Zip_Single_File;
+   function Seven_Zip_Input_Path_Readable (Input_Path : String) return Boolean
+      renames Zlib.Seven_Zip_Paths.Input_Path_Readable;
 
    --  Build a one-file .7z whose data is LZMA-compressed then AES-256
    --  encrypted (method 06F10701). Folder is [AES -> LZMA] with bind pair
@@ -9258,132 +5582,16 @@ package body Zlib is
       Password   : String;
       Status     : out Status_Code) return Byte_Array
    is
-      Empty : constant Byte_Array (1 .. 0) := [others => 0];
-      Num_Cycles_Power : constant := 19;
-   begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return Empty;
-      end if;
-
-      declare
-         Compressed : constant Byte_Array := LZMA_Encode_Bounded (Input);
-         Padded     : constant Byte_Array :=
-           Zlib.Seven_Zip_AES.Pad_To_Block (Compressed);
-         Key        : constant Byte_Array :=
-           Zlib.Seven_Zip_AES.Derive_Key (Password, Empty, Num_Cycles_Power);
-         IV         : constant Byte_Array := Zlib.Seven_Zip_AES.Random_IV;
+      function Encode_LZMA
+        (Input_Data : Byte_Array;
+         LZMA_Props : in out Byte) return Byte_Array is
       begin
-         declare
-            Pack_V : constant Byte_Array :=
-              Zlib.Seven_Zip_AES.Encrypt_CBC (Key, IV, Padded);
-            Unpacked_CRC : constant Interfaces.Unsigned_32 := CRC32 (Input);
-            Header     : Byte_Vectors.Vector;
-            Name_Field : Byte_Vectors.Vector;
-         begin
-            if Pack_V'Length = 0 then
-               return Empty;
-            end if;
-
-            Header.Append (16#01#);
-            Header.Append (16#04#); --  MainStreamsInfo
-            Header.Append (16#06#); --  PackInfo
-            Append_Seven_Zip_Number (Header, 0);
-            Append_Seven_Zip_Number (Header, 1);
-            Header.Append (16#09#); --  Size
-            Append_Seven_Zip_Number
-              (Header, Interfaces.Unsigned_64 (Pack_V'Length));
-            Header.Append (0);      --  end PackInfo
-
-            Header.Append (16#07#); --  UnPackInfo
-            Header.Append (16#0B#); --  Folder
-            Append_Seven_Zip_Number (Header, 1);  --  one folder
-            Header.Append (0);                    --  external
-            Append_Seven_Zip_Number (Header, 2);  --  two coders
-            --  Coder 0: AES (06F10701) with 18-byte props (control + IV).
-            Header.Append (16#24#);
-            Header.Append (16#06#);
-            Header.Append (16#F1#);
-            Header.Append (16#07#);
-            Header.Append (16#01#);
-            Append_Seven_Zip_Number (Header, 18);
-            Header.Append (16#53#); --  numCyclesPower=19, ivSize bit
-            Header.Append (16#0F#); --  ivSize low nibble (=> ivSize 16)
-            for B of IV loop
-               Header.Append (B);
-            end loop;
-            --  Coder 1: LZMA.
-            Append_Seven_Zip_Coder (Header, Seven_Zip_LZMA_Method);
-            --  Bind pair: LZMA.in (1) <- AES.out (0).
-            Append_Seven_Zip_Number (Header, 1);
-            Append_Seven_Zip_Number (Header, 0);
-            Header.Append (16#0C#); --  CodersUnPackSize
-            Append_Seven_Zip_Number
-              (Header, Interfaces.Unsigned_64 (Compressed'Length));
-            Append_Seven_Zip_Number
-              (Header, Interfaces.Unsigned_64 (Input'Length));
-            Header.Append (0);      --  end UnPackInfo
-
-            Header.Append (16#08#); --  SubStreamsInfo
-            Header.Append (16#0A#); --  CRC
-            Header.Append (1);
-            Append_U32_LE (Header, Unpacked_CRC);
-            Header.Append (0);      --  end SubStreamsInfo
-            Header.Append (0);      --  end MainStreamsInfo
-
-            Header.Append (16#05#); --  FilesInfo
-            Append_Seven_Zip_Number (Header, 1);
-            Header.Append (16#11#); --  Name
-            Name_Field.Append (0);
-            Append_UTF16LE_NT (Name_Field, Entry_Name);
-            Append_Seven_Zip_Number
-              (Header, Interfaces.Unsigned_64 (Name_Field.Length));
-            Header.Append_Vector (Name_Field);
-            Header.Append (0);
-            Header.Append (0);
-
-            declare
-               Header_Image : constant Byte_Array := To_Byte_Array (Header);
-               Header_CRC   : constant Interfaces.Unsigned_32 :=
-                 Seven_Zip_Header_CRC (Header_Image);
-               Start_Header : Byte_Vectors.Vector;
-            begin
-               Append_U64_LE
-                 (Start_Header, Interfaces.Unsigned_64 (Pack_V'Length));
-               Append_U64_LE
-                 (Start_Header, Interfaces.Unsigned_64 (Header_Image'Length));
-               Append_U32_LE (Start_Header, Header_CRC);
-               declare
-                  Start_Image : constant Byte_Array :=
-                    To_Byte_Array (Start_Header);
-                  Start_CRC   : constant Interfaces.Unsigned_32 :=
-                    Seven_Zip_Header_CRC (Start_Image);
-                  Archive     : Byte_Vectors.Vector;
-               begin
-                  Archive.Append (16#37#);
-                  Archive.Append (16#7A#);
-                  Archive.Append (16#BC#);
-                  Archive.Append (16#AF#);
-                  Archive.Append (16#27#);
-                  Archive.Append (16#1C#);
-                  Archive.Append (0);
-                  Archive.Append (4);
-                  Append_U32_LE (Archive, Start_CRC);
-                  Archive.Append_Vector (Start_Header);
-                  for B of Pack_V loop
-                     Archive.Append (B);
-                  end loop;
-                  Archive.Append_Vector (Header);
-                  Status := Ok;
-                  return To_Byte_Array (Archive);
-               end;
-            end;
-         end;
-      end;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return Empty;
+         return LZMA_Encode_Selected (Input_Data, LZMA_Props);
+      end Encode_LZMA;
+   begin
+      return
+        Zlib.Seven_Zip_Encrypted_Writing.Build_AES_LZMA
+          (Input, Entry_Name, Password, Encode_LZMA'Access, Status);
    end Seven_Zip_LZMA_Encrypted;
 
    --  Build a one-file .7z whose data is BCJ2-filtered (method 0303011B): a
@@ -9394,194 +5602,10 @@ package body Zlib is
       Entry_Name : String;
       Status     : out Status_Code) return Byte_Array
    is
-      Empty : constant Byte_Array (1 .. 0) := [others => 0];
    begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return Empty;
-      end if;
-
-      declare
-         Main_V, Call_V, Jump_V, RC_V : Byte_Vectors.Vector;
-      begin
-         Seven_Zip_BCJ2_Encode (Input, Main_V, Call_V, Jump_V, RC_V);
-         declare
-            Main_B : constant Byte_Array := To_Byte_Array (Main_V);
-            Call_B : constant Byte_Array := To_Byte_Array (Call_V);
-            Jump_B : constant Byte_Array := To_Byte_Array (Jump_V);
-            RC_B   : constant Byte_Array := To_Byte_Array (RC_V);
-            Unpacked_CRC : constant Interfaces.Unsigned_32 := CRC32 (Input);
-            Header     : Byte_Vectors.Vector;
-            Name_Field : Byte_Vectors.Vector;
-         begin
-            Header.Append (16#01#);
-            Header.Append (16#04#); --  MainStreamsInfo
-            Header.Append (16#06#); --  PackInfo
-            Append_Seven_Zip_Number (Header, 0);
-            Append_Seven_Zip_Number (Header, 4);  --  four packed streams
-            Header.Append (16#09#); --  Size
-            Append_Seven_Zip_Number
-              (Header, Interfaces.Unsigned_64 (Main_B'Length));
-            Append_Seven_Zip_Number
-              (Header, Interfaces.Unsigned_64 (Call_B'Length));
-            Append_Seven_Zip_Number
-              (Header, Interfaces.Unsigned_64 (Jump_B'Length));
-            Append_Seven_Zip_Number
-              (Header, Interfaces.Unsigned_64 (RC_B'Length));
-            Header.Append (16#00#); --  end PackInfo
-
-            Header.Append (16#07#); --  UnPackInfo
-            Header.Append (16#0B#); --  Folder
-            Append_Seven_Zip_Number (Header, 1);  --  one folder
-            Header.Append (16#00#);               --  external
-            Append_Seven_Zip_Number (Header, 1);  --  one coder
-            Header.Append (16#14#);  --  flag: idSize 4, complex coder
-            Header.Append (16#03#);
-            Header.Append (16#03#);
-            Header.Append (16#01#);
-            Header.Append (16#1B#);  --  BCJ2 id (0303011B)
-            Append_Seven_Zip_Number (Header, 4);  --  four in streams
-            Append_Seven_Zip_Number (Header, 1);  --  one out stream
-            --  No bind pairs (out-1 = 0); list the four packed-stream indices.
-            Append_Seven_Zip_Number (Header, 0);
-            Append_Seven_Zip_Number (Header, 1);
-            Append_Seven_Zip_Number (Header, 2);
-            Append_Seven_Zip_Number (Header, 3);
-            Header.Append (16#0C#); --  CodersUnPackSize
-            Append_Seven_Zip_Number
-              (Header, Interfaces.Unsigned_64 (Input'Length));
-            Header.Append (16#00#); --  end UnPackInfo
-
-            Header.Append (16#08#); --  SubStreamsInfo
-            Header.Append (16#0A#); --  CRC
-            Header.Append (1);
-            Append_U32_LE (Header, Unpacked_CRC);
-            Header.Append (16#00#); --  end SubStreamsInfo
-            Header.Append (16#00#); --  end MainStreamsInfo
-
-            Header.Append (16#05#); --  FilesInfo
-            Append_Seven_Zip_Number (Header, 1);
-            Header.Append (16#11#); --  Name
-            Name_Field.Append (0);
-            Append_UTF16LE_NT (Name_Field, Entry_Name);
-            Append_Seven_Zip_Number
-              (Header, Interfaces.Unsigned_64 (Name_Field.Length));
-            Header.Append_Vector (Name_Field);
-            Header.Append (16#00#);
-            Header.Append (16#00#);
-
-            declare
-               Pack_Len : constant Natural :=
-                 Main_B'Length + Call_B'Length + Jump_B'Length + RC_B'Length;
-               Header_Image : constant Byte_Array := To_Byte_Array (Header);
-               Header_CRC   : constant Interfaces.Unsigned_32 :=
-                 Seven_Zip_Header_CRC (Header_Image);
-               Start_Header : Byte_Vectors.Vector;
-            begin
-               Append_U64_LE
-                 (Start_Header, Interfaces.Unsigned_64 (Pack_Len));
-               Append_U64_LE
-                 (Start_Header, Interfaces.Unsigned_64 (Header_Image'Length));
-               Append_U32_LE (Start_Header, Header_CRC);
-               declare
-                  Start_Image : constant Byte_Array :=
-                    To_Byte_Array (Start_Header);
-                  Start_CRC   : constant Interfaces.Unsigned_32 :=
-                    Seven_Zip_Header_CRC (Start_Image);
-                  Archive     : Byte_Vectors.Vector;
-               begin
-                  Archive.Append (16#37#);
-                  Archive.Append (16#7A#);
-                  Archive.Append (16#BC#);
-                  Archive.Append (16#AF#);
-                  Archive.Append (16#27#);
-                  Archive.Append (16#1C#);
-                  Archive.Append (0);
-                  Archive.Append (4);
-                  Append_U32_LE (Archive, Start_CRC);
-                  Archive.Append_Vector (Start_Header);
-                  for B of Main_B loop
-                     Archive.Append (B);
-                  end loop;
-                  for B of Call_B loop
-                     Archive.Append (B);
-                  end loop;
-                  for B of Jump_B loop
-                     Archive.Append (B);
-                  end loop;
-                  for B of RC_B loop
-                     Archive.Append (B);
-                  end loop;
-                  Archive.Append_Vector (Header);
-                  Status := Ok;
-                  return To_Byte_Array (Archive);
-               end;
-            end;
-         end;
-      end;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return Empty;
+      return Zlib.Seven_Zip_BCJ2_Writing.Build_BCJ2
+        (Input, Entry_Name, Status);
    end Seven_Zip_BCJ2;
-
-   procedure Append_Seven_Zip_File_Metadata
-     (Header   : in out Byte_Vectors.Vector;
-      Metadata : Seven_Zip_Entry_Metadata)
-   is
-   begin
-      if Metadata.Has_Modification_Time then
-         Header.Append (16#14#); --  MTime
-         Append_Seven_Zip_Number (Header, 10);
-         Header.Append (1); --  all entries defined
-         Header.Append (0); --  inline values, not external
-         Append_U64_LE (Header, Metadata.Modification_Time);
-      end if;
-
-      if Metadata.Has_Windows_Attributes then
-         Header.Append (16#15#); --  WinAttributes
-         Append_Seven_Zip_Number (Header, 5);
-         Header.Append (1); --  all entries defined
-         Append_U32_LE (Header, Metadata.Windows_Attributes);
-      end if;
-   end Append_Seven_Zip_File_Metadata;
-
-   procedure Append_Seven_Zip_Files_Metadata
-     (Header   : in out Byte_Vectors.Vector;
-      Metadata : Seven_Zip_Metadata_Array)
-   is
-      All_Have_MTime      : Boolean := Metadata'Length > 0;
-      All_Have_Attributes : Boolean := Metadata'Length > 0;
-   begin
-      for Item of Metadata loop
-         All_Have_MTime :=
-           All_Have_MTime and then Item.Has_Modification_Time;
-         All_Have_Attributes :=
-           All_Have_Attributes and then Item.Has_Windows_Attributes;
-      end loop;
-
-      if All_Have_MTime then
-         Header.Append (16#14#); --  MTime
-         Append_Seven_Zip_Number
-           (Header, Interfaces.Unsigned_64 (2 + 8 * Metadata'Length));
-         Header.Append (1); --  all entries defined
-         Header.Append (0); --  inline values, not external
-         for Item of Metadata loop
-            Append_U64_LE (Header, Item.Modification_Time);
-         end loop;
-      end if;
-
-      if All_Have_Attributes then
-         Header.Append (16#15#); --  WinAttributes
-         Append_Seven_Zip_Number
-           (Header, Interfaces.Unsigned_64 (2 + 4 * Metadata'Length));
-         Header.Append (1); --  all entries defined
-         Header.Append (0); --  inline values, not external
-         for Item of Metadata loop
-            Append_U32_LE (Header, Item.Windows_Attributes);
-         end loop;
-      end if;
-   end Append_Seven_Zip_Files_Metadata;
 
    function Seven_Zip_Stored_With_Metadata
      (Input      : Byte_Array;
@@ -9589,106 +5613,10 @@ package body Zlib is
       Metadata   : Seven_Zip_Entry_Metadata;
       Status     : out Status_Code) return Byte_Array
    is
-      Empty : constant Byte_Array (1 .. 0) := [others => 0];
    begin
-      Status := Unsupported_Method;
-
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name)
-      then
-         return Empty;
-      end if;
-
-      if Metadata.Is_Directory then
-         return Seven_Zip_Header_Only_Entry (Entry_Name, Metadata, Status);
-      end if;
-
-      declare
-         Payload_CRC : constant Interfaces.Unsigned_32 := CRC32 (Input);
-         Header      : Byte_Vectors.Vector;
-         Name_Field  : Byte_Vectors.Vector;
-      begin
-         Header.Append (16#01#); --  Header
-
-         Header.Append (16#04#); --  MainStreamsInfo
-         Header.Append (16#06#); --  PackInfo
-         Append_Seven_Zip_Number (Header, 0);
-         Append_Seven_Zip_Number (Header, 1);
-         Header.Append (16#09#); --  Size
-         Append_Seven_Zip_Number (Header, Interfaces.Unsigned_64 (Input'Length));
-         Header.Append (16#0A#); --  CRC
-         Header.Append (1);
-         Append_U32_LE (Header, Payload_CRC);
-         Header.Append (0);
-
-         Header.Append (16#07#); --  UnPackInfo
-         Header.Append (16#0B#); --  Folder
-         Append_Seven_Zip_Number (Header, 1);
-         Header.Append (0);
-         Append_Seven_Zip_Number (Header, 1);
-         Header.Append (1);
-         Header.Append (0); --  Copy coder
-         Header.Append (16#0C#); --  CodersUnPackSize
-         Append_Seven_Zip_Number (Header, Interfaces.Unsigned_64 (Input'Length));
-         Header.Append (16#0A#); --  CRC
-         Header.Append (1);
-         Append_U32_LE (Header, Payload_CRC);
-         Header.Append (0);
-         Header.Append (0);
-
-         Header.Append (16#05#); --  FilesInfo
-         Append_Seven_Zip_Number (Header, 1);
-         Header.Append (16#11#); --  Name
-         Name_Field.Append (0);
-         Append_UTF16LE_NT (Name_Field, Entry_Name);
-         Append_Seven_Zip_Number
-           (Header, Interfaces.Unsigned_64 (Name_Field.Length));
-         Header.Append_Vector (Name_Field);
-         Append_Seven_Zip_File_Metadata (Header, Metadata);
-         Header.Append (0);
-         Header.Append (0);
-
-         declare
-            Header_Image     : constant Byte_Array := To_Byte_Array (Header);
-            Header_CRC       : constant Interfaces.Unsigned_32 :=
-              Seven_Zip_Header_CRC (Header_Image);
-            Start_Header     : Byte_Vectors.Vector;
-         begin
-            Append_U64_LE (Start_Header, Interfaces.Unsigned_64 (Input'Length));
-            Append_U64_LE
-              (Start_Header, Interfaces.Unsigned_64 (Header_Image'Length));
-            Append_U32_LE (Start_Header, Header_CRC);
-
-            declare
-               Start_Header_Image : constant Byte_Array :=
-                 To_Byte_Array (Start_Header);
-               Start_CRC          : constant Interfaces.Unsigned_32 :=
-                 Seven_Zip_Header_CRC (Start_Header_Image);
-               Archive            : Byte_Vectors.Vector;
-            begin
-               Archive.Append (16#37#);
-               Archive.Append (16#7A#);
-               Archive.Append (16#BC#);
-               Archive.Append (16#AF#);
-               Archive.Append (16#27#);
-               Archive.Append (16#1C#);
-               Archive.Append (0);
-               Archive.Append (4);
-               Append_U32_LE (Archive, Start_CRC);
-               Archive.Append_Vector (Start_Header);
-               for B of Input loop
-                  Archive.Append (B);
-               end loop;
-               Archive.Append_Vector (Header);
-
-               Status := Ok;
-               return To_Byte_Array (Archive);
-            end;
-         end;
-      end;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return Empty;
+      return
+        Zlib.Seven_Zip_Codec_Writing.Build_Copy
+          (Input, Entry_Name, Metadata, Status);
    end Seven_Zip_Stored_With_Metadata;
 
    function Seven_Zip_Stored
@@ -9731,36 +5659,17 @@ package body Zlib is
       Metadata   : Seven_Zip_Entry_Metadata;
       Status     : out Status_Code) return Byte_Array
    is
-      Empty           : constant Byte_Array (1 .. 0) := [others => 0];
-      Compress_Status : Status_Code := Ok;
-   begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return Empty;
-      end if;
-
-      if Metadata.Is_Directory then
-         return Seven_Zip_Header_Only_Entry (Entry_Name, Metadata, Status);
-      end if;
-
-      declare
-         Packed_Data : constant Byte_Array :=
-           Deflate_Raw (Input, Mode, Compress_Status);
+      function Compress_Deflate
+        (Input_Data : Byte_Array;
+         Status     : out Status_Code) return Byte_Array
+      is
       begin
-         if Compress_Status /= Ok then
-            Status := Compress_Status;
-            return Empty;
-         end if;
-
-         return
-           Seven_Zip_Single_File
-             (Packed_Data, Input, Entry_Name, Seven_Zip_Deflate_Method,
-              Metadata, Status);
-      end;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return Empty;
+         return Deflate_Raw (Input_Data, Mode, Status);
+      end Compress_Deflate;
+   begin
+      return
+        Zlib.Seven_Zip_Codec_Writing.Build_Deflate
+          (Input, Entry_Name, Metadata, Compress_Deflate'Access, Status);
    end Seven_Zip_Deflate;
 
    function Seven_Zip_Deflate
@@ -9782,36 +5691,17 @@ package body Zlib is
       Metadata   : Seven_Zip_Entry_Metadata;
       Status     : out Status_Code) return Byte_Array
    is
-      Empty           : constant Byte_Array (1 .. 0) := [others => 0];
-      Compress_Status : Status_Code := Ok;
-   begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return Empty;
-      end if;
-
-      if Metadata.Is_Directory then
-         return Seven_Zip_Header_Only_Entry (Entry_Name, Metadata, Status);
-      end if;
-
-      declare
-         Packed_Data : constant Byte_Array :=
-           Deflate_Raw (Input, Level, Compress_Status);
+      function Compress_Deflate
+        (Input_Data : Byte_Array;
+         Status     : out Status_Code) return Byte_Array
+      is
       begin
-         if Compress_Status /= Ok then
-            Status := Compress_Status;
-            return Empty;
-         end if;
-
-         return
-           Seven_Zip_Single_File
-             (Packed_Data, Input, Entry_Name, Seven_Zip_Deflate_Method,
-              Metadata, Status);
-      end;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return Empty;
+         return Deflate_Raw (Input_Data, Level, Status);
+      end Compress_Deflate;
+   begin
+      return
+        Zlib.Seven_Zip_Codec_Writing.Build_Deflate
+          (Input, Entry_Name, Metadata, Compress_Deflate'Access, Status);
    end Seven_Zip_Deflate;
 
    function Seven_Zip_Deflate
@@ -9848,35 +5738,17 @@ package body Zlib is
       Metadata   : Seven_Zip_Entry_Metadata;
       Status     : out Status_Code) return Byte_Array
    is
-      Compress_Status : Status_Code := Ok;
-   begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return [1 .. 0 => 0];
-      end if;
-
-      if Metadata.Is_Directory then
-         return Seven_Zip_Header_Only_Entry (Entry_Name, Metadata, Status);
-      end if;
-
-      declare
-         Packed_Data : constant Byte_Array :=
-           BZip2_Compress (Input, Compress_Status);
+      function Compress_BZip2
+        (Input_Data : Byte_Array;
+         Status     : out Status_Code) return Byte_Array
+      is
       begin
-         if Compress_Status /= Ok then
-            Status := Compress_Status;
-            return [1 .. 0 => 0];
-         end if;
-
-         return
-           Seven_Zip_Single_File
-             (Packed_Data, Input, Entry_Name, Seven_Zip_BZip2_Method,
-              Metadata, Status);
-      end;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return [1 .. 0 => 0];
+         return BZip2_Compress (Input_Data, Status);
+      end Compress_BZip2;
+   begin
+      return
+        Zlib.Seven_Zip_Codec_Writing.Build_BZip2
+          (Input, Entry_Name, Metadata, Compress_BZip2'Access, Status);
    end Seven_Zip_BZip2;
 
    function Seven_Zip_LZMA
@@ -9896,28 +5768,17 @@ package body Zlib is
       Metadata   : Seven_Zip_Entry_Metadata;
       Status     : out Status_Code) return Byte_Array
    is
-   begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return [1 .. 0 => 0];
-      end if;
-
-      if Metadata.Is_Directory then
-         return Seven_Zip_Header_Only_Entry (Entry_Name, Metadata, Status);
-      end if;
-
-      declare
-         Packed_Data : constant Byte_Array := LZMA_Encode_Bounded (Input);
+      function Encode_LZMA
+        (Input_Data : Byte_Array;
+         LZMA_Props : in out Byte) return Byte_Array
+      is
       begin
-         return
-           Seven_Zip_Single_File
-             (Packed_Data, Input, Entry_Name, Seven_Zip_LZMA_Method,
-              Metadata, Status);
-      end;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return [1 .. 0 => 0];
+         return LZMA_Encode_Selected (Input_Data, LZMA_Props);
+      end Encode_LZMA;
+   begin
+      return
+        Zlib.Seven_Zip_Codec_Writing.Build_LZMA
+          (Input, Entry_Name, Metadata, Encode_LZMA'Access, Status);
    end Seven_Zip_LZMA;
 
    function Seven_Zip_LZMA2
@@ -9938,29 +5799,10 @@ package body Zlib is
       Status     : out Status_Code) return Byte_Array
    is
    begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return [1 .. 0 => 0];
-      end if;
-
-      if Metadata.Is_Directory then
-         return Seven_Zip_Header_Only_Entry (Entry_Name, Metadata, Status);
-      end if;
-
-      declare
-         Packed_Data : constant Byte_Array := LZMA2_Encode (Input);
-      begin
-         return
-           Seven_Zip_Single_File
-             (Packed_Data, Input, Entry_Name, Seven_Zip_LZMA2_Method,
-              Metadata, Status);
-      end;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return [1 .. 0 => 0];
+      return
+        Zlib.Seven_Zip_Codec_Writing.Build_LZMA2
+          (Input, Entry_Name, Metadata, LZMA2_Encode'Access, Status);
    end Seven_Zip_LZMA2;
-
 
    function Seven_Zip_PPMd
      (Input      : Byte_Array;
@@ -9980,34 +5822,97 @@ package body Zlib is
       Status     : out Status_Code) return Byte_Array
    is
    begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return [1 .. 0 => 0];
-      end if;
-
-      if Metadata.Is_Directory then
-         return Seven_Zip_Header_Only_Entry (Entry_Name, Metadata, Status);
-      end if;
-
-      declare
-         Packed_Data : constant Byte_Array :=
-           Zlib.PPMd7.Compress
-             (Input, PPMd_Default_Order, PPMd_Default_Memory);
-         Archive : constant Byte_Array :=
-           Seven_Zip_Single_File
-             (Packed_Data, Input, Entry_Name, Seven_Zip_PPMd_Method,
-              Metadata, Status);
-      begin
-         if Status /= Ok then
-            return [1 .. 0 => 0];
-         end if;
-         return Archive;
-      end;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return [1 .. 0 => 0];
+      return
+        Zlib.Seven_Zip_Codec_Writing.Build_PPMd
+          (Input, Entry_Name, Metadata, Status);
    end Seven_Zip_PPMd;
+
+   function Seven_Zip_Pack_Filtered
+     (Input  : Byte_Array;
+      Codec  : Seven_Zip_Codec_Method;
+      LZMA_Props : out Byte;
+      Status : out Status_Code) return Byte_Array
+   is
+      function Pack_Deflate
+        (Input_Data : Byte_Array;
+         Status     : out Status_Code) return Byte_Array is
+      begin
+         return Deflate_Raw (Input_Data, Auto, Status);
+      end Pack_Deflate;
+
+      function Pack_BZip2
+        (Input_Data : Byte_Array;
+         Status     : out Status_Code) return Byte_Array is
+      begin
+         return BZip2_Compress (Input_Data, Status);
+      end Pack_BZip2;
+
+      function Pack_LZMA
+        (Input_Data : Byte_Array;
+         Props      : in out Byte) return Byte_Array is
+      begin
+         return LZMA_Encode_Selected (Input_Data, Props);
+      end Pack_LZMA;
+
+      function Pack_LZMA2 (Input_Data : Byte_Array) return Byte_Array is
+      begin
+         return LZMA2_Encode (Input_Data);
+      end Pack_LZMA2;
+   begin
+      return
+        Zlib.Seven_Zip_Codec_Packing.Pack_Filtered
+          (Input, Codec, LZMA_Default_Props, Pack_Deflate'Access,
+           Pack_BZip2'Access, Pack_LZMA'Access, Pack_LZMA2'Access,
+           LZMA_Props, Status);
+   end Seven_Zip_Pack_Filtered;
+
+   function Seven_Zip_Filtered
+     (Input      : Byte_Array;
+      Entry_Name : String;
+      Filter     : Seven_Zip_Filter_Method;
+      Codec      : Seven_Zip_Codec_Method := Seven_Zip_Codec_LZMA;
+      Status     : out Status_Code) return Byte_Array
+   is
+   begin
+      return
+        Seven_Zip_Filtered
+          (Input, Entry_Name, Filter, Codec, 1,
+           No_Seven_Zip_Entry_Metadata, Status);
+   end Seven_Zip_Filtered;
+
+   function Seven_Zip_Filtered
+     (Input          : Byte_Array;
+      Entry_Name     : String;
+      Filter         : Seven_Zip_Filter_Method;
+      Codec          : Seven_Zip_Codec_Method;
+      Delta_Distance : Positive;
+      Metadata       : Seven_Zip_Entry_Metadata;
+      Status         : out Status_Code) return Byte_Array
+   is
+   begin
+      return
+        Zlib.Seven_Zip_Filtered_Writing.Build_Filtered
+          (Input, Entry_Name, Filter, Codec, Delta_Distance, Metadata,
+           Seven_Zip_Pack_Filtered'Access, Status);
+   end Seven_Zip_Filtered;
+
+   function Seven_Zip_Method_Graph
+     (Packed_Data    : Byte_Array;
+      Entry_Name     : String;
+      Coders         : Seven_Zip_Graph_Coder_Array;
+      Bind_Pairs     : Seven_Zip_Bind_Pair_Array;
+      Packed_Streams : Seven_Zip_Stream_Index_Array;
+      Pack_Sizes     : Seven_Zip_Size_Array;
+      Unpack_Sizes   : Seven_Zip_Size_Array;
+      Unpacked_CRC   : Interfaces.Unsigned_32;
+      Metadata       : Seven_Zip_Entry_Metadata;
+      Status         : out Status_Code) return Byte_Array is
+   begin
+      return
+        Zlib.Seven_Zip_Codec_Writing.Build_Method_Graph
+          (Packed_Data, Entry_Name, Coders, Bind_Pairs, Packed_Streams,
+           Pack_Sizes, Unpack_Sizes, Unpacked_CRC, Metadata, Status);
+   end Seven_Zip_Method_Graph;
 
    procedure Seven_Zip_Stored_File
      (Input_Path  : String;
@@ -10015,67 +5920,11 @@ package body Zlib is
       Entry_Name  : String;
       Status      : out Status_Code)
    is
-      Read_Status  : Status_Code := Ok;
-      Write_Status : Status_Code := Ok;
    begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return;
-      end if;
-      if not Seven_Zip_Output_File_Writable (Output_Path) then
-         Status := Output_File_Error;
-         return;
-      end if;
-      if not Seven_Zip_Input_Path_Readable (Input_Path) then
-         Status := Input_File_Error;
-         return;
-      end if;
-
-      declare
-         Metadata : constant Seven_Zip_Entry_Metadata :=
-           Seven_Zip_Source_Metadata (Input_Path);
-      begin
-         if Metadata.Is_Directory then
-            declare
-               Empty_Input : constant Byte_Array := [1 .. 0 => 0];
-               Archive     : constant Byte_Array :=
-                 Seven_Zip_Stored (Empty_Input, Entry_Name, Metadata, Status);
-            begin
-               if Status /= Ok then
-                  return;
-               end if;
-
-               Write_File (Output_Path, Archive, Write_Status);
-               Status := Write_Status;
-            end;
-
-         else
-            declare
-               Input_Data : constant Byte_Array :=
-                 Read_File (Input_Path, Read_Status);
-            begin
-               if Read_Status /= Ok then
-                  Status := Read_Status;
-                  return;
-               end if;
-
-               declare
-                  Archive : constant Byte_Array :=
-                    Seven_Zip_Stored (Input_Data, Entry_Name, Metadata, Status);
-               begin
-                  if Status /= Ok then
-                     return;
-                  end if;
-
-                  Write_File (Output_Path, Archive, Write_Status);
-                  Status := Write_Status;
-               end;
-            end;
-         end if;
-      end;
-   exception
-      when others =>
-         Status := Output_File_Error;
+      Zlib.Seven_Zip_File_Writing.Write_Stored_File_Archive
+        (Input_Path, Output_Path, Entry_Name, Read_File'Access,
+         Write_File'Access, Zlib.Seven_Zip_Properties.Source_Metadata'Access,
+         Status);
    end Seven_Zip_Stored_File;
 
    procedure Seven_Zip_Deflate_File
@@ -10085,69 +5934,17 @@ package body Zlib is
       Mode        : Compression_Mode;
       Status      : out Status_Code)
    is
-      Read_Status  : Status_Code := Ok;
-      Write_Status : Status_Code := Ok;
-   begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return;
-      end if;
-      if not Seven_Zip_Output_File_Writable (Output_Path) then
-         Status := Output_File_Error;
-         return;
-      end if;
-      if not Seven_Zip_Input_Path_Readable (Input_Path) then
-         Status := Input_File_Error;
-         return;
-      end if;
-
-      declare
-         Metadata : constant Seven_Zip_Entry_Metadata :=
-           Seven_Zip_Source_Metadata (Input_Path);
+      function Compress_Deflate
+        (Input  : Byte_Array;
+         Status : out Status_Code) return Byte_Array is
       begin
-         if Metadata.Is_Directory then
-            declare
-               Empty_Input : constant Byte_Array := [1 .. 0 => 0];
-               Archive     : constant Byte_Array :=
-                 Seven_Zip_Deflate
-                   (Empty_Input, Entry_Name, Mode, Metadata, Status);
-            begin
-               if Status /= Ok then
-                  return;
-               end if;
-
-               Write_File (Output_Path, Archive, Write_Status);
-               Status := Write_Status;
-            end;
-
-         else
-            declare
-               Input_Data : constant Byte_Array :=
-                 Read_File (Input_Path, Read_Status);
-            begin
-               if Read_Status /= Ok then
-                  Status := Read_Status;
-                  return;
-               end if;
-
-               declare
-                  Archive : constant Byte_Array :=
-                    Seven_Zip_Deflate
-                      (Input_Data, Entry_Name, Mode, Metadata, Status);
-               begin
-                  if Status /= Ok then
-                     return;
-                  end if;
-
-                  Write_File (Output_Path, Archive, Write_Status);
-                  Status := Write_Status;
-               end;
-            end;
-         end if;
-      end;
-   exception
-      when others =>
-         Status := Output_File_Error;
+         return Deflate_Raw (Input, Mode, Status);
+      end Compress_Deflate;
+   begin
+      Zlib.Seven_Zip_File_Writing.Write_Deflate_File_Archive
+        (Input_Path, Output_Path, Entry_Name, Read_File'Access,
+         Write_File'Access, Zlib.Seven_Zip_Properties.Source_Metadata'Access,
+         Compress_Deflate'Access, Status);
    end Seven_Zip_Deflate_File;
 
    procedure Seven_Zip_Deflate_File
@@ -10157,69 +5954,17 @@ package body Zlib is
       Level       : Compression_Level;
       Status      : out Status_Code)
    is
-      Read_Status  : Status_Code := Ok;
-      Write_Status : Status_Code := Ok;
-   begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return;
-      end if;
-      if not Seven_Zip_Output_File_Writable (Output_Path) then
-         Status := Output_File_Error;
-         return;
-      end if;
-      if not Seven_Zip_Input_Path_Readable (Input_Path) then
-         Status := Input_File_Error;
-         return;
-      end if;
-
-      declare
-         Metadata : constant Seven_Zip_Entry_Metadata :=
-           Seven_Zip_Source_Metadata (Input_Path);
+      function Compress_Deflate
+        (Input  : Byte_Array;
+         Status : out Status_Code) return Byte_Array is
       begin
-         if Metadata.Is_Directory then
-            declare
-               Empty_Input : constant Byte_Array := [1 .. 0 => 0];
-               Archive     : constant Byte_Array :=
-                 Seven_Zip_Deflate
-                   (Empty_Input, Entry_Name, Level, Metadata, Status);
-            begin
-               if Status /= Ok then
-                  return;
-               end if;
-
-               Write_File (Output_Path, Archive, Write_Status);
-               Status := Write_Status;
-            end;
-
-         else
-            declare
-               Input_Data : constant Byte_Array :=
-                 Read_File (Input_Path, Read_Status);
-            begin
-               if Read_Status /= Ok then
-                  Status := Read_Status;
-                  return;
-               end if;
-
-               declare
-                  Archive : constant Byte_Array :=
-                    Seven_Zip_Deflate
-                      (Input_Data, Entry_Name, Level, Metadata, Status);
-               begin
-                  if Status /= Ok then
-                     return;
-                  end if;
-
-                  Write_File (Output_Path, Archive, Write_Status);
-                  Status := Write_Status;
-               end;
-            end;
-         end if;
-      end;
-   exception
-      when others =>
-         Status := Output_File_Error;
+         return Deflate_Raw (Input, Level, Status);
+      end Compress_Deflate;
+   begin
+      Zlib.Seven_Zip_File_Writing.Write_Deflate_File_Archive
+        (Input_Path, Output_Path, Entry_Name, Read_File'Access,
+         Write_File'Access, Zlib.Seven_Zip_Properties.Source_Metadata'Access,
+         Compress_Deflate'Access, Status);
    end Seven_Zip_Deflate_File;
 
    procedure Seven_Zip_Deflate_File
@@ -10238,67 +5983,17 @@ package body Zlib is
       Entry_Name  : String;
       Status      : out Status_Code)
    is
-      Read_Status  : Status_Code := Ok;
-      Write_Status : Status_Code := Ok;
-   begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return;
-      end if;
-      if not Seven_Zip_Output_File_Writable (Output_Path) then
-         Status := Output_File_Error;
-         return;
-      end if;
-      if not Seven_Zip_Input_Path_Readable (Input_Path) then
-         Status := Input_File_Error;
-         return;
-      end if;
-
-      declare
-         Metadata : constant Seven_Zip_Entry_Metadata :=
-           Seven_Zip_Source_Metadata (Input_Path);
+      function Compress_BZip2
+        (Input  : Byte_Array;
+         Status : out Status_Code) return Byte_Array is
       begin
-         if Metadata.Is_Directory then
-            declare
-               Empty_Input : constant Byte_Array := [1 .. 0 => 0];
-               Archive     : constant Byte_Array :=
-                 Seven_Zip_BZip2 (Empty_Input, Entry_Name, Metadata, Status);
-            begin
-               if Status /= Ok then
-                  return;
-               end if;
-
-               Write_File (Output_Path, Archive, Write_Status);
-               Status := Write_Status;
-            end;
-
-         else
-            declare
-               Input_Data : constant Byte_Array :=
-                 Read_File (Input_Path, Read_Status);
-            begin
-               if Read_Status /= Ok then
-                  Status := Read_Status;
-                  return;
-               end if;
-
-               declare
-                  Archive : constant Byte_Array :=
-                    Seven_Zip_BZip2 (Input_Data, Entry_Name, Metadata, Status);
-               begin
-                  if Status /= Ok then
-                     return;
-                  end if;
-
-                  Write_File (Output_Path, Archive, Write_Status);
-                  Status := Write_Status;
-               end;
-            end;
-         end if;
-      end;
-   exception
-      when others =>
-         Status := Output_File_Error;
+         return BZip2_Compress (Input, Status);
+      end Compress_BZip2;
+   begin
+      Zlib.Seven_Zip_File_Writing.Write_BZip2_File_Archive
+        (Input_Path, Output_Path, Entry_Name, Read_File'Access,
+         Write_File'Access, Zlib.Seven_Zip_Properties.Source_Metadata'Access,
+         Compress_BZip2'Access, Status);
    end Seven_Zip_BZip2_File;
 
    procedure Seven_Zip_LZMA_File
@@ -10307,67 +6002,17 @@ package body Zlib is
       Entry_Name  : String;
       Status      : out Status_Code)
    is
-      Read_Status  : Status_Code := Ok;
-      Write_Status : Status_Code := Ok;
-   begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return;
-      end if;
-      if not Seven_Zip_Output_File_Writable (Output_Path) then
-         Status := Output_File_Error;
-         return;
-      end if;
-      if not Seven_Zip_Input_Path_Readable (Input_Path) then
-         Status := Input_File_Error;
-         return;
-      end if;
-
-      declare
-         Metadata : constant Seven_Zip_Entry_Metadata :=
-           Seven_Zip_Source_Metadata (Input_Path);
+      function Encode_LZMA
+        (Input      : Byte_Array;
+         LZMA_Props : in out Byte) return Byte_Array is
       begin
-         if Metadata.Is_Directory then
-            declare
-               Empty_Input : constant Byte_Array := [1 .. 0 => 0];
-               Archive     : constant Byte_Array :=
-                 Seven_Zip_LZMA (Empty_Input, Entry_Name, Metadata, Status);
-            begin
-               if Status /= Ok then
-                  return;
-               end if;
-
-               Write_File (Output_Path, Archive, Write_Status);
-               Status := Write_Status;
-            end;
-
-         else
-            declare
-               Input_Data : constant Byte_Array :=
-                 Read_File (Input_Path, Read_Status);
-            begin
-               if Read_Status /= Ok then
-                  Status := Read_Status;
-                  return;
-               end if;
-
-               declare
-                  Archive : constant Byte_Array :=
-                    Seven_Zip_LZMA (Input_Data, Entry_Name, Metadata, Status);
-               begin
-                  if Status /= Ok then
-                     return;
-                  end if;
-
-                  Write_File (Output_Path, Archive, Write_Status);
-                  Status := Write_Status;
-               end;
-            end;
-         end if;
-      end;
-   exception
-      when others =>
-         Status := Output_File_Error;
+         return LZMA_Encode_Selected (Input, LZMA_Props);
+      end Encode_LZMA;
+   begin
+      Zlib.Seven_Zip_File_Writing.Write_LZMA_File_Archive
+        (Input_Path, Output_Path, Entry_Name, Read_File'Access,
+         Write_File'Access, Zlib.Seven_Zip_Properties.Source_Metadata'Access,
+         Encode_LZMA'Access, Status);
    end Seven_Zip_LZMA_File;
 
    procedure Seven_Zip_LZMA2_File
@@ -10376,67 +6021,11 @@ package body Zlib is
       Entry_Name  : String;
       Status      : out Status_Code)
    is
-      Read_Status  : Status_Code := Ok;
-      Write_Status : Status_Code := Ok;
    begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return;
-      end if;
-      if not Seven_Zip_Output_File_Writable (Output_Path) then
-         Status := Output_File_Error;
-         return;
-      end if;
-      if not Seven_Zip_Input_Path_Readable (Input_Path) then
-         Status := Input_File_Error;
-         return;
-      end if;
-
-      declare
-         Metadata : constant Seven_Zip_Entry_Metadata :=
-           Seven_Zip_Source_Metadata (Input_Path);
-      begin
-         if Metadata.Is_Directory then
-            declare
-               Empty_Input : constant Byte_Array := [1 .. 0 => 0];
-               Archive     : constant Byte_Array :=
-                 Seven_Zip_LZMA2 (Empty_Input, Entry_Name, Metadata, Status);
-            begin
-               if Status /= Ok then
-                  return;
-               end if;
-
-               Write_File (Output_Path, Archive, Write_Status);
-               Status := Write_Status;
-            end;
-
-         else
-            declare
-               Input_Data : constant Byte_Array :=
-                 Read_File (Input_Path, Read_Status);
-            begin
-               if Read_Status /= Ok then
-                  Status := Read_Status;
-                  return;
-               end if;
-
-               declare
-                  Archive : constant Byte_Array :=
-                    Seven_Zip_LZMA2 (Input_Data, Entry_Name, Metadata, Status);
-               begin
-                  if Status /= Ok then
-                     return;
-                  end if;
-
-                  Write_File (Output_Path, Archive, Write_Status);
-                  Status := Write_Status;
-               end;
-            end;
-         end if;
-      end;
-   exception
-      when others =>
-         Status := Output_File_Error;
+      Zlib.Seven_Zip_File_Writing.Write_LZMA2_File_Archive
+        (Input_Path, Output_Path, Entry_Name, Read_File'Access,
+         Write_File'Access, Zlib.Seven_Zip_Properties.Source_Metadata'Access,
+         LZMA2_Encode'Access, Status);
    end Seven_Zip_LZMA2_File;
 
    procedure Seven_Zip_Stored_Files
@@ -10445,227 +6034,11 @@ package body Zlib is
       Entry_Names : Text_Array;
       Status      : out Status_Code)
    is
-      Count        : constant Natural := Input_Paths'Length;
-      Payloads     : Byte_Vectors.Vector;
-      Read_Status  : Status_Code := Ok;
-      Write_Status : Status_Code := Ok;
    begin
-      Status := Unsupported_Method;
-
-      if Count = 0 or else Entry_Names'Length /= Count then
-         return;
-      end if;
-
-      declare
-         Sizes              : Seven_Zip_U64_Array (1 .. Count) := [others => 0];
-         CRCs               : Seven_Zip_U32_Array (1 .. Count) := [others => 0];
-         Metadata           : Seven_Zip_Metadata_Array (1 .. Count) :=
-           [others => No_Seven_Zip_Entry_Metadata];
-         Entry_Is_Directory : Seven_Zip_Boolean_Array (1 .. Count) :=
-           [others => False];
-         Empty_File_Bits    : constant Seven_Zip_Boolean_Array (1 .. Count) :=
-           [others => False];
-         Stream_Count       : Natural := 0;
-      begin
-         for Offset in 0 .. Count - 1 loop
-            declare
-               Entry_Name : constant String :=
-                 US.To_String (Entry_Names (Entry_Names'First + Offset));
-            begin
-               if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-                  return;
-               end if;
-
-               if Offset > 0 then
-                  for Previous_Offset in 0 .. Offset - 1 loop
-                     if Entry_Name =
-                       US.To_String
-                         (Entry_Names (Entry_Names'First + Previous_Offset))
-                     then
-                        return;
-                     end if;
-                  end loop;
-               end if;
-            end;
-         end loop;
-
-         if not Seven_Zip_Output_File_Writable (Output_Path) then
-            Status := Output_File_Error;
-            return;
-         end if;
-
-         if not Seven_Zip_Input_Paths_Readable (Input_Paths) then
-            Status := Input_File_Error;
-            return;
-         end if;
-
-         for Offset in 0 .. Count - 1 loop
-            declare
-               Input_Path : constant String :=
-                 US.To_String (Input_Paths (Input_Paths'First + Offset));
-            begin
-               Metadata (Offset + 1) := Seven_Zip_Source_Metadata (Input_Path);
-               Entry_Is_Directory (Offset + 1) :=
-                 Metadata (Offset + 1).Is_Directory;
-               if Entry_Is_Directory (Offset + 1) then
-                  null;
-               else
-                  Stream_Count := Stream_Count + 1;
-                  declare
-                     Input_Data : constant Byte_Array :=
-                       Read_File (Input_Path, Read_Status);
-                  begin
-                     if Read_Status /= Ok then
-                        Status := Read_Status;
-                        return;
-                     end if;
-
-                     Sizes (Stream_Count) :=
-                       Interfaces.Unsigned_64 (Input_Data'Length);
-                     CRCs (Stream_Count) := CRC32 (Input_Data);
-                     for B of Input_Data loop
-                        Payloads.Append (B);
-                     end loop;
-                  end;
-               end if;
-            end;
-         end loop;
-
-         declare
-            Header     : Byte_Vectors.Vector;
-            Name_Field : Byte_Vectors.Vector;
-         begin
-            Header.Append (16#01#); --  Header
-
-            if Stream_Count > 0 then
-               Header.Append (16#04#); --  MainStreamsInfo
-               Header.Append (16#06#); --  PackInfo
-               Append_Seven_Zip_Number (Header, 0);
-               Append_Seven_Zip_Number (Header, 1);
-               Header.Append (16#09#); --  Size
-               Append_Seven_Zip_Number
-                 (Header, Interfaces.Unsigned_64 (Payloads.Length));
-               Header.Append (16#0A#); --  CRC
-               Header.Append (1);
-               Append_U32_LE (Header, CRC32 (To_Byte_Array (Payloads)));
-               Header.Append (0);
-
-               Header.Append (16#07#); --  UnPackInfo
-               Header.Append (16#0B#); --  Folder
-               Append_Seven_Zip_Number (Header, 1);
-               Header.Append (0);
-               Append_Seven_Zip_Number (Header, 1);
-               Header.Append (1);
-               Header.Append (0); --  Copy coder
-               Header.Append (16#0C#); --  CodersUnPackSize
-               Append_Seven_Zip_Number
-                 (Header, Interfaces.Unsigned_64 (Payloads.Length));
-               Header.Append (16#0A#); --  CRC
-               Header.Append (1);
-               Append_U32_LE (Header, CRC32 (To_Byte_Array (Payloads)));
-               Header.Append (0);
-
-               Header.Append (16#08#); --  SubStreamsInfo
-               Header.Append (16#0D#); --  NumUnPackStream
-               Append_Seven_Zip_Number
-                 (Header, Interfaces.Unsigned_64 (Stream_Count));
-               if Stream_Count > 1 then
-                  Header.Append (16#09#); --  Size
-                  for I in 1 .. Stream_Count - 1 loop
-                     Append_Seven_Zip_Number (Header, Sizes (I));
-                  end loop;
-               end if;
-               Header.Append (16#0A#); --  CRC
-               Header.Append (1);
-               for I in 1 .. Stream_Count loop
-                  Append_U32_LE (Header, CRCs (I));
-               end loop;
-               Header.Append (0);
-               Header.Append (0);
-            end if;
-
-            Header.Append (16#05#); --  FilesInfo
-            Append_Seven_Zip_Number
-              (Header, Interfaces.Unsigned_64 (Count));
-            Header.Append (16#11#); --  Name
-            Name_Field.Append (0);
-            for Offset in 0 .. Count - 1 loop
-               Append_UTF16LE_NT
-                 (Name_Field,
-                  US.To_String (Entry_Names (Entry_Names'First + Offset)));
-            end loop;
-            Append_Seven_Zip_Number
-              (Header, Interfaces.Unsigned_64 (Name_Field.Length));
-            Header.Append_Vector (Name_Field);
-            if Stream_Count < Count then
-               declare
-                  Bits : Byte_Vectors.Vector;
-               begin
-                  Append_Seven_Zip_Bits (Bits, Entry_Is_Directory, Count);
-                  Header.Append (16#0E#); --  EmptyStream
-                  Append_Seven_Zip_Number
-                    (Header, Interfaces.Unsigned_64 (Bits.Length));
-                  Header.Append_Vector (Bits);
-               end;
-
-               declare
-                  Bits : Byte_Vectors.Vector;
-               begin
-                  Append_Seven_Zip_Bits (Bits, Empty_File_Bits, Count - Stream_Count);
-                  Header.Append (16#0F#); --  EmptyFile
-                  Append_Seven_Zip_Number
-                    (Header, Interfaces.Unsigned_64 (Bits.Length));
-                  Header.Append_Vector (Bits);
-               end;
-            end if;
-            Append_Seven_Zip_Files_Metadata (Header, Metadata);
-            Header.Append (0);
-            Header.Append (0);
-
-            declare
-               Header_Image : constant Byte_Array := To_Byte_Array (Header);
-               Header_CRC   : constant Interfaces.Unsigned_32 :=
-                 Seven_Zip_Header_CRC (Header_Image);
-               Payload_Image : constant Byte_Array := To_Byte_Array (Payloads);
-               Start_Header  : Byte_Vectors.Vector;
-            begin
-               Append_U64_LE
-                 (Start_Header,
-                  Interfaces.Unsigned_64 (Payload_Image'Length));
-               Append_U64_LE
-                 (Start_Header,
-                  Interfaces.Unsigned_64 (Header_Image'Length));
-               Append_U32_LE (Start_Header, Header_CRC);
-
-               declare
-                  Start_Header_Image : constant Byte_Array :=
-                    To_Byte_Array (Start_Header);
-                  Start_CRC          : constant Interfaces.Unsigned_32 :=
-                    Seven_Zip_Header_CRC (Start_Header_Image);
-                  Archive            : Byte_Vectors.Vector;
-               begin
-                  Archive.Append (16#37#);
-                  Archive.Append (16#7A#);
-                  Archive.Append (16#BC#);
-                  Archive.Append (16#AF#);
-                  Archive.Append (16#27#);
-                  Archive.Append (16#1C#);
-                  Archive.Append (0);
-                  Archive.Append (4);
-                  Append_U32_LE (Archive, Start_CRC);
-                  Archive.Append_Vector (Start_Header);
-                  Archive.Append_Vector (Payloads);
-                  Archive.Append_Vector (Header);
-
-                  Write_File (Output_Path, To_Byte_Array (Archive), Write_Status);
-                  Status := Write_Status;
-               end;
-            end;
-         end;
-      end;
-   exception
-      when others =>
-         Status := Output_File_Error;
+      Zlib.Seven_Zip_File_Writing.Write_Stored_File_List
+        (Input_Paths, Output_Path, Entry_Names, Read_File'Access,
+         Write_File'Access, Zlib.Seven_Zip_Properties.Source_Metadata'Access,
+         Status);
    end Seven_Zip_Stored_Files;
 
    procedure Seven_Zip_Compressed_Files_Internal
@@ -10680,385 +6053,48 @@ package body Zlib is
       Password    : String;
       Status      : out Status_Code)
    is
-      Count        : constant Natural := Input_Paths'Length;
-      Payloads     : Byte_Vectors.Vector;
-      Solid_Input  : Byte_Vectors.Vector;
-      Read_Status  : Status_Code := Ok;
-      Write_Status : Status_Code := Ok;
-      Encrypt      : constant Boolean := Password /= "";
-      Solid_Compressed_Len : Natural := 0;
-      AES_IV       : Byte_Array (1 .. 16) := [others => 0];
-
-      function Pack_Input
-        (Input_Data : Byte_Array;
-         Pack_Status : out Status_Code) return Byte_Array
-      is
-         Empty : constant Byte_Array (1 .. 0) := [others => 0];
+      function Pack_Deflate_Mode
+        (Input       : Byte_Array;
+         Mode        : Compression_Mode;
+         Pack_Status : out Status_Code) return Byte_Array is
       begin
-         case Method is
-            when Seven_Zip_Deflate_Method =>
-               if Use_Level then
-                  return Deflate_Raw (Input_Data, Level, Pack_Status);
-               else
-                  return Deflate_Raw (Input_Data, Mode, Pack_Status);
-               end if;
+         return Deflate_Raw (Input, Mode, Pack_Status);
+      end Pack_Deflate_Mode;
 
-            when Seven_Zip_BZip2_Method =>
-               return BZip2_Compress (Input_Data, Pack_Status);
+      function Pack_Deflate_Level
+        (Input       : Byte_Array;
+         Level       : Compression_Level;
+         Pack_Status : out Status_Code) return Byte_Array is
+      begin
+         return Deflate_Raw (Input, Level, Pack_Status);
+      end Pack_Deflate_Level;
 
-            when Seven_Zip_LZMA_Method =>
-               Pack_Status := Ok;
-               return LZMA_Encode_Bounded (Input_Data);
+      function Pack_BZip2
+        (Input       : Byte_Array;
+         Pack_Status : out Status_Code) return Byte_Array is
+      begin
+         return BZip2_Compress (Input, Pack_Status);
+      end Pack_BZip2;
 
-            when Seven_Zip_LZMA2_Method =>
-               Pack_Status := Ok;
-               return LZMA2_Encode (Input_Data);
+      function Pack_LZMA
+        (Input : Byte_Array;
+         Props : in out Byte) return Byte_Array is
+      begin
+         return LZMA_Encode_Selected (Input, Props);
+      end Pack_LZMA;
 
-            when Seven_Zip_PPMd_Method =>
-               Pack_Status := Ok;
-               return Zlib.PPMd7.Compress
-                 (Input_Data, PPMd_Default_Order, PPMd_Default_Memory);
-
-            when others =>
-               Pack_Status := Unsupported_Method;
-               return Empty;
-         end case;
-      end Pack_Input;
+      function Pack_LZMA2 (Input : Byte_Array) return Byte_Array is
+      begin
+         return LZMA2_Encode (Input);
+      end Pack_LZMA2;
    begin
-      Status := Unsupported_Method;
-
-      if Count = 0 or else Entry_Names'Length /= Count then
-         return;
-      end if;
-
-      declare
-         Pack_Sizes         : Seven_Zip_U64_Array (1 .. Count) := [others => 0];
-         Pack_CRCs          : Seven_Zip_U32_Array (1 .. Count) := [others => 0];
-         Unpack_Sizes       : Seven_Zip_U64_Array (1 .. Count) := [others => 0];
-         Unpack_CRCs        : Seven_Zip_U32_Array (1 .. Count) := [others => 0];
-         Metadata           : Seven_Zip_Metadata_Array (1 .. Count) :=
-           [others => No_Seven_Zip_Entry_Metadata];
-         Entry_Is_Directory : Seven_Zip_Boolean_Array (1 .. Count) :=
-           [others => False];
-         Empty_File_Bits    : constant Seven_Zip_Boolean_Array (1 .. Count) :=
-           [others => False];
-         Stream_Count       : Natural := 0;
-      begin
-         for Offset in 0 .. Count - 1 loop
-            declare
-               Entry_Name : constant String :=
-                 US.To_String (Entry_Names (Entry_Names'First + Offset));
-            begin
-               if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-                  return;
-               end if;
-
-               if Offset > 0 then
-                  for Previous_Offset in 0 .. Offset - 1 loop
-                     if Entry_Name =
-                       US.To_String
-                         (Entry_Names (Entry_Names'First + Previous_Offset))
-                     then
-                        return;
-                     end if;
-                  end loop;
-               end if;
-            end;
-         end loop;
-
-         if not Seven_Zip_Output_File_Writable (Output_Path) then
-            Status := Output_File_Error;
-            return;
-         end if;
-
-         if not Seven_Zip_Input_Paths_Readable (Input_Paths) then
-            Status := Input_File_Error;
-            return;
-         end if;
-
-         for Offset in 0 .. Count - 1 loop
-            declare
-               Input_Path : constant String :=
-                 US.To_String (Input_Paths (Input_Paths'First + Offset));
-            begin
-               Metadata (Offset + 1) := Seven_Zip_Source_Metadata (Input_Path);
-               Entry_Is_Directory (Offset + 1) :=
-                 Metadata (Offset + 1).Is_Directory;
-               if Entry_Is_Directory (Offset + 1) then
-                  null;
-               else
-                  Stream_Count := Stream_Count + 1;
-                  declare
-                     Input_Data : constant Byte_Array :=
-                       Read_File (Input_Path, Read_Status);
-                  begin
-                     if Read_Status /= Ok then
-                        Status := Read_Status;
-                        return;
-                     end if;
-
-                     Unpack_Sizes (Stream_Count) :=
-                       Interfaces.Unsigned_64 (Input_Data'Length);
-                     Unpack_CRCs (Stream_Count) := CRC32 (Input_Data);
-
-                     if Solid then
-                        --  Defer compression: concatenate into one stream.
-                        for B of Input_Data loop
-                           Solid_Input.Append (B);
-                        end loop;
-                     else
-                        declare
-                           Compress_Status : Status_Code := Ok;
-                           Packed_Data     : constant Byte_Array :=
-                             Pack_Input (Input_Data, Compress_Status);
-                        begin
-                           if Compress_Status /= Ok then
-                              Status := Compress_Status;
-                              return;
-                           end if;
-
-                           Pack_Sizes (Stream_Count) :=
-                             Interfaces.Unsigned_64 (Packed_Data'Length);
-                           Pack_CRCs (Stream_Count) := CRC32 (Packed_Data);
-
-                           for B of Packed_Data loop
-                              Payloads.Append (B);
-                           end loop;
-                        end;
-                     end if;
-                  end;
-               end if;
-            end;
-         end loop;
-
-         if Solid and then Stream_Count > 0 then
-            declare
-               Solid_Data      : constant Byte_Array :=
-                 To_Byte_Array (Solid_Input);
-               Compress_Status : Status_Code := Ok;
-               Packed_Data     : constant Byte_Array :=
-                 Pack_Input (Solid_Data, Compress_Status);
-            begin
-               if Compress_Status /= Ok then
-                  Status := Compress_Status;
-                  return;
-               end if;
-               Solid_Compressed_Len := Packed_Data'Length;
-               if Encrypt then
-                  AES_IV := Zlib.Seven_Zip_AES.Random_IV;
-                  declare
-                     Pack : constant Byte_Array :=
-                       Zlib.Seven_Zip_AES.Encrypt_CBC
-                         (Zlib.Seven_Zip_AES.Derive_Key
-                            (Password, [1 .. 0 => 0], 19),
-                          AES_IV,
-                          Zlib.Seven_Zip_AES.Pad_To_Block (Packed_Data));
-                  begin
-                     Pack_Sizes (1) := Interfaces.Unsigned_64 (Pack'Length);
-                     for B of Pack loop
-                        Payloads.Append (B);
-                     end loop;
-                  end;
-               else
-                  Pack_Sizes (1) :=
-                    Interfaces.Unsigned_64 (Packed_Data'Length);
-                  for B of Packed_Data loop
-                     Payloads.Append (B);
-                  end loop;
-               end if;
-            end;
-         end if;
-
-         declare
-            Header     : Byte_Vectors.Vector;
-            Name_Field : Byte_Vectors.Vector;
-            Total_Unpack_Size : Interfaces.Unsigned_64 := 0;
-         begin
-            for I in 1 .. Stream_Count loop
-               Total_Unpack_Size := Total_Unpack_Size + Unpack_Sizes (I);
-            end loop;
-
-            Header.Append (16#01#); --  Header
-
-            if Stream_Count > 0 and then Solid then
-               Header.Append (16#04#); --  MainStreamsInfo
-               Header.Append (16#06#); --  PackInfo
-               Append_Seven_Zip_Number (Header, 0);
-               Append_Seven_Zip_Number (Header, 1);
-               Header.Append (16#09#); --  Size
-               Append_Seven_Zip_Number (Header, Pack_Sizes (1));
-               Header.Append (0);      --  end PackInfo
-
-               Header.Append (16#07#); --  UnPackInfo
-               Header.Append (16#0B#); --  Folder
-               Append_Seven_Zip_Number (Header, 1);  --  one folder
-               Header.Append (0);                    --  external
-               if Encrypt then
-                  Append_Seven_Zip_Number (Header, 2);  --  AES + inner coder
-                  Header.Append (16#24#);
-                  Header.Append (16#06#);
-                  Header.Append (16#F1#);
-                  Header.Append (16#07#);
-                  Header.Append (16#01#);
-                  Append_Seven_Zip_Number (Header, 18);
-                  Header.Append (16#53#);
-                  Header.Append (16#0F#);
-                  for B of AES_IV loop
-                     Header.Append (B);
-                  end loop;
-                  Append_Seven_Zip_Coder (Header, Method);
-                  Append_Seven_Zip_Number (Header, 1);  --  bind In=1 (inner.in)
-                  Append_Seven_Zip_Number (Header, 0);  --  bind Out=0 (AES.out)
-                  Header.Append (16#0C#); --  CodersUnPackSize
-                  Append_Seven_Zip_Number
-                    (Header, Interfaces.Unsigned_64 (Solid_Compressed_Len));
-                  Append_Seven_Zip_Number (Header, Total_Unpack_Size);
-               else
-                  Append_Seven_Zip_Number (Header, 1);  --  one coder
-                  Append_Seven_Zip_Coder (Header, Method);
-                  Header.Append (16#0C#); --  CodersUnPackSize
-                  Append_Seven_Zip_Number (Header, Total_Unpack_Size);
-               end if;
-               Header.Append (0);      --  end UnPackInfo (no folder CRC)
-
-               Header.Append (16#08#); --  SubStreamsInfo
-               Header.Append (16#0D#); --  NumUnPackStream
-               Append_Seven_Zip_Number
-                 (Header, Interfaces.Unsigned_64 (Stream_Count));
-               if Stream_Count > 1 then
-                  Header.Append (16#09#); --  Size (all but last substream)
-                  for I in 1 .. Stream_Count - 1 loop
-                     Append_Seven_Zip_Number (Header, Unpack_Sizes (I));
-                  end loop;
-               end if;
-               Header.Append (16#0A#); --  CRC
-               Header.Append (1);
-               for I in 1 .. Stream_Count loop
-                  Append_U32_LE (Header, Unpack_CRCs (I));
-               end loop;
-               Header.Append (0);      --  end SubStreamsInfo
-               Header.Append (0);      --  end MainStreamsInfo
-            elsif Stream_Count > 0 then
-               Header.Append (16#04#); --  MainStreamsInfo
-               Header.Append (16#06#); --  PackInfo
-               Append_Seven_Zip_Number (Header, 0);
-               Append_Seven_Zip_Number
-                 (Header, Interfaces.Unsigned_64 (Stream_Count));
-               Header.Append (16#09#); --  Size
-               for I in 1 .. Stream_Count loop
-                  Append_Seven_Zip_Number (Header, Pack_Sizes (I));
-               end loop;
-               Header.Append (16#0A#); --  CRC
-               Header.Append (1);
-               for I in 1 .. Stream_Count loop
-                  Append_U32_LE (Header, Pack_CRCs (I));
-               end loop;
-               Header.Append (0);
-
-               Header.Append (16#07#); --  UnPackInfo
-               Header.Append (16#0B#); --  Folder
-               Append_Seven_Zip_Number
-                 (Header, Interfaces.Unsigned_64 (Stream_Count));
-               Header.Append (0);
-               for I in 1 .. Stream_Count loop
-                  Append_Seven_Zip_Number (Header, 1);
-                  Append_Seven_Zip_Coder (Header, Method);
-               end loop;
-               Header.Append (16#0C#); --  CodersUnPackSize
-               for I in 1 .. Stream_Count loop
-                  Append_Seven_Zip_Number (Header, Unpack_Sizes (I));
-               end loop;
-               Header.Append (16#0A#); --  CRC
-               Header.Append (1);
-               for I in 1 .. Stream_Count loop
-                  Append_U32_LE (Header, Unpack_CRCs (I));
-               end loop;
-               Header.Append (0);
-               Header.Append (0);
-            end if;
-
-            Header.Append (16#05#); --  FilesInfo
-            Append_Seven_Zip_Number
-              (Header, Interfaces.Unsigned_64 (Count));
-            Header.Append (16#11#); --  Name
-            Name_Field.Append (0);
-            for Offset in 0 .. Count - 1 loop
-               Append_UTF16LE_NT
-                 (Name_Field,
-                  US.To_String (Entry_Names (Entry_Names'First + Offset)));
-            end loop;
-            Append_Seven_Zip_Number
-              (Header, Interfaces.Unsigned_64 (Name_Field.Length));
-            Header.Append_Vector (Name_Field);
-            if Stream_Count < Count then
-               declare
-                  Bits : Byte_Vectors.Vector;
-               begin
-                  Append_Seven_Zip_Bits (Bits, Entry_Is_Directory, Count);
-                  Header.Append (16#0E#); --  EmptyStream
-                  Append_Seven_Zip_Number
-                    (Header, Interfaces.Unsigned_64 (Bits.Length));
-                  Header.Append_Vector (Bits);
-               end;
-
-               declare
-                  Bits : Byte_Vectors.Vector;
-               begin
-                  Append_Seven_Zip_Bits (Bits, Empty_File_Bits, Count - Stream_Count);
-                  Header.Append (16#0F#); --  EmptyFile
-                  Append_Seven_Zip_Number
-                    (Header, Interfaces.Unsigned_64 (Bits.Length));
-                  Header.Append_Vector (Bits);
-               end;
-            end if;
-            Append_Seven_Zip_Files_Metadata (Header, Metadata);
-            Header.Append (0);
-            Header.Append (0);
-
-            declare
-               Header_Image  : constant Byte_Array := To_Byte_Array (Header);
-               Header_CRC    : constant Interfaces.Unsigned_32 :=
-                 Seven_Zip_Header_CRC (Header_Image);
-               Payload_Image : constant Byte_Array := To_Byte_Array (Payloads);
-               Start_Header  : Byte_Vectors.Vector;
-            begin
-               Append_U64_LE
-                 (Start_Header,
-                  Interfaces.Unsigned_64 (Payload_Image'Length));
-               Append_U64_LE
-                 (Start_Header,
-                  Interfaces.Unsigned_64 (Header_Image'Length));
-               Append_U32_LE (Start_Header, Header_CRC);
-
-               declare
-                  Start_Header_Image : constant Byte_Array :=
-                    To_Byte_Array (Start_Header);
-                  Start_CRC          : constant Interfaces.Unsigned_32 :=
-                    Seven_Zip_Header_CRC (Start_Header_Image);
-                  Archive            : Byte_Vectors.Vector;
-               begin
-                  Archive.Append (16#37#);
-                  Archive.Append (16#7A#);
-                  Archive.Append (16#BC#);
-                  Archive.Append (16#AF#);
-                  Archive.Append (16#27#);
-                  Archive.Append (16#1C#);
-                  Archive.Append (0);
-                  Archive.Append (4);
-                  Append_U32_LE (Archive, Start_CRC);
-                  Archive.Append_Vector (Start_Header);
-                  Archive.Append_Vector (Payloads);
-                  Archive.Append_Vector (Header);
-
-                  Write_File (Output_Path, To_Byte_Array (Archive), Write_Status);
-                  Status := Write_Status;
-               end;
-            end;
-         end;
-      end;
-   exception
-      when others =>
-         Status := Output_File_Error;
+      Zlib.Seven_Zip_File_Writing.Write_Compressed_File_List_Selected
+        (Input_Paths, Output_Path, Entry_Names, Method, Mode, Level, Use_Level,
+         Solid, Password, Read_File'Access, Write_File'Access,
+         Zlib.Seven_Zip_Properties.Source_Metadata'Access,
+         Pack_Deflate_Mode'Access, Pack_Deflate_Level'Access,
+         Pack_BZip2'Access, Pack_LZMA'Access, Pack_LZMA2'Access,
+         LZMA_Default_Props, Status);
    end Seven_Zip_Compressed_Files_Internal;
 
    procedure Seven_Zip_Deflate_Files
@@ -11211,6 +6247,7 @@ package body Zlib is
    function Extract_Seven_Zip_Entry
      (Archive_Image : Byte_Array;
       Entry_Name    : String;
+      Password      : String;
       Status        : out Status_Code;
       Kind          : out Seven_Zip_Entry_Kind;
       Metadata      : out Seven_Zip_Entry_Metadata) return Byte_Array
@@ -11237,747 +6274,109 @@ package body Zlib is
          end if;
 
          declare
-            Start_First : constant Natural := F + 12;
-            Start_Last  : constant Natural := F + 31;
-            Start       : constant Byte_Array := Archive_Image (Start_First .. Start_Last);
-            Start_CRC   : constant Interfaces.Unsigned_32 :=
-              Seven_Zip_U32_At (Archive_Image, F + 8);
-            Offset      : constant Interfaces.Unsigned_64 :=
-              Seven_Zip_U64_At (Archive_Image, F + 12);
-            Header_Size : constant Interfaces.Unsigned_64 :=
-              Seven_Zip_U64_At (Archive_Image, F + 20);
-            Header_CRC  : constant Interfaces.Unsigned_32 :=
-              Seven_Zip_U32_At (Archive_Image, F + 28);
+            Info : Zlib.Seven_Zip_Container.Start_Header_Info;
          begin
-            if Start_CRC /= CRC32 (Start) then
-               Status := Invalid_Checksum;
+            if not Zlib.Seven_Zip_Container.Read_Start_Header
+              (Archive_Image, F, Info, Status)
+            then
                return Empty;
             end if;
 
             declare
-               Payload_First : constant Natural := F + 32;
+               Payload_First : constant Natural := Info.Payload_First;
+               Payload_Count : constant Natural := Info.Payload_Count;
+               Header_First  : constant Natural := Info.Header_First;
+               Header_Last   : constant Natural := Info.Header_Last;
+               Header_Count  : constant Natural := Info.Header_Count;
+               Pos           : Natural := Header_First;
+               Value         : Interfaces.Unsigned_64 := 0;
+               B             : Byte := 0;
             begin
-               if Offset > Interfaces.Unsigned_64 (Natural'Last)
-                 or else Header_Size > Interfaces.Unsigned_64 (Natural'Last)
-                 or else Offset >
-                   Interfaces.Unsigned_64 (Natural'Last - Payload_First)
-               then
-                  Status := Unsupported_Method;
-                  return Empty;
-               end if;
-            end;
-
-            declare
-               Payload_Count : constant Natural := Natural (Offset);
-               Header_Count  : constant Natural := Natural (Header_Size);
-               Payload_First : constant Natural := F + 32;
-               Header_First  : constant Natural := Payload_First + Payload_Count;
-            begin
-               if Header_Count = 0
-                 or else Header_First > Archive_Image'Last
-                 or else Header_Count > Natural'Last - Header_First + 1
-               then
-                  Status := Unexpected_End_Of_Input;
-                  return Empty;
-               end if;
-
-               declare
-                  Header_Last : constant Natural := Header_First + Header_Count - 1;
-                  Pos    : Natural := Header_First;
-                  Value  : Interfaces.Unsigned_64 := 0;
-                  B      : Byte := 0;
-               begin
-                  if Header_Last > Archive_Image'Last then
-                     Status := Unexpected_End_Of_Input;
-                     return Empty;
-                  end if;
-
-                  if Header_Last /= Archive_Image'Last then
-                     Status := Unsupported_Method;
-                     return Empty;
-                  end if;
-
-                  if Header_CRC /=
-                    CRC32 (Archive_Image (Header_First .. Header_Last))
-                  then
-                     Status := Invalid_Checksum;
-                     return Empty;
-                  end if;
-
                   if Archive_Image (Header_First) = 16#17# then
                      declare
+                        function Decode_Header_Payload
+                          (Input          : Byte_Array;
+                           Method         : Seven_Zip_Coder_Method;
+                           LZMA_Props     : Byte_Array;
+                           Expected_Size  : Natural;
+                           Delta_Distance : Positive;
+                           PPMd_Order     : Natural;
+                           PPMd_Memory    : Interfaces.Unsigned_32;
+                           Decode_Status  : out Status_Code) return Byte_Array
+                        is
+                           Props : Seven_Zip_LZMA_Props := [others => 0];
+                        begin
+                           Decode_Status := Ok;
+
+                           case Method is
+                              when Seven_Zip_Copy =>
+                                 return Input;
+
+                              when Seven_Zip_Deflate_Method =>
+                                 return Inflate_Raw_Exact (Input, Decode_Status);
+
+                              when Seven_Zip_BZip2_Method =>
+                                 return BZip2_Decompress
+                                   (Input, Expected_Size, Decode_Status);
+
+                              when Seven_Zip_LZMA_Method =>
+                                 if LZMA_Props'Length /= Props'Length then
+                                    Decode_Status := Unsupported_Method;
+                                    return Empty;
+                                 end if;
+
+                                 for Offset in 0 .. Props'Length - 1 loop
+                                    Props (Props'First + Offset) :=
+                                      LZMA_Props (LZMA_Props'First + Offset);
+                                 end loop;
+
+                                 return LZMA_Decode_Raw_Encoded_Header
+                                   (Input, Props, Expected_Size, Decode_Status);
+
+                              when Seven_Zip_LZMA2_Method =>
+                                 return LZMA2_Decode
+                                   (Input, Expected_Size, Decode_Status);
+
+                              when Seven_Zip_Delta_Method =>
+                                 return Zlib.Seven_Zip_Filters.Delta_Decode_Checked
+                                   (Input, Delta_Distance, Decode_Status);
+
+                              when Seven_Zip_BCJ_X86_Method =>
+                                 return Zlib.Seven_Zip_Filters.X86_BCJ_Decode
+                                   (Input, Decode_Status);
+
+                              when Seven_Zip_BCJ_ARM_Method
+                                 | Seven_Zip_BCJ_ARMT_Method
+                                 | Seven_Zip_BCJ_PPC_Method
+                                 | Seven_Zip_BCJ_SPARC_Method
+                                 | Seven_Zip_BCJ_ARM64_Method
+                                 | Seven_Zip_BCJ_IA64_Method
+                                 | Seven_Zip_BCJ_RISCV_Method =>
+                                 return Zlib.Seven_Zip_Filters.Branch_Convert
+                                   (Branch_Arch_Of (Method), Input,
+                                    Encoding => False);
+
+                              when Seven_Zip_PPMd_Method =>
+                                 return Zlib.PPMd7.Decompress
+                                   (Input, Expected_Size, PPMd_Order,
+                                    PPMd_Memory, Decode_Status);
+
+                              when Seven_Zip_BCJ2_Method | Seven_Zip_AES_Method =>
+                                 Decode_Status := Unsupported_Method;
+                                 return Empty;
+                           end case;
+                        end Decode_Header_Payload;
+
                         Encoded_Header_Pack_Pos : Natural := 0;
-
-                        --  Decode a 2-coder [AES -> LZMA] encoded header (7z
-                        --  "mhe=on"): parse the AES + LZMA coders, AES-decrypt
-                        --  the pack with the active password, then LZMA-decode
-                        --  to the real (plain) header bytes.
-                        function Decode_AES_Encoded_Header
-                          (Decode_Status : out Status_Code) return Byte_Array
-                        is
-                           P         : Natural := Header_First;
-                           V         : Interfaces.Unsigned_64 := 0;
-                           B         : Byte := 0;
-                           Pack_Pos  : Interfaces.Unsigned_64 := 0;
-                           Pack_Size : Interfaces.Unsigned_64 := 0;
-                           HC_Size   : Interfaces.Unsigned_64 := 0;
-                           Hdr_Size  : Interfaces.Unsigned_64 := 0;
-                           Cycles    : Natural := 0;
-                           Salt_Len  : Natural := 0;
-                           IV_Len    : Natural := 0;
-                           Salt      : Byte_Array (1 .. 16) := [others => 0];
-                           IV        : Byte_Array (1 .. 16) := [others => 0];
-                           LZMA_P    : Seven_Zip_LZMA_Props := [others => 0];
-                           Num_Coders : Natural := 0;
-                        begin
-                           Decode_Status := Unsupported_Method;
-                           if not Seven_Zip_Expect_Byte
-                             (Archive_Image, P, Header_Last, 16#17#)
-                           then
-                              return Empty;
-                           end if;
-                           if P <= Header_Last
-                             and then Archive_Image (P) = 16#04#
-                           then
-                              P := P + 1;
-                           end if;
-                           --  PackInfo
-                           if not Seven_Zip_Expect_Byte
-                                (Archive_Image, P, Header_Last, 16#06#)
-                             or else not Read_Seven_Zip_Number
-                               (Archive_Image, P, Header_Last, Pack_Pos)
-                             or else not Read_Seven_Zip_Number
-                               (Archive_Image, P, Header_Last, V)
-                             or else V /= 1
-                             or else not Seven_Zip_Expect_Byte
-                               (Archive_Image, P, Header_Last, 16#09#)
-                             or else not Read_Seven_Zip_Number
-                               (Archive_Image, P, Header_Last, Pack_Size)
-                           then
-                              return Empty;
-                           end if;
-                           if P <= Header_Last
-                             and then Archive_Image (P) = 16#0A#
-                           then
-                              P := P + 1;
-                              if not Seven_Zip_Expect_Byte
-                                   (Archive_Image, P, Header_Last, 1)
-                                or else not Seven_Zip_Has_Bytes
-                                  (P, Header_Last, 4)
-                              then
-                                 return Empty;
-                              end if;
-                              P := P + 4;
-                           end if;
-                           --  end PackInfo, UnpackInfo, Folder, 2 coders
-                           if not Seven_Zip_Expect_Byte
-                                (Archive_Image, P, Header_Last, 0)
-                             or else not Seven_Zip_Expect_Byte
-                               (Archive_Image, P, Header_Last, 16#07#)
-                             or else not Seven_Zip_Expect_Byte
-                               (Archive_Image, P, Header_Last, 16#0B#)
-                             or else not Read_Seven_Zip_Number
-                               (Archive_Image, P, Header_Last, V)
-                             or else V /= 1
-                             or else not Seven_Zip_Expect_Byte
-                               (Archive_Image, P, Header_Last, 0)
-                             or else not Read_Seven_Zip_Number
-                               (Archive_Image, P, Header_Last, V)
-                             or else V not in 1 | 2
-                           then
-                              return Empty;
-                           end if;
-                           Num_Coders := Natural (V);
-                           --  Coder 0: AES (id 06 F1 07 01, has props)
-                           if not Seven_Zip_Read_Byte
-                                (Archive_Image, P, Header_Last, B)
-                             or else (B and 16#0F#) /= 4
-                             or else (B and 16#20#) = 0
-                             or else not Seven_Zip_Expect_Byte
-                               (Archive_Image, P, Header_Last, 16#06#)
-                             or else not Seven_Zip_Expect_Byte
-                               (Archive_Image, P, Header_Last, 16#F1#)
-                             or else not Seven_Zip_Expect_Byte
-                               (Archive_Image, P, Header_Last, 16#07#)
-                             or else not Seven_Zip_Expect_Byte
-                               (Archive_Image, P, Header_Last, 16#01#)
-                           then
-                              return Empty;
-                           end if;
-                           declare
-                              Prop_Size : Interfaces.Unsigned_64 := 0;
-                           begin
-                              if not Read_Seven_Zip_Number
-                                   (Archive_Image, P, Header_Last, Prop_Size)
-                                or else Prop_Size < 1
-                                or else not Seven_Zip_Has_Bytes
-                                  (P, Header_Last, Natural (Prop_Size))
-                              then
-                                 return Empty;
-                              end if;
-                              declare
-                                 PB : Byte_Array (1 .. Natural (Prop_Size));
-                                 B0, B1, PP : Natural := 0;
-                              begin
-                                 for J in PB'Range loop
-                                    PB (J) := Archive_Image (P);
-                                    P := P + 1;
-                                 end loop;
-                                 B0 := Natural (PB (1));
-                                 Cycles := B0 mod 64;
-                                 if (B0 / 64) /= 0
-                                   and then Natural (Prop_Size) >= 2
-                                 then
-                                    B1 := Natural (PB (2));
-                                    PP := 3;
-                                 else
-                                    PP := 2;
-                                 end if;
-                                 Salt_Len := ((B0 / 128) mod 2) + (B1 / 16);
-                                 IV_Len := ((B0 / 64) mod 2) + (B1 mod 16);
-                                 if Salt_Len > 16 or else IV_Len > 16
-                                   or else Natural (Prop_Size) <
-                                     (PP - 1) + Salt_Len + IV_Len
-                                 then
-                                    return Empty;
-                                 end if;
-                                 for J in 1 .. Salt_Len loop
-                                    Salt (J) := PB (PP + J - 1);
-                                 end loop;
-                                 for J in 1 .. IV_Len loop
-                                    IV (J) := PB (PP + Salt_Len + J - 1);
-                                 end loop;
-                              end;
-                           end;
-                           --  Coder 1: LZMA (only present when 2 coders; a
-                           --  small header is AES-only, NumCoders = 1).
-                           if Num_Coders = 2 then
-                              if not Seven_Zip_Expect_Byte
-                                   (Archive_Image, P, Header_Last, 16#23#)
-                                or else not Seven_Zip_Expect_Byte
-                                  (Archive_Image, P, Header_Last, 16#03#)
-                                or else not Seven_Zip_Expect_Byte
-                                  (Archive_Image, P, Header_Last, 16#01#)
-                                or else not Seven_Zip_Expect_Byte
-                                  (Archive_Image, P, Header_Last, 16#01#)
-                                or else not Seven_Zip_Expect_Byte
-                                  (Archive_Image, P, Header_Last, 5)
-                              then
-                                 return Empty;
-                              end if;
-                              for J in LZMA_P'Range loop
-                                 if not Seven_Zip_Read_Byte
-                                   (Archive_Image, P, Header_Last, LZMA_P (J))
-                                 then
-                                    return Empty;
-                                 end if;
-                              end loop;
-                              if not Valid_LZMA_Props (LZMA_P (1)) then
-                                 return Empty;
-                              end if;
-                              --  bind pair In=1 (LZMA.in) Out=0 (AES.out)
-                              if not Read_Seven_Zip_Number
-                                   (Archive_Image, P, Header_Last, V)
-                                or else V /= 1
-                                or else not Read_Seven_Zip_Number
-                                  (Archive_Image, P, Header_Last, V)
-                                or else V /= 0
-                              then
-                                 return Empty;
-                              end if;
-                           end if;
-                           --  CodersUnPackSize: AES.out (=HC); LZMA.out (=hdr)
-                           --  for 2 coders.
-                           if not Seven_Zip_Expect_Byte
-                                (Archive_Image, P, Header_Last, 16#0C#)
-                             or else not Read_Seven_Zip_Number
-                               (Archive_Image, P, Header_Last, HC_Size)
-                           then
-                              return Empty;
-                           end if;
-                           if Num_Coders = 2 then
-                              if not Read_Seven_Zip_Number
-                                   (Archive_Image, P, Header_Last, Hdr_Size)
-                              then
-                                 return Empty;
-                              end if;
-                           else
-                              Hdr_Size := HC_Size;
-                           end if;
-                           --  optional folder CRC
-                           if P <= Header_Last
-                             and then Archive_Image (P) = 16#0A#
-                           then
-                              P := P + 1;
-                              if not Seven_Zip_Expect_Byte
-                                   (Archive_Image, P, Header_Last, 1)
-                                or else not Seven_Zip_Has_Bytes
-                                  (P, Header_Last, 4)
-                              then
-                                 return Empty;
-                              end if;
-                              P := P + 4;
-                           end if;
-                           if not Seven_Zip_Expect_Byte
-                                (Archive_Image, P, Header_Last, 0)
-                             or else not Seven_Zip_Expect_Byte
-                               (Archive_Image, P, Header_Last, 0)
-                           then
-                              return Empty;
-                           end if;
-
-                           if Pack_Pos >
-                                Interfaces.Unsigned_64 (Natural'Last)
-                             or else Pack_Size >
-                               Interfaces.Unsigned_64 (Natural'Last)
-                             or else Pack_Pos >
-                               Interfaces.Unsigned_64 (Payload_Count)
-                             or else Pack_Size >
-                               Interfaces.Unsigned_64 (Payload_Count) - Pack_Pos
-                             or else Natural (Pack_Size) mod 16 /= 0
-                             or else Natural (Pack_Size) = 0
-                             or else US.Length (Active_Seven_Zip_Password) = 0
-                           then
-                              return Empty;
-                           end if;
-
-                           Encoded_Header_Pack_Pos := Natural (Pack_Pos);
-                           declare
-                              Enc_First : constant Natural :=
-                                Payload_First + Natural (Pack_Pos);
-                              Enc : constant Byte_Array :=
-                                Archive_Image
-                                  (Enc_First ..
-                                   Enc_First + Natural (Pack_Size) - 1);
-                              Key : constant Byte_Array :=
-                                Zlib.Seven_Zip_AES.Derive_Key
-                                  (US.To_String (Active_Seven_Zip_Password),
-                                   Salt (1 .. Salt_Len), Cycles);
-                              Dec : constant Byte_Array :=
-                                Zlib.Seven_Zip_AES.Decrypt_CBC (Key, IV, Enc);
-                              LS  : Status_Code := Ok;
-                           begin
-                              if Natural (HC_Size) > Dec'Length then
-                                 return Empty;
-                              end if;
-                              declare
-                                 Trunc : constant Byte_Array :=
-                                   Dec (Dec'First ..
-                                        Dec'First + Natural (HC_Size) - 1);
-                                 Plain : constant Byte_Array :=
-                                   (if Num_Coders = 2
-                                    then LZMA_Decode_Raw_Encoded_Header
-                                           (Trunc, LZMA_P,
-                                            Natural (Hdr_Size), LS)
-                                    else Trunc);
-                              begin
-                                 if LS /= Ok then
-                                    Decode_Status := LS;
-                                    return Empty;
-                                 end if;
-                                 Decode_Status := Ok;
-                                 return Plain;
-                              end;
-                           end;
-                        exception
-                           when others =>
-                              Decode_Status := Unsupported_Method;
-                              return Empty;
-                        end Decode_AES_Encoded_Header;
-
-                        function Decode_Encoded_Header
-                          (Decode_Status : out Status_Code) return Byte_Array
-                        is
-                           Enc_Pos      : Natural := Header_First;
-                           Enc_Value    : Interfaces.Unsigned_64 := 0;
-                           Enc_B        : Byte := 0;
-                           Pack_Pos     : Interfaces.Unsigned_64 := 0;
-                           Pack_Size    : Interfaces.Unsigned_64 := 0;
-                           Pack_CRC     : Interfaces.Unsigned_32 := 0;
-                           Pack_CRC_OK  : Boolean := False;
-                           Method       : Seven_Zip_Coder_Method := Seven_Zip_Copy;
-                           Delta_Distance : Natural := 1;
-                           PPMd_Memory  : Interfaces.Unsigned_32 := 0;
-                           LZMA_Prop    : Seven_Zip_LZMA_Props :=
-                             [1 => LZMA_Default_Props,
-                              2 => Byte (LZMA_Default_Dict mod 256),
-                              3 => Byte ((LZMA_Default_Dict / 256) mod 256),
-                              4 => Byte ((LZMA_Default_Dict / 65_536) mod 256),
-                              5 => Byte
-                                ((LZMA_Default_Dict / 16#0100_0000#) mod 256)];
-                           Unpack_Size  : Interfaces.Unsigned_64 := 0;
-                           Unpack_CRC   : Interfaces.Unsigned_32 := 0;
-                           Unpack_CRC_OK : Boolean := False;
-                        begin
-                           Decode_Status := Unsupported_Method;
-
-                           if not Seven_Zip_Expect_Byte
-                             (Archive_Image, Enc_Pos, Header_Last, 16#17#)
-                           then
-                              return Empty;
-                           end if;
-
-                           if Enc_Pos <= Header_Last
-                             and then Archive_Image (Enc_Pos) = 16#04#
-                           then
-                              Enc_Pos := Enc_Pos + 1;
-                           end if;
-
-                           if not Seven_Zip_Expect_Byte
-                             (Archive_Image, Enc_Pos, Header_Last, 16#06#)
-                             or else not Read_Seven_Zip_Number
-                               (Archive_Image, Enc_Pos, Header_Last, Pack_Pos)
-                             or else not Read_Seven_Zip_Number
-                               (Archive_Image, Enc_Pos, Header_Last, Enc_Value)
-                             or else Enc_Value /= 1
-                             or else not Seven_Zip_Expect_Byte
-                               (Archive_Image, Enc_Pos, Header_Last, 16#09#)
-                             or else not Read_Seven_Zip_Number
-                               (Archive_Image, Enc_Pos, Header_Last, Pack_Size)
-                           then
-                              return Empty;
-                           end if;
-
-                           if Enc_Pos <= Header_Last
-                             and then Archive_Image (Enc_Pos) = 16#0A#
-                           then
-                              Enc_Pos := Enc_Pos + 1;
-                              if not Seven_Zip_Expect_Byte
-                                (Archive_Image, Enc_Pos, Header_Last, 1)
-                                or else not Seven_Zip_Has_Bytes
-                                  (Enc_Pos, Header_Last, 4)
-                              then
-                                 return Empty;
-                              end if;
-                              Pack_CRC := Seven_Zip_U32_At
-                                (Archive_Image, Enc_Pos);
-                              Pack_CRC_OK := True;
-                              Enc_Pos := Enc_Pos + 4;
-                           end if;
-
-                           if not Seven_Zip_Expect_Byte
-                             (Archive_Image, Enc_Pos, Header_Last, 0)
-                             or else not Seven_Zip_Expect_Byte
-                               (Archive_Image, Enc_Pos, Header_Last, 16#07#)
-                             or else not Seven_Zip_Expect_Byte
-                               (Archive_Image, Enc_Pos, Header_Last, 16#0B#)
-                             or else not Read_Seven_Zip_Number
-                               (Archive_Image, Enc_Pos, Header_Last, Enc_Value)
-                             or else Enc_Value /= 1
-                             or else not Seven_Zip_Expect_Byte
-                               (Archive_Image, Enc_Pos, Header_Last, 0)
-                             or else not Read_Seven_Zip_Number
-                               (Archive_Image, Enc_Pos, Header_Last, Enc_Value)
-                             or else Enc_Value /= 1
-                             or else not Seven_Zip_Read_Byte
-                               (Archive_Image, Enc_Pos, Header_Last, Enc_B)
-                           then
-                              return Empty;
-                           end if;
-
-                           if Enc_B = 1 then
-                              if not Seven_Zip_Expect_Byte
-                                (Archive_Image, Enc_Pos, Header_Last, 0)
-                              then
-                                 return Empty;
-                              end if;
-                              Method := Seven_Zip_Copy;
-                           elsif Enc_B = 3 then
-                              if not Seven_Zip_Expect_Byte
-                                (Archive_Image, Enc_Pos, Header_Last, 16#04#)
-                                or else not Seven_Zip_Read_Byte
-                                  (Archive_Image, Enc_Pos, Header_Last, Enc_B)
-                              then
-                                 return Empty;
-                              end if;
-
-                              if Enc_B = 16#01# then
-                                 if not Seven_Zip_Expect_Byte
-                                   (Archive_Image, Enc_Pos, Header_Last, 16#08#)
-                                 then
-                                    return Empty;
-                                 end if;
-                                 Method := Seven_Zip_Deflate_Method;
-                              elsif Enc_B = 16#02# then
-                                 if not Seven_Zip_Expect_Byte
-                                   (Archive_Image, Enc_Pos, Header_Last, 16#02#)
-                                 then
-                                    return Empty;
-                                 end if;
-                                 Method := Seven_Zip_BZip2_Method;
-                              else
-                                 return Empty;
-                              end if;
-                           elsif Enc_B = 16#23# then
-                              if not Seven_Zip_Expect_Byte
-                                (Archive_Image, Enc_Pos, Header_Last, 16#03#)
-                                or else not Seven_Zip_Read_Byte
-                                  (Archive_Image, Enc_Pos, Header_Last, Enc_B)
-                              then
-                                 return Empty;
-                              end if;
-
-                              if Enc_B = 16#01# then
-                                 if not Seven_Zip_Expect_Byte
-                                   (Archive_Image, Enc_Pos, Header_Last, 16#01#)
-                                   or else not Seven_Zip_Expect_Byte
-                                     (Archive_Image, Enc_Pos, Header_Last, 5)
-                                 then
-                                    return Empty;
-                                 end if;
-
-                                 for J in LZMA_Prop'Range loop
-                                    if not Seven_Zip_Read_Byte
-                                      (Archive_Image, Enc_Pos, Header_Last,
-                                       LZMA_Prop (J))
-                                    then
-                                       return Empty;
-                                    end if;
-                                 end loop;
-
-                                 if not Valid_LZMA_Props (LZMA_Prop (1)) then
-                                    return Empty;
-                                 end if;
-                                 Method := Seven_Zip_LZMA_Method;
-                              elsif Enc_B = 16#04# then
-                                 if not Seven_Zip_Expect_Byte
-                                   (Archive_Image, Enc_Pos, Header_Last, 16#01#)
-                                   or else not Seven_Zip_Expect_Byte
-                                     (Archive_Image, Enc_Pos, Header_Last, 5)
-                                   or else not Seven_Zip_Read_Byte
-                                     (Archive_Image, Enc_Pos, Header_Last, Enc_B)
-                                   or else not Seven_Zip_Has_Bytes
-                                     (Enc_Pos, Header_Last, 4)
-                                 then
-                                    return Empty;
-                                 end if;
-
-                                 PPMd_Memory :=
-                                   Seven_Zip_U32_At (Archive_Image, Enc_Pos);
-                                 if not Seven_Zip_Valid_PPMd_Props
-                                   (Natural (Enc_B), PPMd_Memory)
-                                 then
-                                    return Empty;
-                                 end if;
-                                 Enc_Pos := Enc_Pos + 4;
-                                 Method := Seven_Zip_PPMd_Method;
-                              else
-                                 return Empty;
-                              end if;
-                           elsif Enc_B = 16#21# then
-                              if not Seven_Zip_Read_Byte
-                                (Archive_Image, Enc_Pos, Header_Last, Enc_B)
-                              then
-                                 return Empty;
-                              end if;
-
-                              if Enc_B = 16#21# then
-                                 if not Seven_Zip_Expect_Byte
-                                   (Archive_Image, Enc_Pos, Header_Last, 1)
-                                   or else not Seven_Zip_Read_Byte
-                                     (Archive_Image, Enc_Pos, Header_Last, Enc_B)
-                                   or else Enc_B > 40
-                                 then
-                                    return Empty;
-                                 end if;
-                                 Method := Seven_Zip_LZMA2_Method;
-                              elsif Enc_B = 16#03# then
-                                 if not Seven_Zip_Expect_Byte
-                                   (Archive_Image, Enc_Pos, Header_Last, 1)
-                                   or else not Seven_Zip_Read_Byte
-                                     (Archive_Image, Enc_Pos, Header_Last, Enc_B)
-                                 then
-                                    return Empty;
-                                 end if;
-                                 Delta_Distance := Natural (Enc_B) + 1;
-                                 Method := Seven_Zip_Delta_Method;
-                              else
-                                 return Empty;
-                              end if;
-                           else
-                              return Empty;
-                           end if;
-
-                           if not Seven_Zip_Expect_Byte
-                             (Archive_Image, Enc_Pos, Header_Last, 16#0C#)
-                             or else not Read_Seven_Zip_Number
-                               (Archive_Image, Enc_Pos, Header_Last, Unpack_Size)
-                           then
-                              return Empty;
-                           end if;
-
-                           if Enc_Pos <= Header_Last
-                             and then Archive_Image (Enc_Pos) = 16#0A#
-                           then
-                              Enc_Pos := Enc_Pos + 1;
-                              if not Seven_Zip_Expect_Byte
-                                (Archive_Image, Enc_Pos, Header_Last, 1)
-                                or else not Seven_Zip_Has_Bytes
-                                  (Enc_Pos, Header_Last, 4)
-                              then
-                                 return Empty;
-                              end if;
-                              Unpack_CRC := Seven_Zip_U32_At
-                                (Archive_Image, Enc_Pos);
-                              Unpack_CRC_OK := True;
-                              Enc_Pos := Enc_Pos + 4;
-                           end if;
-
-                           if not Seven_Zip_Expect_Byte
-                             (Archive_Image, Enc_Pos, Header_Last, 0)
-                           then
-                              return Empty;
-                           end if;
-
-                           if not Seven_Zip_Expect_Byte
-                             (Archive_Image, Enc_Pos, Header_Last, 0)
-                           then
-                              return Empty;
-                           end if;
-
-                           if Enc_Pos /= Header_Last + 1
-                             or else Pack_Pos >
-                               Interfaces.Unsigned_64 (Natural'Last)
-                             or else Pack_Size >
-                               Interfaces.Unsigned_64 (Natural'Last)
-                             or else Unpack_Size >
-                               Interfaces.Unsigned_64 (Natural'Last)
-                             or else Pack_Pos >
-                               Interfaces.Unsigned_64 (Payload_Count)
-                             or else Pack_Size >
-                               Interfaces.Unsigned_64 (Payload_Count) - Pack_Pos
-                           then
-                              return Empty;
-                           end if;
-
-                           Encoded_Header_Pack_Pos := Natural (Pack_Pos);
-
-                           declare
-                              Enc_First : constant Natural :=
-                                Payload_First + Natural (Pack_Pos);
-                              Enc_Size  : constant Natural := Natural (Pack_Size);
-                              Enc_Last  : constant Natural :=
-                                (if Enc_Size = 0
-                                 then Enc_First - 1
-                                 else Enc_First + Enc_Size - 1);
-                              Encoded   : constant Byte_Array :=
-                                (if Enc_Size = 0
-                                 then Empty
-                                 else Archive_Image (Enc_First .. Enc_Last));
-                              Local_Status : Status_Code := Ok;
-
-                              function Decode_Payload return Byte_Array is
-                              begin
-                                 case Method is
-                                    when Seven_Zip_Copy =>
-                                       return Encoded;
-
-                                    when Seven_Zip_Deflate_Method =>
-                                       return Inflate_Raw_Exact
-                                         (Encoded, Local_Status);
-
-                                    when Seven_Zip_BZip2_Method =>
-                                       return BZip2_Decompress
-                                         (Encoded, Natural (Unpack_Size),
-                                          Local_Status);
-
-                                    when Seven_Zip_LZMA_Method =>
-                                       return LZMA_Decode_Raw_Encoded_Header
-                                         (Encoded, LZMA_Prop,
-                                          Natural (Unpack_Size),
-                                          Local_Status);
-
-                                    when Seven_Zip_LZMA2_Method =>
-                                       return LZMA2_Decode
-                                         (Encoded, Natural (Unpack_Size),
-                                          Local_Status);
-
-                                    when Seven_Zip_Delta_Method =>
-                                       return Seven_Zip_Delta_Decode
-                                         (Encoded, Delta_Distance,
-                                          Local_Status);
-
-                                    when Seven_Zip_BCJ_X86_Method =>
-                                       return Seven_Zip_BCJ_X86_Decode
-                                         (Encoded, Local_Status);
-
-                                    when Seven_Zip_BCJ_ARM_Method
-                                       | Seven_Zip_BCJ_ARMT_Method
-                                       | Seven_Zip_BCJ_PPC_Method
-                                       | Seven_Zip_BCJ_SPARC_Method
-                                       | Seven_Zip_BCJ_ARM64_Method
-                                       | Seven_Zip_BCJ_IA64_Method =>
-                                       return
-                                         Zlib.Seven_Zip_Filters.Branch_Convert
-                                           (Branch_Arch_Of (Method), Encoded,
-                                            Encoding => False);
-
-                                    when Seven_Zip_BCJ2_Method =>
-                                       Local_Status := Unsupported_Method;
-                                       return Empty;
-
-                                    when Seven_Zip_PPMd_Method =>
-                                       declare
-                                          Out_B : constant Byte_Array :=
-                                            Zlib.PPMd7.Decompress
-                                              (Encoded,
-                                               Natural (Unpack_Size),
-                                               Natural (Enc_B), PPMd_Memory,
-                                               Local_Status);
-                                       begin
-                                          if Local_Status = Ok
-                                            and then Unpack_CRC_OK
-                                            and then CRC32 (Out_B) /= Unpack_CRC
-                                          then
-                                             Local_Status := Invalid_Checksum;
-                                             return Empty;
-                                          end if;
-                                          return Out_B;
-                                       end;
-
-                                    when Seven_Zip_AES_Method =>
-                                       Local_Status := Unsupported_Method;
-                                       return Empty;
-                                 end case;
-                              end Decode_Payload;
-
-                              Decoded : constant Byte_Array := Decode_Payload;
-                           begin
-                              if Pack_CRC_OK and then CRC32 (Encoded) /= Pack_CRC
-                              then
-                                 Decode_Status := Invalid_Checksum;
-                                 return Empty;
-                              end if;
-
-                              if Local_Status /= Ok then
-                                 Decode_Status := Local_Status;
-                                 return Empty;
-                              end if;
-
-                              if Decoded'Length /= Natural (Unpack_Size)
-                                or else
-                                  (Unpack_CRC_OK
-                                   and then CRC32 (Decoded) /= Unpack_CRC)
-                              then
-                                 Decode_Status := Invalid_Checksum;
-                                 return Empty;
-                              end if;
-
-                              Decode_Status := Ok;
-                              return Decoded;
-                           end;
-                        end Decode_Encoded_Header;
-
-                        AES_Status     : Status_Code := Ok;
-                        AES_Header     : constant Byte_Array :=
-                          Decode_AES_Encoded_Header (AES_Status);
-                        Encoded_Status : Status_Code := Ok;
-                        Decoded_Header : constant Byte_Array :=
-                          (if AES_Status = Ok then AES_Header
-                           else Decode_Encoded_Header (Encoded_Status));
+                        Header_Status           : Status_Code := Ok;
+                        Decoded_Header          : constant Byte_Array :=
+                          Zlib.Seven_Zip_Header_Reading.Decode_Encoded_Header
+                            (Archive_Image, Password, Info,
+                             Decode_Header_Payload'Access,
+                             Encoded_Header_Pack_Pos, Header_Status);
                      begin
-                        if AES_Status /= Ok and then Encoded_Status /= Ok then
-                           Status := Encoded_Status;
+                        if Header_Status /= Ok then
+                           Status := Header_Status;
                            return Empty;
                         end if;
 
@@ -11994,50 +6393,19 @@ package body Zlib is
                              (if Decoded_Header (Decoded_Header'First) = 16#01#
                               then Decoded_Header
                               else [16#01#] & Decoded_Header);
-                           Synthetic    : Byte_Vectors.Vector;
-                           Start_Header : Byte_Vectors.Vector;
-
-                           procedure Append_Array (Data : Byte_Array) is
-                           begin
-                              for Byte_Value of Data loop
-                                 Synthetic.Append (Byte_Value);
-                              end loop;
-                           end Append_Array;
+                           Synthetic_Payload : constant Byte_Array :=
+                             (if Encoded_Header_Pack_Pos = 0
+                              then Empty
+                              else Archive_Image
+                                (Payload_First ..
+                                 Payload_First + Encoded_Header_Pack_Pos - 1));
+                           Synthetic_Image : constant Byte_Array :=
+                             Zlib.Seven_Zip_Container.Build_Archive
+                               (Normalized_Header, Synthetic_Payload);
                         begin
-                           Append_U64_LE
-                             (Start_Header,
-                              Interfaces.Unsigned_64
-                                (Encoded_Header_Pack_Pos));
-                           Append_U64_LE
-                             (Start_Header,
-                              Interfaces.Unsigned_64
-                                (Normalized_Header'Length));
-                           Append_U32_LE
-                             (Start_Header, CRC32 (Normalized_Header));
-
-                           Append_Array (Archive_Image (F .. F + 7));
-                           Append_U32_LE
-                             (Synthetic,
-                              Seven_Zip_Header_CRC
-                                (To_Byte_Array (Start_Header)));
-                           Synthetic.Append_Vector (Start_Header);
-                           if Encoded_Header_Pack_Pos > 0 then
-                              Append_Array
-                                (Archive_Image
-                                   (Payload_First ..
-                                    Payload_First
-                                    + Encoded_Header_Pack_Pos - 1));
-                           end if;
-                           Append_Array (Normalized_Header);
-
-                           declare
-                              Synthetic_Image : constant Byte_Array :=
-                                To_Byte_Array (Synthetic);
-                           begin
-                              return Extract_Seven_Zip_Entry
-                                (Synthetic_Image, Entry_Name, Status, Kind,
-                                 Metadata);
-                           end;
+                           return Extract_Seven_Zip_Entry
+                             (Synthetic_Image, Entry_Name, Password, Status, Kind,
+                              Metadata);
                         end;
                      end;
                   end if;
@@ -12071,171 +6439,30 @@ package body Zlib is
                      end if;
 
                      declare
-                        File_Count        : constant Natural := Natural (Value);
-                        File_Has_Stream   : array (1 .. File_Count) of Boolean :=
-                          [others => True];
-                        File_Is_Directory : array (1 .. File_Count) of Boolean :=
-                          [others => False];
-                        File_Has_MTime    : array (1 .. File_Count) of Boolean :=
-                          [others => False];
-                        File_MTime        : Seven_Zip_U64_Array (1 .. File_Count) :=
-                          [others => 0];
-                        File_Has_Attributes : array (1 .. File_Count) of Boolean :=
-                          [others => False];
-                        File_Attributes   : Seven_Zip_U32_Array (1 .. File_Count) :=
-                          [others => 0];
-                        Empty_Count       : Natural := 0;
-                        Target_File_Index : Natural := 0;
-                        Name_Found        : Boolean := False;
+                        File_Count : constant Natural := Natural (Value);
+                        Target_File : Zlib.Seven_Zip_Properties.Files_Info_Target;
+                        Stream_Count : Natural := 0;
                      begin
-                        loop
-                           if not Seven_Zip_Read_Byte
-                             (Archive_Image, Pos, Header_Last, B)
-                           then
-                              return Empty;
-                           end if;
-
-                           exit when B = 0;
-
-                           if not Read_Seven_Zip_Number
-                             (Archive_Image, Pos, Header_Last, Value)
-                             or else Value >
-                               Interfaces.Unsigned_64 (Natural'Last)
-                             or else Value >
-                               Interfaces.Unsigned_64 (Header_Last - Pos + 1)
-                           then
-                              return Empty;
-                           end if;
-
-                           declare
-                              Prop_Size  : constant Natural := Natural (Value);
-                              Prop_First : constant Natural := Pos;
-                              Prop_Last  : constant Natural :=
-                                (if Prop_Size = 0
-                                 then Prop_First - 1
-                                 else Prop_First + Prop_Size - 1);
-                           begin
-                              case B is
-                                 when 16#11# =>
-                                    if Prop_Size = 0
-                                      or else Prop_Size mod 2 = 0
-                                      or else Prop_Size < 1 + 2 * File_Count
-                                      or else not Seven_Zip_Name_Index
-                                        (Archive_Image, Prop_First, Prop_Size,
-                                         File_Count, Entry_Name,
-                                         Target_File_Index)
-                                    then
-                                       return Empty;
-                                    end if;
-                                    Name_Found := True;
-
-                                 when 16#0E# =>
-                                    if Prop_Size < (File_Count + 7) / 8 then
-                                       return Empty;
-                                    end if;
-
-                                    Empty_Count := 0;
-                                    for I in 1 .. File_Count loop
-                                       if Seven_Zip_Bit_Is_Set
-                                         (Archive_Image, Prop_First, I)
-                                       then
-                                          File_Has_Stream (I) := False;
-                                          File_Is_Directory (I) := True;
-                                          Empty_Count := Empty_Count + 1;
-                                       else
-                                          File_Has_Stream (I) := True;
-                                          File_Is_Directory (I) := False;
-                                       end if;
-                                    end loop;
-
-                                 when 16#0F# =>
-                                    if Empty_Count = 0
-                                      or else Prop_Size < (Empty_Count + 7) / 8
-                                    then
-                                       return Empty;
-                                    end if;
-
-                                    declare
-                                       Empty_Index : Natural := 0;
-                                    begin
-                                       for I in 1 .. File_Count loop
-                                          if not File_Has_Stream (I) then
-                                             Empty_Index := Empty_Index + 1;
-                                             File_Is_Directory (I) :=
-                                               not Seven_Zip_Bit_Is_Set
-                                                 (Archive_Image, Prop_First,
-                                                  Empty_Index);
-                                          end if;
-                                       end loop;
-                                    end;
-
-                                 when 16#10# =>
-                                    for I in 1 .. File_Count loop
-                                       if Seven_Zip_Bit_Is_Set
-                                         (Archive_Image, Prop_First, I)
-                                       then
-                                          return Empty;
-                                       end if;
-                                    end loop;
-
-                                 when 16#14# =>
-                                    for I in 1 .. File_Count loop
-                                       if not Seven_Zip_Read_File_Time_Property
-                                         (Archive_Image, Prop_First, Prop_Size,
-                                          File_Count, I, File_Has_MTime (I),
-                                          File_MTime (I))
-                                       then
-                                          return Empty;
-                                       end if;
-                                    end loop;
-
-                                 when 16#15# =>
-                                    for I in 1 .. File_Count loop
-                                       if not Seven_Zip_Read_U32_Property
-                                         (Archive_Image, Prop_First, Prop_Size,
-                                          File_Count, I,
-                                          File_Has_Attributes (I),
-                                          File_Attributes (I))
-                                       then
-                                          return Empty;
-                                       end if;
-                                    end loop;
-
-                                 when others =>
-                                    null;
-                              end case;
-
-                              Pos := Prop_Last + 1;
-                           end;
-                        end loop;
-
-                        if not Name_Found
-                          or else Target_File_Index = 0
+                        if not Zlib.Seven_Zip_Properties.Read_Target_Entry
+                          (Archive_Image, Pos, Header_Last, File_Count,
+                           Entry_Name, Target_File, Stream_Count)
+                          or else Stream_Count > File_Count
                           or else not Seven_Zip_Read_Byte
                             (Archive_Image, Pos, Header_Last, B)
                           or else B /= 0
                           or else Pos /= Header_Last + 1
-                          or else File_Has_Stream (Target_File_Index)
+                          or else Target_File.Has_Stream
                         then
                            return Empty;
                         end if;
 
-                        if File_Is_Directory (Target_File_Index) then
+                        if Target_File.Is_Directory then
                            Kind := Seven_Zip_Directory_Entry;
                         else
                            Kind := Seven_Zip_File_Entry;
                         end if;
 
-                        Metadata.Is_Directory :=
-                          File_Is_Directory (Target_File_Index);
-                        Metadata.Has_Modification_Time :=
-                          File_Has_MTime (Target_File_Index);
-                        Metadata.Modification_Time :=
-                          File_MTime (Target_File_Index);
-                        Metadata.Has_Windows_Attributes :=
-                          File_Has_Attributes (Target_File_Index);
-                        Metadata.Windows_Attributes :=
-                          File_Attributes (Target_File_Index);
+                        Metadata := Target_File.Metadata;
 
                         Status := Ok;
                         return Empty;
@@ -12255,7 +6482,8 @@ package body Zlib is
                   end if;
 
                   declare
-                     Max_Folder_Coders : constant := 8;
+                     Max_Folder_Coders : constant :=
+                       Zlib.Seven_Zip_Folder_Decoding.Max_Folder_Coders;
                      type Seven_Zip_Folder_Method_Table is
                        array (Positive range <>, Positive range <>)
                          of Seven_Zip_Coder_Method;
@@ -12298,12 +6526,9 @@ package body Zlib is
                        (1 .. Stream_Count, 1 .. Max_Folder_Coders) :=
                          [others =>
                             [others =>
-                               [1 => LZMA_Default_Props,
-                                2 => Byte (LZMA_Default_Dict mod 256),
-                                3 => Byte ((LZMA_Default_Dict / 256) mod 256),
-                                4 => Byte ((LZMA_Default_Dict / 65_536) mod 256),
-                                5 => Byte
-                                  ((LZMA_Default_Dict / 16#0100_0000#) mod 256)]]];
+                               Seven_Zip_LZMA_Props
+                                 (Zlib.LZMA_Properties.Default_Dict_Properties
+                                    (LZMA_Default_Props))]];
                      Folder_Delta_Distances : Seven_Zip_Folder_Natural_Table
                        (1 .. Stream_Count, 1 .. Max_Folder_Coders) :=
                          [others => [others => 1]];
@@ -12346,12 +6571,9 @@ package body Zlib is
                        [others => 0];
                      LZMA_Props   : Seven_Zip_LZMA_Props_Array (1 .. Stream_Count) :=
                        [others =>
-                          [1 => LZMA_Default_Props,
-                           2 => Byte (LZMA_Default_Dict mod 256),
-                           3 => Byte ((LZMA_Default_Dict / 256) mod 256),
-                           4 => Byte ((LZMA_Default_Dict / 65_536) mod 256),
-                           5 => Byte
-                             ((LZMA_Default_Dict / 16#0100_0000#) mod 256)]];
+                          Seven_Zip_LZMA_Props
+                            (Zlib.LZMA_Properties.Default_Dict_Properties
+                               (LZMA_Default_Props))];
                      Unpack_Sizes : Seven_Zip_U64_Array (1 .. Stream_Count);
                      Unpack_CRCs  : Seven_Zip_U32_Array (1 .. Stream_Count);
                      Unpack_CRC_Defined : array (1 .. Stream_Count) of Boolean :=
@@ -12458,6 +6680,8 @@ package body Zlib is
                                     In_Streams  : Interfaces.Unsigned_64 := 1;
                                     Out_Streams : Interfaces.Unsigned_64 := 1;
                                     Prop_Size   : Interfaces.Unsigned_64 := 0;
+                                    Parsed_Method : Seven_Zip_Coder_Method :=
+                                      Seven_Zip_Copy;
                                     ID          : Byte_Array (1 .. 15) :=
                                       [others => 0];
                                  begin
@@ -12497,285 +6721,198 @@ package body Zlib is
                                        end if;
                                     end if;
 
-                                    if ID_Size = 1 and then ID (1) = 0 then
-                                       if Has_Streams
-                                         or else Has_Props
-                                       then
-                                          return Empty;
-                                       end if;
-                                       Folder_Methods (I, Coder_Index) :=
-                                         Seven_Zip_Copy;
-                                    elsif ID_Size = 3
-                                      and then ID (1) = 16#04#
-                                      and then ID (2) = 16#01#
-                                      and then ID (3) = 16#08#
+                                    if not Method_For_ID
+                                      (ID, ID_Size, Parsed_Method)
                                     then
-                                       if Has_Streams
-                                         or else Has_Props
-                                       then
-                                          return Empty;
-                                       end if;
-                                       Folder_Methods (I, Coder_Index) :=
-                                         Seven_Zip_Deflate_Method;
-                                    elsif ID_Size = 3
-                                      and then ID (1) = 16#04#
-                                      and then ID (2) = 16#02#
-                                      and then ID (3) = 16#02#
-                                    then
-                                       if Has_Streams
-                                         or else Has_Props
-                                       then
-                                          return Empty;
-                                       end if;
-                                       Folder_Methods (I, Coder_Index) :=
-                                         Seven_Zip_BZip2_Method;
-                                    elsif ID_Size = 3
-                                      and then ID (1) = 16#03#
-                                      and then ID (2) = 16#01#
-                                      and then ID (3) = 16#01#
-                                    then
-                                       if Has_Streams
-                                         or else not Has_Props
-                                         or else not Read_Seven_Zip_Number
-                                           (Archive_Image, Pos, Header_Last,
-                                            Prop_Size)
-                                         or else Prop_Size /= 5
-                                       then
-                                          return Empty;
-                                       end if;
-
-                                       for J in 1 .. 5 loop
-                                          if not Seven_Zip_Read_Byte
-                                            (Archive_Image, Pos, Header_Last,
-                                             Folder_LZMA_Props
-                                               (I, Coder_Index) (J))
-                                          then
-                                             return Empty;
-                                          end if;
-                                       end loop;
-                                       if not Valid_LZMA_Props
-                                         (Folder_LZMA_Props (I, Coder_Index) (1))
-                                       then
-                                          return Empty;
-                                       end if;
-                                       Folder_Methods (I, Coder_Index) :=
-                                         Seven_Zip_LZMA_Method;
-                                    elsif ID_Size = 3
-                                      and then ID (1) = 16#03#
-                                      and then ID (2) = 16#04#
-                                      and then ID (3) = 16#01#
-                                    then
-                                       if Has_Streams
-                                         or else not Has_Props
-                                         or else not Read_Seven_Zip_Number
-                                           (Archive_Image, Pos, Header_Last,
-                                            Prop_Size)
-                                         or else Prop_Size /= 5
-                                         or else not Seven_Zip_Read_Byte
-                                           (Archive_Image, Pos, Header_Last, B)
-                                         or else not Seven_Zip_Has_Bytes
-                                           (Pos, Header_Last, 4)
-                                       then
-                                          return Empty;
-                                       end if;
-
-                                       Folder_PPMd_Orders (I, Coder_Index) :=
-                                         Natural (B);
-                                       Folder_PPMd_Memories (I, Coder_Index) :=
-                                         Seven_Zip_U32_At (Archive_Image, Pos);
-                                       if not Seven_Zip_Valid_PPMd_Props
-                                         (Folder_PPMd_Orders (I, Coder_Index),
-                                          Folder_PPMd_Memories (I, Coder_Index))
-                                       then
-                                          return Empty;
-                                       end if;
-                                       Pos := Pos + 4;
-                                       Folder_Methods (I, Coder_Index) :=
-                                         Seven_Zip_PPMd_Method;
-                                    elsif ID_Size = 1 and then ID (1) = 16#21# then
-                                       if Has_Streams
-                                         or else not Has_Props
-                                         or else not Read_Seven_Zip_Number
-                                           (Archive_Image, Pos, Header_Last,
-                                            Prop_Size)
-                                         or else Prop_Size /= 1
-                                         or else not Seven_Zip_Read_Byte
-                                           (Archive_Image, Pos, Header_Last, B)
-                                         or else B > 40
-                                       then
-                                          return Empty;
-                                       end if;
-                                       Folder_Methods (I, Coder_Index) :=
-                                         Seven_Zip_LZMA2_Method;
-                                    elsif ID_Size = 1 and then ID (1) = 16#03# then
-                                       if Has_Streams
-                                         or else not Has_Props
-                                         or else not Read_Seven_Zip_Number
-                                           (Archive_Image, Pos, Header_Last,
-                                            Prop_Size)
-                                         or else Prop_Size /= 1
-                                         or else not Seven_Zip_Read_Byte
-                                           (Archive_Image, Pos, Header_Last, B)
-                                       then
-                                          return Empty;
-                                       end if;
-                                       Folder_Delta_Distances
-                                         (I, Coder_Index) := Natural (B) + 1;
-                                       Folder_Methods (I, Coder_Index) :=
-                                         Seven_Zip_Delta_Method;
-                                    elsif ID_Size = 4
-                                      and then ID (1) = 16#06#
-                                      and then ID (2) = 16#F1#
-                                      and then ID (3) = 16#07#
-                                      and then ID (4) = 16#01#
-                                    then
-                                       --  7zAES (AES-256 + SHA-256).
-                                       if Has_Streams
-                                         or else not Has_Props
-                                         or else not Read_Seven_Zip_Number
-                                           (Archive_Image, Pos, Header_Last,
-                                            Prop_Size)
-                                         or else Prop_Size < 1
-                                         or else not Seven_Zip_Has_Bytes
-                                           (Pos, Header_Last, Natural (Prop_Size))
-                                       then
-                                          return Empty;
-                                       end if;
-                                       declare
-                                          PB : Byte_Array (1 .. Natural (Prop_Size));
-                                          B0, B1 : Natural := 0;
-                                          Salt_Sz, IV_Sz, PP : Natural := 0;
-                                       begin
-                                          for J in PB'Range loop
-                                             PB (J) := Archive_Image (Pos);
-                                             Pos := Pos + 1;
-                                          end loop;
-                                          B0 := Natural (PB (1));
-                                          Folder_AES_Cycles (I, Coder_Index) :=
-                                            B0 mod 64;
-                                          if (B0 / 64) /= 0
-                                            and then Natural (Prop_Size) >= 2
-                                          then
-                                             B1 := Natural (PB (2));
-                                             PP := 3;
-                                          else
-                                             PP := 2;
-                                          end if;
-                                          Salt_Sz := ((B0 / 128) mod 2) + (B1 / 16);
-                                          IV_Sz := ((B0 / 64) mod 2) + (B1 mod 16);
-                                          if Salt_Sz > 16 or else IV_Sz > 16
-                                            or else Natural (Prop_Size) <
-                                              (PP - 1) + Salt_Sz + IV_Sz
-                                          then
-                                             return Empty;
-                                          end if;
-                                          Folder_AES_Salt_Len (I, Coder_Index) :=
-                                            Salt_Sz;
-                                          Folder_AES_IV_Len (I, Coder_Index) := IV_Sz;
-                                          for J in 1 .. Salt_Sz loop
-                                             Folder_AES_Salt (I, Coder_Index) (J) :=
-                                               PB (PP + J - 1);
-                                          end loop;
-                                          for J in 1 .. IV_Sz loop
-                                             Folder_AES_IV (I, Coder_Index) (J) :=
-                                               PB (PP + Salt_Sz + J - 1);
-                                          end loop;
-                                       end;
-                                       Folder_Methods (I, Coder_Index) :=
-                                         Seven_Zip_AES_Method;
-                                    elsif ID_Size = 4
-                                      and then ID (1) = 16#03#
-                                      and then ID (2) = 16#03#
-                                      and then ID (3) = 16#01#
-                                      and then ID (4) = 16#03#
-                                    then
-                                       if Has_Streams
-                                         or else Has_Props
-                                       then
-                                          return Empty;
-                                       end if;
-                                       Folder_Methods (I, Coder_Index) :=
-                                         Seven_Zip_BCJ_X86_Method;
-                                    elsif ID_Size = 4
-                                      and then ID (1) = 16#03#
-                                      and then ID (2) = 16#03#
-                                      and then
-                                        ((ID (3) = 16#05#
-                                            and then ID (4) = 16#01#)
-                                         or else (ID (3) = 16#07#
-                                            and then ID (4) = 16#01#)
-                                         or else (ID (3) = 16#02#
-                                            and then ID (4) = 16#05#)
-                                         or else (ID (3) = 16#08#
-                                            and then ID (4) = 16#05#)
-                                         or else (ID (3) = 16#04#
-                                            and then ID (4) = 16#01#))
-                                    then
-                                       --  Classic 4-byte BCJ branch filters:
-                                       --  ARM 03030501, ARMT 03030701,
-                                       --  PPC 03030205, SPARC 03030805,
-                                       --  IA64 03030401. No streams, no props.
-                                       if Has_Streams or else Has_Props then
-                                          return Empty;
-                                       end if;
-                                       Folder_Methods (I, Coder_Index) :=
-                                         (if ID (3) = 16#05#
-                                          then Seven_Zip_BCJ_ARM_Method
-                                          elsif ID (3) = 16#07#
-                                          then Seven_Zip_BCJ_ARMT_Method
-                                          elsif ID (3) = 16#02#
-                                          then Seven_Zip_BCJ_PPC_Method
-                                          elsif ID (3) = 16#08#
-                                          then Seven_Zip_BCJ_SPARC_Method
-                                          else Seven_Zip_BCJ_IA64_Method);
-                                    elsif ID_Size = 1
-                                      and then ID (1) in
-                                        16#05# | 16#06# | 16#07#
-                                        | 16#08# | 16#09# | 16#0A#
-                                    then
-                                       --  Compact 1-byte BCJ ids: 05 PPC,
-                                       --  06 IA64, 07 ARM, 08 ARMT, 09 SPARC,
-                                       --  0A ARM64.
-                                       if Has_Streams or else Has_Props then
-                                          return Empty;
-                                       end if;
-                                       Folder_Methods (I, Coder_Index) :=
-                                         (case ID (1) is
-                                             when 16#05# =>
-                                               Seven_Zip_BCJ_PPC_Method,
-                                             when 16#06# =>
-                                               Seven_Zip_BCJ_IA64_Method,
-                                             when 16#07# =>
-                                               Seven_Zip_BCJ_ARM_Method,
-                                             when 16#08# =>
-                                               Seven_Zip_BCJ_ARMT_Method,
-                                             when 16#09# =>
-                                               Seven_Zip_BCJ_SPARC_Method,
-                                             when others =>
-                                               Seven_Zip_BCJ_ARM64_Method);
-                                    elsif ID_Size = 4
-                                      and then ID (1) = 16#03#
-                                      and then ID (2) = 16#03#
-                                      and then ID (3) = 16#01#
-                                      and then ID (4) = 16#1B#
-                                    then
-                                       if not Has_Streams
-                                         or else Has_Props
-                                         or else In_Streams /= 4
-                                         or else Out_Streams /= 1
-                                         or else (Coder_Count /= 1
-                                                  and then
-                                                    (Coder_Index /=
-                                                       Coder_Count
-                                                     or else Coder_Count /= 5))
-                                       then
-                                          return Empty;
-                                       end if;
-                                       Folder_Methods (I, Coder_Index) :=
-                                         Seven_Zip_BCJ2_Method;
-                                    else
                                        return Empty;
                                     end if;
+
+                                    if Is_Propertyless_Coder (Parsed_Method) then
+                                       if Has_Streams or else Has_Props then
+                                          return Empty;
+                                       end if;
+                                    else
+                                       case Parsed_Method is
+                                          when Seven_Zip_LZMA_Method =>
+                                          if Has_Streams
+                                            or else not Has_Props
+                                            or else not Read_Seven_Zip_Number
+                                              (Archive_Image, Pos, Header_Last,
+                                               Prop_Size)
+                                            or else Prop_Size /= 5
+                                          then
+                                             return Empty;
+                                          end if;
+
+                                          for J in 1 .. 5 loop
+                                             if not Seven_Zip_Read_Byte
+                                               (Archive_Image, Pos, Header_Last,
+                                                Folder_LZMA_Props
+                                                  (I, Coder_Index) (J))
+                                             then
+                                                return Empty;
+                                             end if;
+                                          end loop;
+
+                                          if not Valid_LZMA_Props
+                                            (Folder_LZMA_Props
+                                               (I, Coder_Index) (1))
+                                          then
+                                             return Empty;
+                                          end if;
+
+                                          when Seven_Zip_PPMd_Method =>
+                                          if Has_Streams
+                                            or else not Has_Props
+                                            or else not Read_Seven_Zip_Number
+                                              (Archive_Image, Pos, Header_Last,
+                                               Prop_Size)
+                                            or else Prop_Size /= 5
+                                            or else not Seven_Zip_Read_Byte
+                                              (Archive_Image, Pos, Header_Last,
+                                               B)
+                                            or else not Seven_Zip_Has_Bytes
+                                              (Pos, Header_Last, 4)
+                                          then
+                                             return Empty;
+                                          end if;
+
+                                          Folder_PPMd_Orders (I, Coder_Index) :=
+                                            Natural (B);
+                                          Folder_PPMd_Memories
+                                            (I, Coder_Index) :=
+                                            Seven_Zip_U32_At
+                                              (Archive_Image, Pos);
+                                          if not Seven_Zip_Valid_PPMd_Props
+                                            (Folder_PPMd_Orders
+                                               (I, Coder_Index),
+                                             Folder_PPMd_Memories
+                                               (I, Coder_Index))
+                                          then
+                                             return Empty;
+                                          end if;
+                                          Pos := Pos + 4;
+
+                                          when Seven_Zip_LZMA2_Method =>
+                                          if Has_Streams
+                                            or else not Has_Props
+                                            or else not Read_Seven_Zip_Number
+                                              (Archive_Image, Pos, Header_Last,
+                                               Prop_Size)
+                                            or else Prop_Size /= 1
+                                            or else not Seven_Zip_Read_Byte
+                                              (Archive_Image, Pos, Header_Last,
+                                               B)
+                                            or else B > 40
+                                          then
+                                             return Empty;
+                                          end if;
+
+                                          when Seven_Zip_Delta_Method =>
+                                          if Has_Streams
+                                            or else not Has_Props
+                                            or else not Read_Seven_Zip_Number
+                                              (Archive_Image, Pos, Header_Last,
+                                               Prop_Size)
+                                            or else Prop_Size /= 1
+                                            or else not Seven_Zip_Read_Byte
+                                              (Archive_Image, Pos, Header_Last,
+                                               B)
+                                          then
+                                             return Empty;
+                                          end if;
+                                          Folder_Delta_Distances
+                                            (I, Coder_Index) := Natural (B) + 1;
+
+                                          when Seven_Zip_AES_Method =>
+                                          --  7zAES (AES-256 + SHA-256).
+                                          if Has_Streams
+                                            or else not Has_Props
+                                            or else not Read_Seven_Zip_Number
+                                              (Archive_Image, Pos, Header_Last,
+                                               Prop_Size)
+                                            or else Prop_Size < 1
+                                            or else not Seven_Zip_Has_Bytes
+                                              (Pos, Header_Last,
+                                               Natural (Prop_Size))
+                                          then
+                                             return Empty;
+                                          end if;
+
+                                          declare
+                                             PB : Byte_Array
+                                               (1 .. Natural (Prop_Size));
+                                             B0, B1 : Natural := 0;
+                                             Salt_Sz : Natural := 0;
+                                             IV_Sz   : Natural := 0;
+                                             PP      : Natural := 0;
+                                          begin
+                                             for J in PB'Range loop
+                                                PB (J) := Archive_Image (Pos);
+                                                Pos := Pos + 1;
+                                             end loop;
+
+                                             B0 := Natural (PB (1));
+                                             Folder_AES_Cycles
+                                               (I, Coder_Index) := B0 mod 64;
+                                             if (B0 / 64) /= 0
+                                               and then Natural (Prop_Size) >= 2
+                                             then
+                                                B1 := Natural (PB (2));
+                                                PP := 3;
+                                             else
+                                                PP := 2;
+                                             end if;
+
+                                             Salt_Sz :=
+                                               ((B0 / 128) mod 2) + (B1 / 16);
+                                             IV_Sz :=
+                                               ((B0 / 64) mod 2) + (B1 mod 16);
+                                             if Salt_Sz > 16
+                                               or else IV_Sz > 16
+                                               or else Natural (Prop_Size) <
+                                                 (PP - 1) + Salt_Sz + IV_Sz
+                                             then
+                                                return Empty;
+                                             end if;
+
+                                             Folder_AES_Salt_Len
+                                               (I, Coder_Index) := Salt_Sz;
+                                             Folder_AES_IV_Len
+                                               (I, Coder_Index) := IV_Sz;
+                                             for J in 1 .. Salt_Sz loop
+                                                Folder_AES_Salt
+                                                  (I, Coder_Index) (J) :=
+                                                  PB (PP + J - 1);
+                                             end loop;
+                                             for J in 1 .. IV_Sz loop
+                                                Folder_AES_IV
+                                                  (I, Coder_Index) (J) :=
+                                                  PB (PP + Salt_Sz + J - 1);
+                                             end loop;
+                                          end;
+
+                                       when Seven_Zip_BCJ2_Method =>
+                                          if not Has_Streams
+                                            or else Has_Props
+                                            or else In_Streams /= 4
+                                            or else Out_Streams /= 1
+                                            or else (Coder_Count /= 1
+                                                     and then
+                                                       (Coder_Index /=
+                                                          Coder_Count
+                                                        or else Coder_Count /= 5))
+                                          then
+                                             return Empty;
+                                          end if;
+
+                                          when others =>
+                                             return Empty;
+                                       end case;
+                                    end if;
+
+                                    Folder_Methods (I, Coder_Index) :=
+                                      Parsed_Method;
 
                                     if Folder_Methods (I, Coder_Index) /=
                                       Seven_Zip_BCJ2_Method
@@ -12787,304 +6924,42 @@ package body Zlib is
                                  end;
                               end loop;
 
-                              if Folder_Methods (I, 1) =
-                                Seven_Zip_BCJ2_Method
-                              then
-                                 Folder_Pack_Count (I) := 4;
-                                 Folder_Terminal_Coder (I) := 1;
-                              elsif Coder_Count > 1 then
-                                 declare
-                                    Forward_Binds : Boolean := True;
-                                    Reverse_Binds : Boolean := True;
-                                    Standard_Linear_Binds : Boolean := True;
-                                    Generic_Binds : Boolean := True;
-                                    Legacy_Generic_Binds : Boolean := True;
-                                    Next_Coder : array (1 .. Max_Folder_Coders) of Natural :=
-                                      [others => 0];
-                                    Legacy_Next_Coder : array (1 .. Max_Folder_Coders) of Natural :=
-                                      [others => 0];
-                                    Input_Bound : array (1 .. Max_Folder_Coders) of Boolean :=
-                                      [others => False];
-                                    Output_Bound : array (1 .. Max_Folder_Coders) of Boolean :=
-                                      [others => False];
-                                    Legacy_Input_Bound : array (1 .. Max_Folder_Coders) of Boolean :=
-                                      [others => False];
-                                    Legacy_Output_Bound : array (1 .. Max_Folder_Coders) of Boolean :=
-                                      [others => False];
-                                 begin
-                                    for Bind_Index in 1 .. Coder_Count - 1 loop
-                                       declare
-                                          Bind_Out : Interfaces.Unsigned_64 := 0;
-                                          Bind_In  : Interfaces.Unsigned_64 := 0;
-                                          Out_Coder : Natural := 0;
-                                          In_Coder  : Natural := 0;
-                                       begin
-                                          if not Read_Seven_Zip_Number
-                                            (Archive_Image, Pos, Header_Last,
-                                             Bind_Out)
-                                            or else not Read_Seven_Zip_Number
-                                              (Archive_Image, Pos, Header_Last,
-                                               Bind_In)
-                                          then
-                                             return Empty;
-                                          end if;
+                              declare
+                                 Graph_Methods :
+                                   Zlib.Seven_Zip_Folder_Decoding
+                                     .Folder_Method_Array (1 .. Coder_Count);
+                                 Graph_Info :
+                                   Zlib.Seven_Zip_Folder_Decoding
+                                     .Folder_Graph_Info;
+                              begin
+                                 for Coder_Index in 1 .. Coder_Count loop
+                                    Graph_Methods (Coder_Index) :=
+                                      Folder_Methods (I, Coder_Index);
+                                 end loop;
 
-                                          if Generic_Binds
-                                            and then Bind_Out <
-                                              Interfaces.Unsigned_64
-                                                (Coder_Count)
-                                            and then Bind_In <
-                                              Interfaces.Unsigned_64
-                                                (Coder_Count)
-                                          then
-                                             --  7z BindPair is (InIndex, OutIndex);
-                                             --  this reader stores them as
-                                             --  Bind_Out := InIndex, Bind_In := OutIndex.
-                                             --  The coder whose OUTPUT is bound is
-                                             --  OutIndex's coder (Bind_In); the coder
-                                             --  whose INPUT is bound is InIndex's coder
-                                             --  (Bind_Out). (Matches the Legacy path.)
-                                             Out_Coder := Natural (Bind_In) + 1;
-                                             In_Coder := Natural (Bind_Out) + 1;
-                                             if Output_Bound (Out_Coder)
-                                               or else Input_Bound (In_Coder)
-                                             then
-                                                Generic_Binds := False;
-                                             else
-                                                Output_Bound (Out_Coder) := True;
-                                                Input_Bound (In_Coder) := True;
-                                                Next_Coder (Out_Coder) := In_Coder;
-                                             end if;
-                                          else
-                                             Generic_Binds := False;
-                                          end if;
+                                 if not Zlib.Seven_Zip_Folder_Decoding
+                                   .Analyze_Bind_Pairs
+                                     (Archive_Image, Pos, Header_Last,
+                                      Coder_Count, Graph_Methods, Graph_Info)
+                                 then
+                                    return Empty;
+                                 end if;
 
-                                          if Legacy_Generic_Binds
-                                            and then Bind_Out in
-                                              1 .. Interfaces.Unsigned_64
-                                                (Coder_Count)
-                                            and then Bind_In in
-                                              1 .. Interfaces.Unsigned_64
-                                                (Coder_Count)
-                                          then
-                                             Out_Coder := Natural (Bind_In);
-                                             In_Coder := Natural (Bind_Out);
-                                             if Legacy_Output_Bound (Out_Coder)
-                                               or else Legacy_Input_Bound (In_Coder)
-                                             then
-                                                Legacy_Generic_Binds := False;
-                                             else
-                                                Legacy_Output_Bound (Out_Coder) := True;
-                                                Legacy_Input_Bound (In_Coder) := True;
-                                                Legacy_Next_Coder (Out_Coder) := In_Coder;
-                                             end if;
-                                          else
-                                             Legacy_Generic_Binds := False;
-                                          end if;
+                                 Folder_Packed_Coder (I) :=
+                                   Graph_Info.Packed_Coder;
+                                 Folder_Terminal_Coder (I) :=
+                                   Graph_Info.Terminal_Coder;
+                                 Folder_Reverse_Chain (I) :=
+                                   Graph_Info.Reverse_Chain;
+                                 Folder_Pack_Count (I) := Graph_Info.Pack_Count;
+                                 Folder_Pack_Indices_Read (I) :=
+                                   Graph_Info.Pack_Indices_Read;
 
-                                          if Bind_Out /=
-                                            Interfaces.Unsigned_64
-                                              (Bind_Index + 1)
-                                            or else Bind_In /=
-                                              Interfaces.Unsigned_64 (Bind_Index)
-                                          then
-                                             Forward_Binds := False;
-                                          end if;
-
-                                          if Bind_Out /=
-                                            Interfaces.Unsigned_64 (Bind_Index)
-                                            or else Bind_In /=
-                                              Interfaces.Unsigned_64
-                                                (Bind_Index - 1)
-                                          then
-                                             Reverse_Binds := False;
-                                          end if;
-
-                                          if Bind_Out /=
-                                            Interfaces.Unsigned_64
-                                              (Bind_Index - 1)
-                                            or else Bind_In /=
-                                              Interfaces.Unsigned_64
-                                                (Bind_Index)
-                                          then
-                                             Standard_Linear_Binds := False;
-                                          end if;
-                                       end;
-                                    end loop;
-
-                                    if Reverse_Binds
-                                      and then Coder_Count = 5
-                                      and then Folder_Methods (I, Coder_Count) =
-                                        Seven_Zip_BCJ2_Method
-                                    then
-                                       for Coder_Index in 1 .. Coder_Count - 1 loop
-                                          case Folder_Methods (I, Coder_Index) is
-                                             when Seven_Zip_Copy
-                                                | Seven_Zip_Deflate_Method
-                                                | Seven_Zip_BZip2_Method
-                                                | Seven_Zip_LZMA_Method
-                                                | Seven_Zip_LZMA2_Method
-                                                | Seven_Zip_Delta_Method
-                                                | Seven_Zip_BCJ_X86_Method
-                                                | Seven_Zip_BCJ_ARM_Method
-                                                | Seven_Zip_BCJ_ARMT_Method
-                                                | Seven_Zip_BCJ_PPC_Method
-                                                | Seven_Zip_BCJ_SPARC_Method
-                                                | Seven_Zip_BCJ_ARM64_Method
-                                                | Seven_Zip_BCJ_IA64_Method
-                                                | Seven_Zip_PPMd_Method =>
-                                                null;
-                                             when others =>
-                                                return Empty;
-                                          end case;
-                                       end loop;
-
-                                       Folder_Packed_Coder (I) := Coder_Count;
-                                       Folder_Terminal_Coder (I) := Coder_Count;
-                                       Folder_Pack_Count (I) := 4;
-                                       Folder_Pack_Indices_Read (I) := True;
-                                       Generic_Binds := False;
-                                       Legacy_Generic_Binds := False;
-
-                                       for Relative_Index in 0 .. 3 loop
-                                          if not Read_Seven_Zip_Number
-                                            (Archive_Image, Pos, Header_Last,
-                                             Value)
-                                          then
-                                             return Empty;
-                                          end if;
-
-                                          if (Relative_Index = 0
-                                              and then Value /= 0)
-                                            or else
-                                              (Relative_Index > 0
-                                               and then Value /=
-                                                 Interfaces.Unsigned_64
-                                                   (Coder_Count
-                                                    + Relative_Index - 1))
-                                          then
-                                             return Empty;
-                                          end if;
-                                       end loop;
-                                    elsif Reverse_Binds
-                                      or else Forward_Binds
-                                      or else Standard_Linear_Binds
-                                    then
-                                       if not Generic_Binds then
-                                          if Reverse_Binds then
-                                             Folder_Packed_Coder (I) :=
-                                               Coder_Count;
-                                             Folder_Terminal_Coder (I) := 1;
-                                             Folder_Reverse_Chain (I) := True;
-                                             for Coder_Index in
-                                               2 .. Coder_Count
-                                             loop
-                                                Folder_Next_Coder
-                                                  (I, Coder_Index) :=
-                                                    Coder_Index - 1;
-                                             end loop;
-                                          else
-                                             Folder_Packed_Coder (I) := 1;
-                                             Folder_Terminal_Coder (I) :=
-                                               Coder_Count;
-                                             for Coder_Index in
-                                               1 .. Coder_Count - 1
-                                             loop
-                                                Folder_Next_Coder
-                                                  (I, Coder_Index) :=
-                                                    Coder_Index + 1;
-                                             end loop;
-                                          end if;
-                                       end if;
-                                    else
-                                       if not Generic_Binds
-                                         and then not Legacy_Generic_Binds
-                                       then
-                                          return Empty;
-                                       end if;
-                                    end if;
-
-                                    if Generic_Binds or else Legacy_Generic_Binds then
-                                       declare
-                                          Packed_Coder   : Natural := 0;
-                                          Terminal_Coder : Natural := 0;
-                                          Visited        : array (1 .. Max_Folder_Coders) of Boolean :=
-                                            [others => False];
-                                          Current        : Natural := 0;
-                                          Visited_Count  : Natural := 0;
-                                       begin
-                                          for Coder_Index in 1 .. Coder_Count loop
-                                             if not
-                                               (if Generic_Binds
-                                                then Input_Bound (Coder_Index)
-                                                else Legacy_Input_Bound
-                                                  (Coder_Index))
-                                             then
-                                                if Packed_Coder /= 0 then
-                                                   return Empty;
-                                                end if;
-                                                Packed_Coder := Coder_Index;
-                                             end if;
-
-                                             if not
-                                               (if Generic_Binds
-                                                then Output_Bound (Coder_Index)
-                                                else Legacy_Output_Bound
-                                                  (Coder_Index))
-                                             then
-                                                if Terminal_Coder /= 0 then
-                                                   return Empty;
-                                                end if;
-                                                Terminal_Coder := Coder_Index;
-                                             end if;
-                                          end loop;
-
-                                          if Packed_Coder = 0
-                                            or else Terminal_Coder = 0
-                                          then
-                                             return Empty;
-                                          end if;
-
-                                          Current := Packed_Coder;
-                                          loop
-                                             if Current = 0
-                                               or else Current > Coder_Count
-                                               or else Visited (Current)
-                                             then
-                                                return Empty;
-                                             end if;
-
-                                             Visited (Current) := True;
-                                             Visited_Count := Visited_Count + 1;
-                                             exit when Current = Terminal_Coder;
-                                             Current :=
-                                               (if Generic_Binds
-                                                then Next_Coder (Current)
-                                                else Legacy_Next_Coder
-                                                  (Current));
-                                          end loop;
-
-                                          if Visited_Count /= Coder_Count then
-                                             return Empty;
-                                          end if;
-
-                                          Folder_Packed_Coder (I) := Packed_Coder;
-                                          Folder_Terminal_Coder (I) := Terminal_Coder;
-                                          Folder_Reverse_Chain (I) := Reverse_Binds;
-
-                                          for Coder_Index in 1 .. Coder_Count loop
-                                             Folder_Next_Coder (I, Coder_Index) :=
-                                               (if Generic_Binds
-                                                then Next_Coder (Coder_Index)
-                                                else Legacy_Next_Coder
-                                                  (Coder_Index));
-                                          end loop;
-                                       end;
-                                    end if;
-                                 end;
-                              else
-                                 Folder_Terminal_Coder (I) := 1;
-                              end if;
+                                 for Coder_Index in 1 .. Coder_Count loop
+                                    Folder_Next_Coder (I, Coder_Index) :=
+                                      Graph_Info.Next_Coder (Coder_Index);
+                                 end loop;
+                              end;
 
                               declare
                                  Packed_Coder : constant Natural :=
@@ -13387,183 +7262,33 @@ package body Zlib is
                      end if;
 
                      declare
-                        File_Count        : constant Natural := Natural (Value);
-                        File_Has_Stream   : array (1 .. File_Count) of Boolean :=
-                          [others => True];
-                        File_Is_Directory : array (1 .. File_Count) of Boolean :=
-                          [others => False];
-                        File_Has_MTime    : array (1 .. File_Count) of Boolean :=
-                          [others => False];
-                        File_MTime        : Seven_Zip_U64_Array (1 .. File_Count) :=
-                          [others => 0];
-                        File_Has_Attributes : array (1 .. File_Count) of Boolean :=
-                          [others => False];
-                        File_Attributes   : Seven_Zip_U32_Array (1 .. File_Count) :=
-                          [others => 0];
-                        Target_File_Index : Natural := 0;
-                        Stream_Index      : Natural := 0;
-                        Empty_Count       : Natural := 0;
-                        Name_Found        : Boolean := False;
+                        File_Count : constant Natural := Natural (Value);
+                        Target_File : Zlib.Seven_Zip_Properties.Files_Info_Target;
+                        File_Stream_Count : Natural := 0;
                      begin
-                        if File_Count = 0 then
+                        if not Zlib.Seven_Zip_Properties.Read_Target_Entry
+                          (Archive_Image, Pos, Header_Last, File_Count,
+                           Entry_Name, Target_File, File_Stream_Count)
+                        then
                            return Empty;
                         end if;
 
-                        loop
-                           if not Seven_Zip_Read_Byte
-                             (Archive_Image, Pos, Header_Last, B)
-                           then
-                              return Empty;
+                        Metadata := Target_File.Metadata;
+
+                        if not Target_File.Has_Stream then
+                           if Target_File.Is_Directory then
+                              Kind := Seven_Zip_Directory_Entry;
+                           else
+                              Kind := Seven_Zip_File_Entry;
                            end if;
 
-                           exit when B = 0;
-
-                           if not Read_Seven_Zip_Number
-                             (Archive_Image, Pos, Header_Last, Value)
-                             or else Value >
-                               Interfaces.Unsigned_64 (Natural'Last)
-                             or else Value >
-                               Interfaces.Unsigned_64 (Header_Last - Pos + 1)
-                           then
-                              return Empty;
-                           end if;
-
-                           declare
-                              Prop_Size  : constant Natural := Natural (Value);
-                              Prop_First : constant Natural := Pos;
-                              Prop_Last  : constant Natural :=
-                                (if Prop_Size = 0
-                                 then Prop_First - 1
-                                 else Prop_First + Prop_Size - 1);
-                           begin
-                              case B is
-                                 when 16#11# =>
-                                    if Prop_Size = 0
-                                      or else Prop_Size mod 2 = 0
-                                      or else Prop_Size < 1 + 2 * File_Count
-                                      or else not Seven_Zip_Name_Index
-                                        (Archive_Image, Prop_First, Prop_Size,
-                                         File_Count, Entry_Name,
-                                         Target_File_Index)
-                                    then
-                                       return Empty;
-                                    end if;
-                                    Name_Found := True;
-
-                                 when 16#0E# =>
-                                    if Prop_Size < (File_Count + 7) / 8 then
-                                       return Empty;
-                                    end if;
-
-                                    Empty_Count := 0;
-                                    for I in 1 .. File_Count loop
-                                       if Seven_Zip_Bit_Is_Set
-                                         (Archive_Image, Prop_First, I)
-                                       then
-                                          File_Has_Stream (I) := False;
-                                          File_Is_Directory (I) := True;
-                                          Empty_Count := Empty_Count + 1;
-                                       else
-                                          File_Has_Stream (I) := True;
-                                          File_Is_Directory (I) := False;
-                                       end if;
-                                    end loop;
-
-                                 when 16#0F# =>
-                                    if Empty_Count = 0
-                                      or else Prop_Size < (Empty_Count + 7) / 8
-                                    then
-                                       return Empty;
-                                    end if;
-
-                                    declare
-                                       Empty_Index : Natural := 0;
-                                    begin
-                                       for I in 1 .. File_Count loop
-                                          if not File_Has_Stream (I) then
-                                             Empty_Index := Empty_Index + 1;
-                                             File_Is_Directory (I) :=
-                                               not Seven_Zip_Bit_Is_Set
-                                                 (Archive_Image, Prop_First,
-                                                  Empty_Index);
-                                          end if;
-                                       end loop;
-                                    end;
-
-                                 when 16#10# =>
-                                    for I in 1 .. File_Count loop
-                                       if Seven_Zip_Bit_Is_Set
-                                         (Archive_Image, Prop_First, I)
-                                       then
-                                          return Empty;
-                                       end if;
-                                    end loop;
-
-                                 when 16#14# =>
-                                    for I in 1 .. File_Count loop
-                                       if not Seven_Zip_Read_File_Time_Property
-                                         (Archive_Image, Prop_First, Prop_Size,
-                                          File_Count, I, File_Has_MTime (I),
-                                          File_MTime (I))
-                                       then
-                                          return Empty;
-                                       end if;
-                                    end loop;
-
-                                 when 16#15# =>
-                                    for I in 1 .. File_Count loop
-                                       if not Seven_Zip_Read_U32_Property
-                                         (Archive_Image, Prop_First, Prop_Size,
-                                          File_Count, I,
-                                          File_Has_Attributes (I),
-                                          File_Attributes (I))
-                                       then
-                                          return Empty;
-                                       end if;
-                                    end loop;
-
-                                 when others =>
-                                    null;
-                              end case;
-
-                              Pos := Prop_Last + 1;
-                           end;
-                        end loop;
-
-                        if not Name_Found or else Target_File_Index = 0 then
+                           Status := Ok;
                            return Empty;
                         end if;
 
-                        Metadata.Has_Modification_Time :=
-                          File_Has_MTime (Target_File_Index);
-                        Metadata.Modification_Time :=
-                          File_MTime (Target_File_Index);
-                        Metadata.Has_Windows_Attributes :=
-                          File_Has_Attributes (Target_File_Index);
-                        Metadata.Windows_Attributes :=
-                          File_Attributes (Target_File_Index);
-                        Metadata.Is_Directory :=
-                          File_Is_Directory (Target_File_Index);
+                        Target_Index := Target_File.Stream_Index;
 
-                        for I in 1 .. File_Count loop
-                           if File_Has_Stream (I) then
-                              Stream_Index := Stream_Index + 1;
-                              if I = Target_File_Index then
-                                 Target_Index := Stream_Index;
-                              end if;
-                           elsif I = Target_File_Index then
-                              if File_Is_Directory (I) then
-                                 Kind := Seven_Zip_Directory_Entry;
-                              else
-                                 Kind := Seven_Zip_File_Entry;
-                              end if;
-
-                              Status := Ok;
-                              return Empty;
-                           end if;
-                        end loop;
-
-                        if Stream_Index /= Substream_Count
+                        if File_Stream_Count /= Substream_Count
                           or else Target_Index = 0
                           or else not Seven_Zip_Read_Byte
                             (Archive_Image, Pos, Header_Last, B)
@@ -13627,78 +7352,46 @@ package body Zlib is
                               then Empty
                               else Archive_Image (Target_First .. Target_Last));
 
-                           function Slice_Substream
-                             (Plain : Byte_Array) return Byte_Array
-                           is
-                              Sub_Offset : Natural := 0;
-                              Sub_Size   : constant Natural :=
-                                Natural (Substream_Sizes (Target_Index));
-                           begin
-                              for I in 1 .. Target_Index - 1 loop
-                                 if Substream_Folders (I) = Target_Folder_Index then
-                                    if Substream_Sizes (I) >
-                                      Interfaces.Unsigned_64
-                                        (Natural'Last - Sub_Offset)
-                                    then
-                                       Status := Unsupported_Method;
-                                       return Empty;
-                                    end if;
-                                    Sub_Offset :=
-                                      Sub_Offset + Natural (Substream_Sizes (I));
-                                 end if;
-                              end loop;
+                           function Substream_Folder_At
+                             (Index : Natural) return Natural is
+                             (Substream_Folders (Index));
 
-                              if Sub_Offset > Plain'Length
-                                or else Sub_Size > Plain'Length - Sub_Offset
-                              then
-                                 Status := Invalid_Checksum;
-                                 return Empty;
-                              end if;
+                           function Substream_Size_At
+                             (Index : Natural) return Interfaces.Unsigned_64 is
+                             (Substream_Sizes (Index));
 
-                              if Sub_Size = 0 then
-                                 if Substream_CRC_Defined (Target_Index)
-                                   and then CRC32 (Empty) /=
-                                     Substream_CRCs (Target_Index)
-                                 then
-                                    Status := Invalid_Checksum;
-                                 end if;
-                                 return Empty;
-                              end if;
+                           function Substream_CRC_Defined_At
+                             (Index : Natural) return Boolean is
+                             (Substream_CRC_Defined (Index));
 
-                              declare
-                                 Result : constant Byte_Array :=
-                                   Plain
-                                     (Plain'First + Sub_Offset ..
-                                      Plain'First + Sub_Offset + Sub_Size - 1);
-                              begin
-                                 if Substream_CRC_Defined (Target_Index)
-                                   and then CRC32 (Result) /=
-                                     Substream_CRCs (Target_Index)
-                                 then
-                                    Status := Invalid_Checksum;
-                                    return Empty;
-                                 end if;
-
-                                 return Result;
-                              end;
-                           end Slice_Substream;
+                           function Substream_CRC_At
+                             (Index : Natural) return Interfaces.Unsigned_32 is
+                             (Substream_CRCs (Index));
 
                            function Validate_And_Slice
-                             (Plain : Byte_Array) return Byte_Array is
+                             (Plain : Byte_Array) return Byte_Array
+                           is
+                              Slice_Status : Status_Code := Ok;
+                              Result       : constant Byte_Array :=
+                                Zlib.Seven_Zip_Folder_Decoding
+                                  .Validate_And_Slice_Substream
+                                    (Plain, Target_Folder_Index, Target_Index,
+                                     Unpack_Sizes (Target_Folder_Index),
+                                     Unpack_CRC_Defined (Target_Folder_Index),
+                                     Unpack_CRCs (Target_Folder_Index),
+                                     Substream_Folder_At'Access,
+                                     Substream_Size_At'Access,
+                                     Substream_CRC_Defined_At'Access,
+                                     Substream_CRC_At'Access,
+                                     Slice_Status);
                            begin
-                              if Plain'Length /=
-                                Natural (Unpack_Sizes (Target_Folder_Index))
-                                or else
-                                  (Unpack_CRC_Defined (Target_Folder_Index)
-                                   and then CRC32 (Plain) /=
-                                     Unpack_CRCs (Target_Folder_Index))
-                              then
-                                 Status := Invalid_Checksum;
+                              if Slice_Status /= Ok then
+                                 Status := Slice_Status;
                                  return Empty;
                               end if;
 
                               Status := Ok;
-                              return Slice_Substream (Plain);
+                              return Result;
                            end Validate_And_Slice;
 
                            function Finish_Decoded_Payload
@@ -13714,244 +7407,122 @@ package body Zlib is
                            is
                               pragma Unreferenced (Last_Coder);
 
-                              function Run_Post_Coders
-                                (Coder_Index : Natural;
-                                 Input       : Byte_Array) return Byte_Array;
+                              Coder_Count : constant Natural :=
+                                Folder_Coder_Count (Target_Folder_Index);
+                              Coders :
+                                Zlib.Seven_Zip_Folder_Decoding
+                                  .Folder_Coder_Array (1 .. Coder_Count);
+                              Links :
+                                Zlib.Seven_Zip_Folder_Decoding
+                                  .Coder_Link_Array := [others => 0];
 
-                              function Run_Post_Coders
-                                (Coder_Index : Natural;
-                                 Input       : Byte_Array) return Byte_Array
+                              function Decode_Core_Coder
+                                (Input         : Byte_Array;
+                                 Method        : Seven_Zip_Coder_Method;
+                                 Props_In      : Byte_Array;
+                                 Expected_Size : Natural;
+                                 Decode_Status : out Status_Code)
+                                 return Byte_Array
                               is
-                                 Filter_Status : Status_Code := Ok;
-
-                                 function Done return Boolean is
-                                 begin
-                                    return Coder_Index = 0;
-                                 end Done;
-
-                                 function Next_Coder return Natural is
-                                 begin
-                                    return Folder_Next_Coder
-                                      (Target_Folder_Index, Coder_Index);
-                                 end Next_Coder;
+                                 Props : Seven_Zip_LZMA_Props := [others => 0];
                               begin
-                                 if Done then
-                                    return Validate_And_Slice (Input);
-                                 end if;
-
-                                 case Folder_Methods
-                                   (Target_Folder_Index, Coder_Index)
-                                 is
-                                    when Seven_Zip_Copy =>
-                                       return Run_Post_Coders
-                                         (Next_Coder, Input);
-
-                                    when Seven_Zip_Delta_Method =>
-                                       declare
-                                          Decoded : constant Byte_Array :=
-                                            Seven_Zip_Delta_Decode
-                                              (Input,
-                                               Folder_Delta_Distances
-                                                 (Target_Folder_Index,
-                                                  Coder_Index),
-                                               Filter_Status);
-                                       begin
-                                          if Filter_Status /= Ok then
-                                             Status := Filter_Status;
-                                             return Empty;
-                                          end if;
-
-                                          return Run_Post_Coders
-                                            (Next_Coder, Decoded);
-                                       end;
-
-                                    when Seven_Zip_AES_Method =>
-                                       declare
-                                          Salt_Len : constant Natural :=
-                                            Folder_AES_Salt_Len
-                                              (Target_Folder_Index, Coder_Index);
-                                          IV_Len : constant Natural :=
-                                            Folder_AES_IV_Len
-                                              (Target_Folder_Index, Coder_Index);
-                                          Salt : Byte_Array (1 .. Salt_Len);
-                                          IV   : Byte_Array (1 .. 16) :=
-                                            [others => 0];
-                                       begin
-                                          for J in 1 .. Salt_Len loop
-                                             Salt (J) := Folder_AES_Salt
-                                               (Target_Folder_Index,
-                                                Coder_Index) (J);
-                                          end loop;
-                                          for J in 1 .. IV_Len loop
-                                             IV (J) := Folder_AES_IV
-                                               (Target_Folder_Index,
-                                                Coder_Index) (J);
-                                          end loop;
-                                          if US.Length
-                                               (Active_Seven_Zip_Password) = 0
-                                            or else Input'Length mod 16 /= 0
-                                          then
-                                             Status := Unsupported_Method;
-                                             return Empty;
-                                          end if;
-                                          return Run_Post_Coders
-                                            (Next_Coder,
-                                             Zlib.Seven_Zip_AES.Decrypt_CBC
-                                               (Zlib.Seven_Zip_AES.Derive_Key
-                                                  (US.To_String
-                                                     (Active_Seven_Zip_Password),
-                                                   Salt,
-                                                   Folder_AES_Cycles
-                                                     (Target_Folder_Index,
-                                                      Coder_Index)),
-                                                IV, Input));
-                                       end;
-
-                                    when Seven_Zip_BCJ_X86_Method =>
-                                       declare
-                                          Decoded : constant Byte_Array :=
-                                            Seven_Zip_BCJ_X86_Decode
-                                              (Input, Filter_Status);
-                                       begin
-                                          if Filter_Status /= Ok then
-                                             Status := Filter_Status;
-                                             return Empty;
-                                          end if;
-
-                                          return Run_Post_Coders
-                                            (Next_Coder, Decoded);
-                                       end;
-
-                                    when Seven_Zip_BCJ_ARM_Method
-                                       | Seven_Zip_BCJ_ARMT_Method
-                                       | Seven_Zip_BCJ_PPC_Method
-                                       | Seven_Zip_BCJ_SPARC_Method
-                                       | Seven_Zip_BCJ_ARM64_Method
-                                       | Seven_Zip_BCJ_IA64_Method =>
-                                       return Run_Post_Coders
-                                         (Next_Coder,
-                                          Zlib.Seven_Zip_Filters.Branch_Convert
-                                            (Branch_Arch_Of
-                                               (Folder_Methods
-                                                  (Target_Folder_Index,
-                                                   Coder_Index)),
-                                             Input, Encoding => False));
-
+                                 case Method is
                                     when Seven_Zip_Deflate_Method =>
-                                       declare
-                                          Decoded : constant Byte_Array :=
-                                            Inflate_Raw_Exact
-                                              (Input, Filter_Status);
-                                       begin
-                                          if Filter_Status /= Ok then
-                                             Status := Filter_Status;
-                                             return Empty;
-                                          end if;
-
-                                          return Run_Post_Coders
-                                            (Next_Coder, Decoded);
-                                       end;
+                                       return Inflate_Raw_Exact
+                                         (Input, Decode_Status);
 
                                     when Seven_Zip_BZip2_Method =>
-                                       declare
-                                          Decoded : constant Byte_Array :=
-                                            BZip2_Decompress
-                                              (Input,
-                                               Natural
-                                                 (Folder_Unpack_Sizes
-                                                    (Target_Folder_Index,
-                                                     Coder_Index)),
-                                               Filter_Status);
-                                       begin
-                                          if Filter_Status /= Ok then
-                                             Status := Filter_Status;
-                                             return Empty;
-                                          end if;
-
-                                          return Run_Post_Coders
-                                            (Next_Coder, Decoded);
-                                       end;
+                                       return BZip2_Decompress
+                                         (Input, Expected_Size, Decode_Status);
 
                                     when Seven_Zip_LZMA_Method =>
-                                       declare
-                                          Decoded : constant Byte_Array :=
-                                            LZMA_Decode_Raw
-                                              (Input,
-                                               Folder_LZMA_Props
-                                                 (Target_Folder_Index,
-                                                  Coder_Index),
-                                               Natural
-                                                 (Folder_Unpack_Sizes
-                                                    (Target_Folder_Index,
-                                                     Coder_Index)),
-                                               Filter_Status);
-                                       begin
-                                          if Filter_Status /= Ok then
-                                             Status := Filter_Status;
-                                             return Empty;
-                                          end if;
+                                       if Props_In'Length /= Props'Length then
+                                          Decode_Status := Unsupported_Method;
+                                          return Empty;
+                                       end if;
 
-                                          return Run_Post_Coders
-                                            (Next_Coder, Decoded);
-                                       end;
+                                       for Offset in 0 .. Props'Length - 1 loop
+                                          Props (Props'First + Offset) :=
+                                            Props_In (Props_In'First + Offset);
+                                       end loop;
+
+                                       return LZMA_Decode_Raw
+                                         (Input, Props, Expected_Size,
+                                          Decode_Status);
 
                                     when Seven_Zip_LZMA2_Method =>
-                                       declare
-                                          Decoded : constant Byte_Array :=
-                                            LZMA2_Decode
-                                              (Input,
-                                               Natural
-                                                 (Folder_Unpack_Sizes
-                                                    (Target_Folder_Index,
-                                                     Coder_Index)),
-                                               Filter_Status);
-                                       begin
-                                          if Filter_Status /= Ok then
-                                             Status := Filter_Status;
-                                             return Empty;
-                                          end if;
-
-                                          return Run_Post_Coders
-                                            (Next_Coder, Decoded);
-                                       end;
-
-                                    when Seven_Zip_PPMd_Method =>
-                                       declare
-                                          Expected_Size : constant Natural :=
-                                            Natural
-                                              (Folder_Unpack_Sizes
-                                                 (Target_Folder_Index,
-                                                  Coder_Index));
-                                          Decoded : constant Byte_Array :=
-                                            Seven_Zip_PPMd_Decode_Verified
-                                              (Input, Expected_Size,
-                                               Folder_PPMd_Orders
-                                                 (Target_Folder_Index,
-                                                  Coder_Index),
-                                               Folder_PPMd_Memories
-                                                 (Target_Folder_Index,
-                                                  Coder_Index),
-                                               False, 0, Filter_Status);
-                                       begin
-                                          if Filter_Status = Ok
-                                            and then Decoded'Length =
-                                              Expected_Size
-                                          then
-                                             return Run_Post_Coders
-                                               (Next_Coder, Decoded);
-                                          end if;
-
-                                          Status := Filter_Status;
-                                          return Empty;
-                                       end;
+                                       return LZMA2_Decode
+                                         (Input, Expected_Size, Decode_Status);
 
                                     when others =>
-                                       Status := Unsupported_Method;
+                                       Decode_Status := Unsupported_Method;
                                        return Empty;
                                  end case;
-                              end Run_Post_Coders;
+                              end Decode_Core_Coder;
+
+                              Chain_Status : Status_Code := Ok;
                            begin
-                              return Run_Post_Coders (First_Coder, Payload_Plain);
+                              for Coder_Index in 1 .. Coder_Count loop
+                                 Coders (Coder_Index) :=
+                                   (Method         => Folder_Methods
+                                                        (Target_Folder_Index,
+                                                         Coder_Index),
+                                    LZMA_Props     =>
+                                      Zlib.Seven_Zip_Folder_Decoding
+                                        .LZMA_Props
+                                          (Folder_LZMA_Props
+                                             (Target_Folder_Index,
+                                              Coder_Index)),
+                                    Expected_Size  => Natural
+                                      (Folder_Unpack_Sizes
+                                         (Target_Folder_Index, Coder_Index)),
+                                    Delta_Distance => Folder_Delta_Distances
+                                                        (Target_Folder_Index,
+                                                         Coder_Index),
+                                    PPMd_Order     => Folder_PPMd_Orders
+                                                        (Target_Folder_Index,
+                                                         Coder_Index),
+                                    PPMd_Memory    => Folder_PPMd_Memories
+                                                        (Target_Folder_Index,
+                                                         Coder_Index),
+                                    AES_Cycles     => Folder_AES_Cycles
+                                                        (Target_Folder_Index,
+                                                         Coder_Index),
+                                    AES_Salt_Len   => Folder_AES_Salt_Len
+                                                        (Target_Folder_Index,
+                                                         Coder_Index),
+                                    AES_IV_Len     => Folder_AES_IV_Len
+                                                        (Target_Folder_Index,
+                                                         Coder_Index),
+                                    AES_Salt       =>
+                                      Zlib.Seven_Zip_Folder_Decoding.AES_Block
+                                        (Folder_AES_Salt
+                                           (Target_Folder_Index, Coder_Index)),
+                                    AES_IV         =>
+                                      Zlib.Seven_Zip_Folder_Decoding.AES_Block
+                                        (Folder_AES_IV
+                                           (Target_Folder_Index, Coder_Index)));
+                                 Links (Coder_Index) :=
+                                   Folder_Next_Coder
+                                     (Target_Folder_Index, Coder_Index);
+                              end loop;
+
+                              declare
+                                 Plain : constant Byte_Array :=
+                                   Zlib.Seven_Zip_Folder_Decoding
+                                     .Decode_Coder_Chain
+                                       (Payload_Plain, Password, Coders,
+                                        First_Coder, Links,
+                                        Decode_Core_Coder'Access,
+                                        Chain_Status);
+                              begin
+                                 if Chain_Status /= Ok then
+                                    Status := Chain_Status;
+                                    return Empty;
+                                 end if;
+
+                                 return Validate_And_Slice (Plain);
+                              end;
                            end Finish_Decoded_Payload;
                         begin
                            for Pack_Index in
@@ -13991,7 +7562,7 @@ package body Zlib is
                                           else Archive_Image
                                             (Pack_First .. Pack_Last));
                                     begin
-                                       if CRC32 (Pack_Data) /=
+                                       if Compute_CRC32 (Pack_Data) /=
                                          Pack_CRCs (Pack_Index)
                                        then
                                           Status := Invalid_Checksum;
@@ -14042,7 +7613,7 @@ package body Zlib is
                                        IV (J) := Folder_AES_IV
                                          (Target_Folder_Index, C) (J);
                                     end loop;
-                                    if US.Length (Active_Seven_Zip_Password) = 0
+                                    if Password'Length = 0
                                       or else Payload'Length mod 16 /= 0
                                     then
                                        Status := Unsupported_Method;
@@ -14052,9 +7623,7 @@ package body Zlib is
                                        Decrypted : constant Byte_Array :=
                                          Zlib.Seven_Zip_AES.Decrypt_CBC
                                            (Zlib.Seven_Zip_AES.Derive_Key
-                                              (US.To_String
-                                                 (Active_Seven_Zip_Password),
-                                               Salt,
+                                              (Password, Salt,
                                                Folder_AES_Cycles
                                                  (Target_Folder_Index, C)),
                                             IV, Payload);
@@ -14159,7 +7728,8 @@ package body Zlib is
                                  declare
                                     Delta_Status : Status_Code := Ok;
                                     Plain        : constant Byte_Array :=
-                                      Seven_Zip_Delta_Decode
+                                      Zlib.Seven_Zip_Filters
+                                        .Delta_Decode_Checked
                                         (Payload,
                                          Delta_Distances
                                            (Target_Folder_Index),
@@ -14173,18 +7743,6 @@ package body Zlib is
                                     return Finish_Decoded_Payload (Plain);
                                  end;
 
-                              when Seven_Zip_BCJ_ARM_Method
-                                 | Seven_Zip_BCJ_ARMT_Method
-                                 | Seven_Zip_BCJ_PPC_Method
-                                 | Seven_Zip_BCJ_SPARC_Method
-                                 | Seven_Zip_BCJ_ARM64_Method
-                                 | Seven_Zip_BCJ_IA64_Method =>
-                                 return Finish_Decoded_Payload
-                                   (Zlib.Seven_Zip_Filters.Branch_Convert
-                                      (Branch_Arch_Of
-                                         (Methods (Target_Folder_Index)),
-                                       Payload, Encoding => False));
-
                               when Seven_Zip_BCJ_X86_Method =>
                                  if Folder_Reverse_Chain
                                    (Target_Folder_Index)
@@ -14192,7 +7750,8 @@ package body Zlib is
                                     declare
                                        BCJ_Status : Status_Code := Ok;
                                        Plain      : constant Byte_Array :=
-                                         Seven_Zip_BCJ_X86_Decode
+                                         Zlib.Seven_Zip_Filters
+                                           .X86_BCJ_Decode
                                            (Payload, BCJ_Status);
                                     begin
                                        if BCJ_Status /= Ok then
@@ -14214,22 +7773,26 @@ package body Zlib is
                                               (Target_Folder_Index, 2));
                                        Local_Status  : Status_Code := Ok;
                                        Plain         : constant Byte_Array :=
-                                         Seven_Zip_PPMd_Decode_Verified
+                                         Zlib.PPMd7.Decompress
                                            (Payload, Expected_Size,
                                             Folder_PPMd_Orders
                                               (Target_Folder_Index, 2),
                                             Folder_PPMd_Memories
                                               (Target_Folder_Index, 2),
-                                            Unpack_CRC_Defined
-                                              (Target_Folder_Index),
-                                            Unpack_CRCs (Target_Folder_Index),
                                             Local_Status);
                                     begin
                                        if Local_Status = Ok
                                          and then Plain'Length = Expected_Size
                                        then
-                                          return Finish_Decoded_Payload
-                                            (Plain, 1, 1);
+                                          if not Unpack_CRC_Defined
+                                              (Target_Folder_Index)
+                                            or else Compute_CRC32 (Plain) =
+                                              Unpack_CRCs (Target_Folder_Index)
+                                          then
+                                             return Finish_Decoded_Payload
+                                               (Plain, 1, 1);
+                                          end if;
+                                          Local_Status := Invalid_Checksum;
                                        end if;
 
                                        Status := Local_Status;
@@ -14248,415 +7811,62 @@ package body Zlib is
                                            (Target_Folder_Index,
                                             Folder_Packed_Coder
                                               (Target_Folder_Index)));
-                                    PPMd_Status : Status_Code := Ok;
-                                    Plain       : constant Byte_Array :=
-                                      Zlib.PPMd7.Decompress
-                                        (Payload,
-                                         PPMd_Output_Size,
-                                         PPMd_Orders (Target_Folder_Index),
-                                         PPMd_Memories (Target_Folder_Index),
-                                         PPMd_Status);
-                                 begin
-                                    if Folder_Next_Coder
-                                      (Target_Folder_Index,
-                                       Folder_Packed_Coder
-                                         (Target_Folder_Index)) = 0
-                                      and then Unpack_CRC_Defined
-                                        (Target_Folder_Index)
-                                      and then
-                                        (PPMd_Status /= Ok
-                                         or else Plain'Length /=
-                                           PPMd_Output_Size
-                                         or else CRC32 (Plain) /=
-                                           Unpack_CRCs (Target_Folder_Index))
-                                    then
-                                       declare
-                                          Verified_Status : Status_Code := Ok;
-                                          Verified_Plain  : constant Byte_Array :=
-                                            Seven_Zip_PPMd_Decode_Verified
-                                              (Payload, PPMd_Output_Size,
-                                               PPMd_Orders
-                                                 (Target_Folder_Index),
-                                               PPMd_Memories
-                                                 (Target_Folder_Index),
-                                               True,
-                                               Unpack_CRCs
-                                                 (Target_Folder_Index),
-                                               Verified_Status);
-                                       begin
-                                          if Verified_Status = Ok
-                                            and then Verified_Plain'Length =
-                                              PPMd_Output_Size
-                                          then
-                                             return Finish_Decoded_Payload
-                                               (Verified_Plain);
-                                          end if;
-                                       end;
-                                    end if;
+                                    PPMd_Final_Status : Status_Code := Ok;
 
-                                    if PPMd_Status /= Ok then
-                                       declare
-                                          Basic_Status : Status_Code := Ok;
-                                          Basic_Plain  : constant Byte_Array :=
-                                            Seven_Zip_PPMd_Decode
-                                              (Payload,
-                                               PPMd_Output_Size,
-                                               PPMd_Orders
-                                                 (Target_Folder_Index),
-                                               PPMd_Memories
-                                                 (Target_Folder_Index),
-                                               False, False, False,
-                                               Basic_Status);
-                                       begin
-                                          if Basic_Status = Ok
-                                            and then Basic_Plain'Length =
-                                              PPMd_Output_Size
-                                          then
-                                             declare
-                                                Saved_Status : constant
-                                                  Status_Code := Status;
-                                                Finished : constant Byte_Array :=
-                                                  Finish_Decoded_Payload
-                                                    (Basic_Plain);
-                                             begin
-                                                if Status = Ok then
-                                                   return Finished;
-                                                end if;
-                                                if Status /= Invalid_Checksum then
-                                                   Status := Saved_Status;
-                                                end if;
-                                             end;
-                                          end if;
-                                       end;
-
-                                       if PPMd_Status in
-                                         Unsupported_Method
-                                         | Invalid_Block_Type
-                                         and then Substream_CRC_Defined
-                                           (Target_Index)
-                                       then
-                                          for Mode in 1 .. Seven_Zip_PPMd_Decode_Mode_Count loop
-                                             declare
-                                                Retry_Status : Status_Code := Ok;
-                                                Retry_Plain  : constant Byte_Array :=
-                                                  Seven_Zip_PPMd_Decode_Mode
-                                                    (Payload,
-                                                     Natural
-                                                       (Unpack_Sizes
-                                                          (Target_Folder_Index)),
-                                                     PPMd_Orders
-                                                       (Target_Folder_Index),
-                                                     PPMd_Memories
-                                                       (Target_Folder_Index),
-                                                     Mode, Retry_Status);
-                                             begin
-                                                if Retry_Status = Ok
-                                                  and then Retry_Plain'Length =
-                                                    Natural
-                                                      (Unpack_Sizes
-                                                         (Target_Folder_Index))
-                                                then
-                                                   declare
-                                                      Saved_Status : constant
-                                                        Status_Code := Status;
-                                                      Finished : constant Byte_Array :=
-                                                        Finish_Decoded_Payload
-                                                          (Retry_Plain);
-                                                   begin
-                                                      if Status = Ok then
-                                                         return Finished;
-                                                      end if;
-                                                      if Status /= Invalid_Checksum then
-                                                         Status := Saved_Status;
-                                                      end if;
-                                                   end;
-                                                end if;
-                                             end;
-                                          end loop;
-                                       end if;
-
-                                       if PPMd_Status in
-                                         Unsupported_Method
-                                         | Invalid_Block_Type
-                                         and then Unpack_CRC_Defined
-                                           (Target_Folder_Index)
-                                       then
-                                          declare
-                                             Verified_Status : Status_Code := Ok;
-                                             Verified_Plain  : constant Byte_Array :=
-                                               Seven_Zip_PPMd_Decode_Verified
-                                                 (Payload,
-                                                  Natural
-                                                    (Unpack_Sizes
-                                                       (Target_Folder_Index)),
-                                                  PPMd_Orders
-                                                    (Target_Folder_Index),
-                                                  PPMd_Memories
-                                                    (Target_Folder_Index),
-                                                  True,
-                                                  Unpack_CRCs
-                                                    (Target_Folder_Index),
-                                                  Verified_Status);
-                                          begin
-                                             if Verified_Status = Ok
-                                               and then Verified_Plain'Length =
-                                                 Natural
-                                                   (Unpack_Sizes
-                                                      (Target_Folder_Index))
-                                             then
-                                                return Finish_Decoded_Payload
-                                                  (Verified_Plain);
-                                             end if;
-                                          end;
-                                       end if;
-
-                                       for Mode in 1 .. Seven_Zip_PPMd_Decode_Mode_Count loop
-                                          declare
-                                             Retry_Status : Status_Code := Ok;
-                                             Retry_Plain  : constant Byte_Array :=
-                                               Seven_Zip_PPMd_Decode_Mode
-                                                 (Payload,
-                                                  Natural
-                                                    (Unpack_Sizes
-                                                       (Target_Folder_Index)),
-                                                  PPMd_Orders
-                                                    (Target_Folder_Index),
-                                                  PPMd_Memories
-                                                    (Target_Folder_Index),
-                                                  Mode, Retry_Status);
-                                          begin
-                                             if Retry_Status = Ok
-                                               and then Retry_Plain'Length =
-                                                 Natural
-                                                   (Unpack_Sizes
-                                                      (Target_Folder_Index))
-                                             then
-                                                declare
-                                                   Saved_Status : constant
-                                                     Status_Code := Status;
-                                                   Finished : constant Byte_Array :=
-                                                     Finish_Decoded_Payload
-                                                       (Retry_Plain);
-                                                begin
-                                                   if Status = Ok then
-                                                      return Finished;
-                                                   end if;
-                                                   if Status /= Invalid_Checksum then
-                                                      Status := Saved_Status;
-                                                   end if;
-                                                end;
-                                             end if;
-                                          end;
-                                       end loop;
-
-                                       if Status /= Invalid_Checksum then
-                                          Status := PPMd_Status;
-                                       end if;
-                                       return Empty;
-                                    end if;
-
-                                    if Folder_Next_Coder
-                                      (Target_Folder_Index,
-                                       Folder_Packed_Coder
-                                         (Target_Folder_Index)) = 0
-                                      and then
-                                        (Substream_CRC_Defined (Target_Index)
-                                         or else Unpack_CRC_Defined
-                                           (Target_Folder_Index))
-                                      and then
-                                        (Plain'Length /=
-                                           Natural
-                                             (Unpack_Sizes
-                                                (Target_Folder_Index))
-                                         or else
-                                           (Substream_CRC_Defined (Target_Index)
-                                            and then CRC32 (Plain) /=
-                                              Substream_CRCs (Target_Index))
-                                         or else
-                                           (Unpack_CRC_Defined
-                                              (Target_Folder_Index)
-                                            and then CRC32 (Plain) /=
-                                              Unpack_CRCs
-                                          (Target_Folder_Index)))
-                                    then
-                                       if Unpack_CRC_Defined
-                                         (Target_Folder_Index)
-                                       then
-                                          declare
-                                             Verified_Status : Status_Code := Ok;
-                                             Verified_Plain  : constant Byte_Array :=
-                                               Seven_Zip_PPMd_Decode_Verified
-                                                 (Payload, PPMd_Output_Size,
-                                                  PPMd_Orders
-                                                    (Target_Folder_Index),
-                                                  PPMd_Memories
-                                                    (Target_Folder_Index),
-                                                  True,
-                                                  Unpack_CRCs
-                                                    (Target_Folder_Index),
-                                                  Verified_Status);
-                                          begin
-                                             if Verified_Status = Ok
-                                               and then Verified_Plain'Length =
-                                                 PPMd_Output_Size
-                                             then
-                                                return Finish_Decoded_Payload
-                                                  (Verified_Plain);
-                                             end if;
-                                          end;
-                                       end if;
-
-                                       for Mode in 1 .. Seven_Zip_PPMd_Decode_Mode_Count loop
-                                          declare
-                                             Retry_Status : Status_Code := Ok;
-                                             Retry_Plain  : constant Byte_Array :=
-                                               Seven_Zip_PPMd_Decode_Mode
-                                                 (Payload, PPMd_Output_Size,
-                                                  PPMd_Orders
-                                                    (Target_Folder_Index),
-                                                  PPMd_Memories
-                                                    (Target_Folder_Index),
-                                                  Mode, Retry_Status);
-                                             Retry_CRC    : constant
-                                               Interfaces.Unsigned_32 :=
-                                                 CRC32 (Retry_Plain);
-                                          begin
-                                             if Retry_Status = Ok
-                                               and then Retry_Plain'Length =
-                                                 PPMd_Output_Size
-                                             then
-                                                if Unpack_CRC_Defined
-                                                    (Target_Folder_Index)
-                                                  and then Retry_CRC =
-                                                    Unpack_CRCs
-                                                      (Target_Folder_Index)
-                                                then
-                                                   return Finish_Decoded_Payload
-                                                     (Retry_Plain);
-                                                end if;
-
-                                                if Substream_CRC_Defined
-                                                  (Target_Index)
-                                                then
-                                                   declare
-                                                      Saved_Status : constant
-                                                        Status_Code := Status;
-                                                      Finished : constant Byte_Array :=
-                                                        Finish_Decoded_Payload
-                                                          (Retry_Plain);
-                                                   begin
-                                                      if Status = Ok then
-                                                         return Finished;
-                                                      end if;
-                                                      if Status /= Invalid_Checksum then
-                                                         Status := Saved_Status;
-                                                      end if;
-                                                   end;
-                                                end if;
-                                             end if;
-                                          end;
-                                       end loop;
-                                    end if;
-
-                                    if Folder_Next_Coder
-                                      (Target_Folder_Index,
-                                       Folder_Packed_Coder
-                                         (Target_Folder_Index)) /= 0
-                                    then
-                                       return Finish_Decoded_Payload (Plain);
-                                    end if;
-
-                                    if Plain'Length >= 2
-                                      and then Substream_Sizes
-                                        (Target_Index) =
-                                          Interfaces.Unsigned_64
-                                            (Plain'Length)
-                                      and then Substream_CRC_Defined
-                                        (Target_Index)
-                                      and then CRC32 (Plain) /=
-                                        Substream_CRCs (Target_Index)
-                                    then
-                                       declare
-                                          Verified_Status : Status_Code := Ok;
-                                          Verified_Plain  : constant Byte_Array :=
-                                            Seven_Zip_PPMd_Decode_Verified
-                                              (Payload, Plain'Length,
-                                               PPMd_Orders
-                                                 (Target_Folder_Index),
-                                               PPMd_Memories
-                                                 (Target_Folder_Index),
-                                               True,
-                                               Substream_CRCs (Target_Index),
-                                               Verified_Status);
-                                       begin
-                                          if Verified_Status = Ok
-                                            and then Verified_Plain'Length =
-                                              Plain'Length
-                                          then
-                                             return Finish_Decoded_Payload
-                                               (Verified_Plain);
-                                          end if;
-                                       end;
-
-                                       declare
-                                          Repeated_Plain : constant Byte_Array
-                                            (1 .. Plain'Length) :=
-                                              [others => Plain (Plain'First)];
-                                       begin
-                                          if CRC32 (Repeated_Plain) =
-                                            Substream_CRCs (Target_Index)
-                                          then
-                                             return Finish_Decoded_Payload
-                                               (Repeated_Plain);
-                                          end if;
-                                       end;
-                                    end if;
-
-                                    if Plain'Length >= 2
-                                      and then Unpack_CRC_Defined
-                                        (Target_Folder_Index)
-                                      and then CRC32 (Plain) /=
-                                        Unpack_CRCs (Target_Folder_Index)
-                                    then
-                                       declare
-                                          Verified_Status : Status_Code := Ok;
-                                          Verified_Plain  : constant Byte_Array :=
-                                            Seven_Zip_PPMd_Decode_Verified
-                                              (Payload, Plain'Length,
-                                               PPMd_Orders
-                                                 (Target_Folder_Index),
-                                               PPMd_Memories
-                                                 (Target_Folder_Index),
-                                               True,
-                                               Unpack_CRCs
-                                                 (Target_Folder_Index),
-                                               Verified_Status);
-                                       begin
-                                          if Verified_Status = Ok
-                                            and then Verified_Plain'Length =
-                                              Plain'Length
-                                          then
-                                             return Finish_Decoded_Payload
-                                               (Verified_Plain);
-                                          end if;
-                                       end;
-                                    end if;
-
-                                    declare
-                                       Finished : constant Byte_Array :=
+                                    function Finish_PPMd_Plain
+                                      (Plain         : Byte_Array;
+                                       Finish_Status : out Status_Code)
+                                       return Byte_Array
+                                    is
+                                       Result : constant Byte_Array :=
                                          Finish_Decoded_Payload (Plain);
                                     begin
-                                       if Status = Ok then
-                                          return Finished;
+                                       Finish_Status := Status;
+                                       return Result;
+                                    end Finish_PPMd_Plain;
+                                 begin
+                                    declare
+                                       Result : constant Byte_Array :=
+                                         Zlib.Seven_Zip_Folder_Decoding
+                                           .Decode_PPMd_With_Fallback
+                                             (Payload,
+                                              PPMd_Output_Size,
+                                              Natural
+                                                (Unpack_Sizes
+                                                   (Target_Folder_Index)),
+                                              PPMd_Orders (Target_Folder_Index),
+                                              PPMd_Memories
+                                                (Target_Folder_Index),
+                                              Folder_Next_Coder
+                                                (Target_Folder_Index,
+                                                 Folder_Packed_Coder
+                                                   (Target_Folder_Index)) /= 0,
+                                              Unpack_CRC_Defined
+                                                (Target_Folder_Index),
+                                              Unpack_CRCs (Target_Folder_Index),
+                                              Substream_CRC_Defined
+                                                (Target_Index),
+                                              Substream_CRCs (Target_Index),
+                                              Substream_Sizes (Target_Index),
+                                              Finish_PPMd_Plain'Access,
+                                              PPMd_Final_Status);
+                                    begin
+                                       if PPMd_Final_Status /= Ok then
+                                          Status := PPMd_Final_Status;
                                        end if;
-                                    end;
 
-                                    return Empty;
+                                       return Result;
+                                    end;
                                  end;
 
                               when Seven_Zip_BCJ2_Method =>
                                  declare
                                     BCJ2_Status : Status_Code := Ok;
+                                    Coder_Count : constant Natural :=
+                                      Folder_Coder_Count (Target_Folder_Index);
+                                    Coders :
+                                      Zlib.Seven_Zip_Folder_Decoding
+                                        .Folder_Coder_Array (1 .. Coder_Count);
 
                                     function Pack_Data
                                       (Relative_Index : Natural)
@@ -14699,194 +7909,59 @@ package body Zlib is
                                        end;
                                     end Pack_Data;
 
-                                    function Decode_BCJ2_Main_Chain
-                                      (Current_Coder : Natural;
-                                       Current_Input : Byte_Array)
+                                    function Decode_Core_Coder
+                                      (Input         : Byte_Array;
+                                       Method        : Seven_Zip_Coder_Method;
+                                       Props_In      : Byte_Array;
+                                       Expected_Size : Natural;
+                                       Decode_Status : out Status_Code)
                                        return Byte_Array
                                     is
-                                       Expected_Size : constant Natural :=
-                                         Natural
-                                           (Folder_Unpack_Sizes
-                                              (Target_Folder_Index,
-                                               Current_Coder));
-
-                                       function Continue_Decoded
-                                         (Decoded       : Byte_Array;
-                                          Decode_Status : Status_Code)
-                                          return Byte_Array
-                                       is
-                                       begin
-                                          if Decode_Status /= Ok then
-                                             Status := Decode_Status;
-                                             return Empty;
-                                          end if;
-
-                                          if Decoded'Length /= Expected_Size then
-                                             Status := Invalid_Block_Type;
-                                             return Empty;
-                                          end if;
-
-                                          return Decode_BCJ2_Main_Chain
-                                            (Current_Coder + 1, Decoded);
-                                       end Continue_Decoded;
+                                       Props : Seven_Zip_LZMA_Props :=
+                                         [others => 0];
                                     begin
-                                       if Current_Coder > 4 then
-                                          declare
-                                             Plain : constant Byte_Array :=
-                                               Seven_Zip_BCJ2_Decode
-                                                 (Current_Input, Pack_Data (1),
-                                                  Pack_Data (2), Pack_Data (3),
-                                                  Natural
-                                                    (Unpack_Sizes
-                                                       (Target_Folder_Index)),
-                                                  BCJ2_Status);
-                                          begin
-                                             if BCJ2_Status /= Ok then
-                                                Status := BCJ2_Status;
+                                       case Method is
+                                          when Seven_Zip_Deflate_Method =>
+                                             return Inflate_Raw_Exact
+                                               (Input, Decode_Status);
+
+                                          when Seven_Zip_BZip2_Method =>
+                                             return BZip2_Decompress
+                                               (Input, Expected_Size,
+                                                Decode_Status);
+
+                                          when Seven_Zip_LZMA_Method =>
+                                             if Props_In'Length /=
+                                               Props'Length
+                                             then
+                                                Decode_Status :=
+                                                  Unsupported_Method;
                                                 return Empty;
                                              end if;
 
-                                             return Validate_And_Slice (Plain);
-                                          end;
-                                       end if;
+                                             for Offset in
+                                               0 .. Props'Length - 1
+                                             loop
+                                                Props (Props'First + Offset) :=
+                                                  Props_In
+                                                    (Props_In'First + Offset);
+                                             end loop;
 
-                                       case Folder_Methods
-                                         (Target_Folder_Index, Current_Coder)
-                                       is
-                                          when Seven_Zip_Copy =>
-                                             return Decode_BCJ2_Main_Chain
-                                               (Current_Coder + 1,
-                                                Current_Input);
-
-                                          when Seven_Zip_Delta_Method =>
-                                             declare
-                                                Decode_Status : Status_Code := Ok;
-                                                Decoded : constant Byte_Array :=
-                                                  Seven_Zip_Delta_Decode
-                                                    (Current_Input,
-                                                     Folder_Delta_Distances
-                                                       (Target_Folder_Index,
-                                                        Current_Coder),
-                                                     Decode_Status);
-                                             begin
-                                                return Continue_Decoded
-                                                  (Decoded, Decode_Status);
-                                             end;
-
-                                          when Seven_Zip_BCJ_X86_Method =>
-                                             declare
-                                                Decode_Status : Status_Code := Ok;
-                                                Decoded : constant Byte_Array :=
-                                                  Seven_Zip_BCJ_X86_Decode
-                                                    (Current_Input,
-                                                     Decode_Status);
-                                             begin
-                                                return Continue_Decoded
-                                                  (Decoded, Decode_Status);
-                                             end;
-
-                                          when Seven_Zip_BCJ_ARM_Method
-                                             | Seven_Zip_BCJ_ARMT_Method
-                                             | Seven_Zip_BCJ_PPC_Method
-                                             | Seven_Zip_BCJ_SPARC_Method
-                                             | Seven_Zip_BCJ_ARM64_Method
-                                             | Seven_Zip_BCJ_IA64_Method =>
-                                             return Continue_Decoded
-                                               (Zlib.Seven_Zip_Filters
-                                                  .Branch_Convert
-                                                    (Branch_Arch_Of
-                                                       (Folder_Methods
-                                                          (Target_Folder_Index,
-                                                           Current_Coder)),
-                                                     Current_Input,
-                                                     Encoding => False),
-                                                Ok);
-
-                                          when Seven_Zip_Deflate_Method =>
-                                             declare
-                                                Decode_Status : Status_Code := Ok;
-                                                Decoded : constant Byte_Array :=
-                                                  Inflate_Raw_Exact
-                                                    (Current_Input,
-                                                     Decode_Status);
-                                             begin
-                                                return Continue_Decoded
-                                                  (Decoded, Decode_Status);
-                                             end;
-
-                                          when Seven_Zip_BZip2_Method =>
-                                             declare
-                                                Decode_Status : Status_Code := Ok;
-                                                Decoded : constant Byte_Array :=
-                                                  BZip2_Decompress
-                                                    (Current_Input,
-                                                     Expected_Size,
-                                                     Decode_Status);
-                                             begin
-                                                return Continue_Decoded
-                                                  (Decoded, Decode_Status);
-                                             end;
-
-                                          when Seven_Zip_LZMA_Method =>
-                                             declare
-                                                Decode_Status : Status_Code := Ok;
-                                                Decoded : constant Byte_Array :=
-                                                  LZMA_Decode_Raw
-                                                    (Current_Input,
-                                                     Folder_LZMA_Props
-                                                       (Target_Folder_Index,
-                                                        Current_Coder),
-                                                     Expected_Size,
-                                                     Decode_Status);
-                                             begin
-                                                return Continue_Decoded
-                                                  (Decoded, Decode_Status);
-                                             end;
+                                             return LZMA_Decode_Raw
+                                               (Input, Props, Expected_Size,
+                                                Decode_Status);
 
                                           when Seven_Zip_LZMA2_Method =>
-                                             declare
-                                                Decode_Status : Status_Code := Ok;
-                                                Decoded : constant Byte_Array :=
-                                                  LZMA2_Decode
-                                                    (Current_Input,
-                                                     Expected_Size,
-                                                     Decode_Status);
-                                             begin
-                                                return Continue_Decoded
-                                                  (Decoded, Decode_Status);
-                                             end;
-
-                                          when Seven_Zip_PPMd_Method =>
-                                             declare
-                                                Decode_Status : Status_Code := Ok;
-                                                Decoded : constant Byte_Array :=
-                                                  Zlib.PPMd7.Decompress
-                                                    (Current_Input,
-                                                     Expected_Size,
-                                                     Folder_PPMd_Orders
-                                                       (Target_Folder_Index,
-                                                        Current_Coder),
-                                                     Folder_PPMd_Memories
-                                                       (Target_Folder_Index,
-                                                        Current_Coder),
-                                                     Decode_Status);
-                                             begin
-                                                if Decode_Status /= Ok
-                                                  or else Decoded'Length /=
-                                                    Expected_Size
-                                                then
-                                                   Status := Decode_Status;
-                                                   return Empty;
-                                                end if;
-                                                return Decode_BCJ2_Main_Chain
-                                                  (Current_Coder + 1, Decoded);
-                                             end;
+                                             return LZMA2_Decode
+                                               (Input, Expected_Size,
+                                                Decode_Status);
 
                                           when others =>
                                              Status := Unsupported_Method;
+                                             Decode_Status := Unsupported_Method;
                                              return Empty;
                                        end case;
-                                    end Decode_BCJ2_Main_Chain;
+                                    end Decode_Core_Coder;
                                  begin
                                     if Folder_Pack_Count
                                       (Target_Folder_Index) /= 4
@@ -14895,48 +7970,83 @@ package body Zlib is
                                        return Empty;
                                     end if;
 
-                                    if Folder_Coder_Count
-                                      (Target_Folder_Index) = 5
-                                    then
-                                       declare
-                                          Result : constant Byte_Array :=
-                                            Decode_BCJ2_Main_Chain
-                                              (1, Pack_Data (0));
-                                       begin
-                                          if Status /= Ok
-                                          then
-                                             Status := Unsupported_Method;
-                                             return Empty;
-                                          end if;
-
-                                          return Result;
-                                       end;
-                                    end if;
+                                    for Coder_Index in 1 .. Coder_Count loop
+                                       Coders (Coder_Index) :=
+                                         (Method         => Folder_Methods
+                                            (Target_Folder_Index, Coder_Index),
+                                          LZMA_Props     =>
+                                            Zlib.Seven_Zip_Folder_Decoding
+                                              .LZMA_Props
+                                                (Folder_LZMA_Props
+                                                   (Target_Folder_Index,
+                                                    Coder_Index)),
+                                          Expected_Size  => Natural
+                                            (Folder_Unpack_Sizes
+                                               (Target_Folder_Index,
+                                                Coder_Index)),
+                                          Delta_Distance =>
+                                            Folder_Delta_Distances
+                                              (Target_Folder_Index,
+                                               Coder_Index),
+                                          PPMd_Order     => Folder_PPMd_Orders
+                                            (Target_Folder_Index,
+                                             Coder_Index),
+                                          PPMd_Memory    => Folder_PPMd_Memories
+                                            (Target_Folder_Index,
+                                             Coder_Index),
+                                          AES_Cycles     => 0,
+                                          AES_Salt_Len   => 0,
+                                          AES_IV_Len     => 0,
+                                          AES_Salt       => [others => 0],
+                                          AES_IV         => [others => 0]);
+                                    end loop;
 
                                     declare
                                        Plain : constant Byte_Array :=
-                                         Seven_Zip_BCJ2_Decode
-                                           (Pack_Data (0), Pack_Data (1),
-                                            Pack_Data (2), Pack_Data (3),
-                                            Natural
-                                              (Unpack_Sizes
-                                                 (Target_Folder_Index)),
-                                            BCJ2_Status);
+                                         Zlib.Seven_Zip_Folder_Decoding
+                                           .Decode_BCJ2_Graph
+                                             (Pack_Data (0), Pack_Data (1),
+                                              Pack_Data (2), Pack_Data (3),
+                                              Coders,
+                                              Natural
+                                                (Unpack_Sizes
+                                                   (Target_Folder_Index)),
+                                              Decode_Core_Coder'Access,
+                                              BCJ2_Status);
                                     begin
-                                       if BCJ2_Status /= Ok
-                                       then
-                                          Status := BCJ2_Status;
+                                       if BCJ2_Status /= Ok then
+                                          if Coder_Count = 5 then
+                                             Status := Unsupported_Method;
+                                          else
+                                             Status := BCJ2_Status;
+                                          end if;
                                           return Empty;
                                        end if;
 
                                        return Validate_And_Slice (Plain);
                                     end;
                                  end;
+
+                                          when others =>
+                                             if Is_Branch_Converter
+                                               (Methods (Target_Folder_Index))
+                                             then
+                                                return Finish_Decoded_Payload
+                                                  (Zlib.Seven_Zip_Filters
+                                                     .Branch_Convert
+                                                       (Branch_Arch_Of
+                                                          (Methods
+                                                             (Target_Folder_Index)),
+                                                        Payload,
+                                                        Encoding => False));
+                                             end if;
+
+                                             Status := Unsupported_Method;
+                                             return Empty;
                            end case;
                         end;
                      end;
                   end;
-               end;
             end;
          end;
       end;
@@ -14958,7 +8068,7 @@ package body Zlib is
       Metadata : Seven_Zip_Entry_Metadata;
    begin
       return Extract_Seven_Zip_Entry
-        (Archive_Image, Entry_Name, Status, Kind, Metadata);
+        (Archive_Image, Entry_Name, "", Status, Kind, Metadata);
    end Extract_Seven_Zip_Stored;
 
    function Extract_Seven_Zip
@@ -14969,7 +8079,7 @@ package body Zlib is
       Metadata : Seven_Zip_Entry_Metadata;
    begin
       return Extract_Seven_Zip_Entry
-        (Archive_Image, Entry_Name, Status, Kind, Metadata);
+        (Archive_Image, Entry_Name, "", Status, Kind, Metadata);
    end Extract_Seven_Zip;
 
    function Extract_Seven_Zip
@@ -14978,81 +8088,26 @@ package body Zlib is
       Password      : String;
       Status        : out Status_Code) return Byte_Array is
    begin
-      Active_Seven_Zip_Password := US.To_Unbounded_String (Password);
-      return R : constant Byte_Array :=
-        Extract_Seven_Zip (Archive_Image, Entry_Name, Status)
-      do
-         Active_Seven_Zip_Password := US.Null_Unbounded_String;
-      end return;
+      declare
+         Kind     : Seven_Zip_Entry_Kind := Seven_Zip_File_Entry;
+         Metadata : Seven_Zip_Entry_Metadata;
+      begin
+         return Extract_Seven_Zip_Entry
+           (Archive_Image, Entry_Name, Password, Status, Kind, Metadata);
+      end;
    end Extract_Seven_Zip;
 
    --  Multi-volume (split) .7z: the archive byte-stream cut into fixed-size
    --  volumes name.001, name.002, ...; concatenating them reproduces the .7z.
 
-   function Seven_Zip_Volume_Suffix (N : Positive) return String is
-      Img : constant String := N'Image;
-      Dig : constant String := Img (Img'First + 1 .. Img'Last);  --  drop sign
-   begin
-      if Dig'Length >= 3 then
-         return Dig;
-      elsif Dig'Length = 2 then
-         return "0" & Dig;
-      else
-         return "00" & Dig;
-      end if;
-   end Seven_Zip_Volume_Suffix;
-
    function Read_Seven_Zip_Volumes
      (First_Volume_Path : String;
       Status            : out Status_Code) return Byte_Array
    is
-      Result : Byte_Vectors.Vector;
-      Dot    : Natural := 0;
    begin
-      Status := Input_File_Error;
-      for I in reverse First_Volume_Path'Range loop
-         if First_Volume_Path (I) = '.' then
-            Dot := I;
-            exit;
-         end if;
-      end loop;
-      if Dot = 0 then
-         return [1 .. 0 => 0];
-      end if;
-
-      declare
-         Base : constant String :=
-           First_Volume_Path (First_Volume_Path'First .. Dot - 1);
-         N    : Positive := 1;
-      begin
-         loop
-            declare
-               VP : constant String :=
-                 Base & "." & Seven_Zip_Volume_Suffix (N);
-            begin
-               exit when not Ada.Directories.Exists (VP);
-               declare
-                  RS : Status_Code := Ok;
-                  B  : constant Byte_Array := Read_File (VP, RS);
-               begin
-                  if RS /= Ok then
-                     Status := RS;
-                     return [1 .. 0 => 0];
-                  end if;
-                  for X of B loop
-                     Result.Append (X);
-                  end loop;
-               end;
-            end;
-            N := N + 1;
-         end loop;
-      end;
-
-      if Result.Is_Empty then
-         return [1 .. 0 => 0];
-      end if;
-      Status := Ok;
-      return To_Byte_Array (Result);
+      return
+        Zlib.Seven_Zip_Volumes.Read
+          (First_Volume_Path, Read_File'Access, Status);
    end Read_Seven_Zip_Volumes;
 
    procedure Write_Seven_Zip_Volumes
@@ -15061,31 +8116,9 @@ package body Zlib is
       Volume_Size : Positive;
       Status      : out Status_Code)
    is
-      N   : Positive := 1;
-      Pos : Natural := Archive'First;
    begin
-      Status := Ok;
-      if Archive'Length = 0 then
-         Status := Output_File_Error;
-         return;
-      end if;
-      while Pos <= Archive'Last loop
-         declare
-            Last : constant Natural :=
-              Natural'Min (Pos + Volume_Size - 1, Archive'Last);
-            VP   : constant String :=
-              Base_Path & "." & Seven_Zip_Volume_Suffix (N);
-            WS   : Status_Code := Ok;
-         begin
-            Write_File (VP, Archive (Pos .. Last), WS);
-            if WS /= Ok then
-               Status := WS;
-               return;
-            end if;
-            Pos := Last + 1;
-            N := N + 1;
-         end;
-      end loop;
+      Zlib.Seven_Zip_Volumes.Write
+        (Archive, Base_Path, Volume_Size, Write_File'Access, Status);
    end Write_Seven_Zip_Volumes;
 
    function Extract_Seven_Zip_Volumes
@@ -15094,17 +8127,11 @@ package body Zlib is
       Password          : String;
       Status            : out Status_Code) return Byte_Array
    is
-      Joined : constant Byte_Array :=
-        Read_Seven_Zip_Volumes (First_Volume_Path, Status);
    begin
-      if Status /= Ok then
-         return [1 .. 0 => 0];
-      end if;
-      if Password = "" then
-         return Extract_Seven_Zip (Joined, Entry_Name, Status);
-      else
-         return Extract_Seven_Zip (Joined, Entry_Name, Password, Status);
-      end if;
+      return
+        Zlib.Seven_Zip_Volumes.Extract
+          (First_Volume_Path, Entry_Name, Password, Read_File'Access,
+           Extract_Seven_Zip'Access, Extract_Seven_Zip'Access, Status);
    end Extract_Seven_Zip_Volumes;
 
    function Encrypt_Seven_Zip_Header
@@ -15112,820 +8139,61 @@ package body Zlib is
       Password : String;
       Status   : out Status_Code) return Byte_Array
    is
-      Empty : constant Byte_Array (1 .. 0) := [others => 0];
-
-      function U64_At (Off : Natural) return Interfaces.Unsigned_64 is
-         R : Interfaces.Unsigned_64 := 0;
+      function Encode_Header
+        (Input      : Byte_Array;
+         LZMA_Props : in out Byte) return Byte_Array is
       begin
-         for I in 0 .. 7 loop
-            R := R + Interfaces.Shift_Left
-                       (Interfaces.Unsigned_64
-                          (Archive (Archive'First + Off + I)), 8 * I);
-         end loop;
-         return R;
-      end U64_At;
+         return LZMA_Encode_Selected (Input, LZMA_Props);
+      end Encode_Header;
    begin
-      Status := Unsupported_Method;
-      if Archive'Length < 32
-        or else Archive (Archive'First) /= 16#37#
-        or else Archive (Archive'First + 1) /= 16#7A#
-      then
-         return Empty;
-      end if;
+      return
+        Zlib.Seven_Zip_Header_Encryption.Encrypt_Header
+          (Archive, Password, Encode_Header'Access, Status);
+   end Encrypt_Seven_Zip_Header;
 
-      declare
-         NHO  : constant Natural := Natural (U64_At (12));
-         NHS  : constant Natural := Natural (U64_At (20));
-         Base : constant Natural := Archive'First + 32;
+   --  Catalogue every member of a 7z archive through the internal native
+   --  listing package. Root-only LZMA encoded-header decoding remains a
+   --  callback because it depends on root-body codec entry points.
+   function List_Seven_Zip_Entries_With_Password
+     (Archive_Image : Byte_Array;
+      Password      : String;
+      Status        : out Status_Code) return Archive_Entry_Array
+   is
+      function Decode_LZMA_Listing_Header
+        (Input         : Byte_Array;
+         LZMA_Props    : Byte_Array;
+         Expected_Size : Natural;
+         Decode_Status : out Status_Code) return Byte_Array
+      is
+         Empty : constant Byte_Array (1 .. 0) := [others => 0];
+         Props : Seven_Zip_LZMA_Props := [others => 0];
       begin
-         if NHS = 0 or else Base + NHO + NHS - 1 > Archive'Last then
+         if LZMA_Props'Length /= Props'Length then
+            Decode_Status := Unsupported_Method;
             return Empty;
          end if;
 
-         declare
-            Main_Pack : constant Byte_Array := Archive (Base .. Base + NHO - 1);
-            Plain_Hdr : constant Byte_Array :=
-              Archive (Base + NHO .. Base + NHO + NHS - 1);
-            HC  : constant Byte_Array := LZMA_Encode_Bounded (Plain_Hdr);
-            IV  : constant Byte_Array := Zlib.Seven_Zip_AES.Random_IV;
-            Key : constant Byte_Array :=
-              Zlib.Seven_Zip_AES.Derive_Key (Password, Empty, 19);
-            HE  : constant Byte_Array :=
-              Zlib.Seven_Zip_AES.Encrypt_CBC
-                (Key, IV, Zlib.Seven_Zip_AES.Pad_To_Block (HC));
-            ESI : Byte_Vectors.Vector;
-         begin
-            if HE'Length = 0 then
-               return Empty;
-            end if;
+         for Offset in 0 .. Props'Length - 1 loop
+            Props (Props'First + Offset) :=
+              LZMA_Props (LZMA_Props'First + Offset);
+         end loop;
 
-            --  kEncodedHeader: a StreamsInfo describing the [AES -> LZMA] folder
-            --  whose decode yields the real (plain) header bytes.
-            ESI.Append (16#17#); --  kEncodedHeader
-            ESI.Append (16#06#); --  PackInfo
-            Append_Seven_Zip_Number (ESI, Interfaces.Unsigned_64 (NHO));
-            Append_Seven_Zip_Number (ESI, 1);
-            ESI.Append (16#09#); --  Size
-            Append_Seven_Zip_Number (ESI, Interfaces.Unsigned_64 (HE'Length));
-            ESI.Append (16#00#); --  end PackInfo
-            ESI.Append (16#07#); --  UnPackInfo
-            ESI.Append (16#0B#); --  Folder
-            Append_Seven_Zip_Number (ESI, 1);
-            ESI.Append (16#00#); --  external
-            Append_Seven_Zip_Number (ESI, 2);
-            ESI.Append (16#24#);
-            ESI.Append (16#06#);
-            ESI.Append (16#F1#);
-            ESI.Append (16#07#);
-            ESI.Append (16#01#);
-            Append_Seven_Zip_Number (ESI, 18);
-            ESI.Append (16#53#);
-            ESI.Append (16#0F#);
-            for B of IV loop
-               ESI.Append (B);
-            end loop;
-            Append_Seven_Zip_Coder (ESI, Seven_Zip_LZMA_Method);
-            Append_Seven_Zip_Number (ESI, 1);  --  bind In=1 (LZMA.in)
-            Append_Seven_Zip_Number (ESI, 0);  --  bind Out=0 (AES.out)
-            ESI.Append (16#0C#); --  CodersUnPackSize
-            Append_Seven_Zip_Number (ESI, Interfaces.Unsigned_64 (HC'Length));
-            Append_Seven_Zip_Number
-              (ESI, Interfaces.Unsigned_64 (Plain_Hdr'Length));
-            ESI.Append (16#00#); --  end UnPackInfo
-            ESI.Append (16#00#); --  end StreamsInfo
+         return
+           LZMA_Decode_Raw_Encoded_Header
+             (Input, Props, Expected_Size, Decode_Status);
+      end Decode_LZMA_Listing_Header;
+   begin
+      return
+        Zlib.Seven_Zip_Listing.List
+          (Archive_Image, Password, Decode_LZMA_Listing_Header'Access, Status);
+   end List_Seven_Zip_Entries_With_Password;
 
-            declare
-               ESI_Image : constant Byte_Array := To_Byte_Array (ESI);
-               Start_Header : Byte_Vectors.Vector;
-            begin
-               Append_U64_LE
-                 (Start_Header,
-                  Interfaces.Unsigned_64 (NHO) +
-                  Interfaces.Unsigned_64 (HE'Length));
-               Append_U64_LE
-                 (Start_Header, Interfaces.Unsigned_64 (ESI_Image'Length));
-               Append_U32_LE
-                 (Start_Header, Seven_Zip_Header_CRC (ESI_Image));
-
-               declare
-                  SH_Image : constant Byte_Array := To_Byte_Array (Start_Header);
-                  Out_A    : Byte_Vectors.Vector;
-               begin
-                  Out_A.Append (16#37#);
-                  Out_A.Append (16#7A#);
-                  Out_A.Append (16#BC#);
-                  Out_A.Append (16#AF#);
-                  Out_A.Append (16#27#);
-                  Out_A.Append (16#1C#);
-                  Out_A.Append (0);
-                  Out_A.Append (4);
-                  Append_U32_LE (Out_A, Seven_Zip_Header_CRC (SH_Image));
-                  Out_A.Append_Vector (Start_Header);
-                  for B of Main_Pack loop
-                     Out_A.Append (B);
-                  end loop;
-                  for B of HE loop
-                     Out_A.Append (B);
-                  end loop;
-                  Out_A.Append_Vector (ESI);
-                  Status := Ok;
-                  return To_Byte_Array (Out_A);
-               end;
-            end;
-         end;
-      end;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return Empty;
-   end Encrypt_Seven_Zip_Header;
-
-   --  Catalogue every member of a 7z archive: decode the (possibly
-   --  LZMA/Copy/AES-encoded) header, then walk the folder, SubStreamsInfo and
-   --  FilesInfo structures to recover names, directory flags and per-file
-   --  uncompressed sizes/CRCs.
    function List_Seven_Zip_Entries
      (Archive_Image : Byte_Array;
       Status        : out Status_Code) return Archive_Entry_Array
    is
-      No : constant Archive_Entry_Array (1 .. 0) :=
-        [others => (others => <>)];
-      No_Bytes : constant Byte_Array (1 .. 0) := [others => 0];
-
-      function U64_At (Off : Natural) return Interfaces.Unsigned_64 is
-         R : Interfaces.Unsigned_64 := 0;
-      begin
-         for I in 0 .. 7 loop
-            R := R + Interfaces.Shift_Left
-                       (Interfaces.Unsigned_64
-                          (Archive_Image (Archive_Image'First + Off + I)),
-                        8 * I);
-         end loop;
-         return R;
-      end U64_At;
-
-      --  Decode the next-header bytes into a plain (kHeader 0x01) image.
-      function Plain_Header return Byte_Array is
-         Base : constant Natural := Archive_Image'First + 32;
-         NHO  : constant Natural := Natural (U64_At (12));
-         NHS  : constant Natural := Natural (U64_At (20));
-      begin
-         if NHS = 0 or else Base + NHO + NHS - 1 > Archive_Image'Last then
-            return No_Bytes;
-         end if;
-         declare
-            H : constant Byte_Array :=
-              Archive_Image (Base + NHO .. Base + NHO + NHS - 1);
-         begin
-            if H (H'First) = 16#01# then
-               return H;
-            elsif H (H'First) /= 16#17# then
-               return No_Bytes;
-            end if;
-
-            --  Encoded header: parse its StreamsInfo (PackPos/PackSize and a
-            --  one- or two-coder folder), decode, and return the plain header.
-            declare
-               P         : Natural := H'First;
-               V         : Interfaces.Unsigned_64 := 0;
-               Pack_Pos  : Interfaces.Unsigned_64 := 0;
-               Pack_Size : Interfaces.Unsigned_64 := 0;
-               B         : Byte := 0;
-               Is_AES    : Boolean := False;
-               Is_LZMA   : Boolean := False;
-               Is_Copy   : Boolean := False;
-               Num_Cod   : Interfaces.Unsigned_64 := 0;
-               LZMA_P    : Seven_Zip_LZMA_Props := [others => 0];
-               Cycles    : Natural := 0;
-               Salt_Len  : Natural := 0;
-               IV_Len    : Natural := 0;
-               Salt      : Byte_Array (1 .. 16) := [others => 0];
-               IV        : Byte_Array (1 .. 16) := [others => 0];
-               HC_Size   : Interfaces.Unsigned_64 := 0;
-               Hdr_Size  : Interfaces.Unsigned_64 := 0;
-            begin
-               P := P + 1;  --  consume 0x17
-               if P <= H'Last and then H (P) = 16#04# then
-                  P := P + 1;
-               end if;
-               if not Seven_Zip_Expect_Byte (H, P, H'Last, 16#06#)
-                 or else not Read_Seven_Zip_Number (H, P, H'Last, Pack_Pos)
-                 or else not Read_Seven_Zip_Number (H, P, H'Last, V)
-                 or else V /= 1
-                 or else not Seven_Zip_Expect_Byte (H, P, H'Last, 16#09#)
-                 or else not Read_Seven_Zip_Number (H, P, H'Last, Pack_Size)
-               then
-                  return No_Bytes;
-               end if;
-               if P <= H'Last and then H (P) = 16#0A# then
-                  P := P + 1;
-                  if not Seven_Zip_Expect_Byte (H, P, H'Last, 1)
-                    or else not Seven_Zip_Has_Bytes (P, H'Last, 4)
-                  then
-                     return No_Bytes;
-                  end if;
-                  P := P + 4;
-               end if;
-               if not Seven_Zip_Expect_Byte (H, P, H'Last, 0)
-                 or else not Seven_Zip_Expect_Byte (H, P, H'Last, 16#07#)
-                 or else not Seven_Zip_Expect_Byte (H, P, H'Last, 16#0B#)
-                 or else not Read_Seven_Zip_Number (H, P, H'Last, V)
-                 or else V /= 1
-                 or else not Seven_Zip_Expect_Byte (H, P, H'Last, 0)
-                 or else not Read_Seven_Zip_Number (H, P, H'Last, Num_Cod)
-                 or else Num_Cod not in 1 | 2
-               then
-                  return No_Bytes;
-               end if;
-
-               --  First coder.
-               if not Seven_Zip_Read_Byte (H, P, H'Last, B) then
-                  return No_Bytes;
-               end if;
-               if (B and 16#0F#) = 1 and then B = 16#01# then
-                  if not Seven_Zip_Expect_Byte (H, P, H'Last, 0) then
-                     return No_Bytes;
-                  end if;
-                  Is_Copy := True;
-               elsif (B and 16#0F#) = 3
-                 and then Seven_Zip_Expect_Byte (H, P, H'Last, 16#03#)
-                 and then Seven_Zip_Expect_Byte (H, P, H'Last, 16#01#)
-                 and then Seven_Zip_Expect_Byte (H, P, H'Last, 16#01#)
-                 and then Seven_Zip_Expect_Byte (H, P, H'Last, 5)
-               then
-                  for J in LZMA_P'Range loop
-                     if not Seven_Zip_Read_Byte (H, P, H'Last, LZMA_P (J)) then
-                        return No_Bytes;
-                     end if;
-                  end loop;
-                  Is_LZMA := True;
-               elsif (B and 16#0F#) = 4
-                 and then Seven_Zip_Expect_Byte (H, P, H'Last, 16#06#)
-                 and then Seven_Zip_Expect_Byte (H, P, H'Last, 16#F1#)
-                 and then Seven_Zip_Expect_Byte (H, P, H'Last, 16#07#)
-                 and then Seven_Zip_Expect_Byte (H, P, H'Last, 16#01#)
-               then
-                  Is_AES := True;
-                  declare
-                     Prop_Size : Interfaces.Unsigned_64 := 0;
-                  begin
-                     if not Read_Seven_Zip_Number (H, P, H'Last, Prop_Size)
-                       or else Prop_Size < 1
-                       or else not Seven_Zip_Has_Bytes
-                         (P, H'Last, Natural (Prop_Size))
-                     then
-                        return No_Bytes;
-                     end if;
-                     declare
-                        PB : Byte_Array (1 .. Natural (Prop_Size));
-                        B0, B1, PP : Natural := 0;
-                     begin
-                        for J in PB'Range loop
-                           PB (J) := H (P);
-                           P := P + 1;
-                        end loop;
-                        B0 := Natural (PB (1));
-                        Cycles := B0 mod 64;
-                        if (B0 / 64) /= 0 and then Natural (Prop_Size) >= 2 then
-                           B1 := Natural (PB (2));
-                           PP := 3;
-                        else
-                           PP := 2;
-                        end if;
-                        Salt_Len := ((B0 / 128) mod 2) + (B1 / 16);
-                        IV_Len := ((B0 / 64) mod 2) + (B1 mod 16);
-                        if Salt_Len > 16 or else IV_Len > 16
-                          or else Natural (Prop_Size) <
-                            (PP - 1) + Salt_Len + IV_Len
-                        then
-                           return No_Bytes;
-                        end if;
-                        for J in 1 .. Salt_Len loop
-                           Salt (J) := PB (PP + J - 1);
-                        end loop;
-                        for J in 1 .. IV_Len loop
-                           IV (J) := PB (PP + Salt_Len + J - 1);
-                        end loop;
-                     end;
-                  end;
-               else
-                  return No_Bytes;
-               end if;
-
-               if Num_Cod = 2 then
-                  --  Second coder is LZMA (AES + LZMA header chain).
-                  if not Seven_Zip_Expect_Byte (H, P, H'Last, 16#23#)
-                    or else not Seven_Zip_Expect_Byte (H, P, H'Last, 16#03#)
-                    or else not Seven_Zip_Expect_Byte (H, P, H'Last, 16#01#)
-                    or else not Seven_Zip_Expect_Byte (H, P, H'Last, 16#01#)
-                    or else not Seven_Zip_Expect_Byte (H, P, H'Last, 5)
-                  then
-                     return No_Bytes;
-                  end if;
-                  for J in LZMA_P'Range loop
-                     if not Seven_Zip_Read_Byte (H, P, H'Last, LZMA_P (J)) then
-                        return No_Bytes;
-                     end if;
-                  end loop;
-                  Is_LZMA := True;
-                  if not Read_Seven_Zip_Number (H, P, H'Last, V) or else V /= 1
-                    or else not Read_Seven_Zip_Number (H, P, H'Last, V)
-                    or else V /= 0
-                  then
-                     return No_Bytes;
-                  end if;
-               end if;
-
-               if not Seven_Zip_Expect_Byte (H, P, H'Last, 16#0C#)
-                 or else not Read_Seven_Zip_Number (H, P, H'Last, HC_Size)
-               then
-                  return No_Bytes;
-               end if;
-               if Num_Cod = 2 then
-                  if not Read_Seven_Zip_Number (H, P, H'Last, Hdr_Size) then
-                     return No_Bytes;
-                  end if;
-               else
-                  Hdr_Size := HC_Size;
-               end if;
-
-               if Pack_Pos > Interfaces.Unsigned_64 (Natural'Last)
-                 or else Pack_Size > Interfaces.Unsigned_64 (Natural'Last)
-                 or else Base + Natural (Pack_Pos) + Natural (Pack_Size) - 1 >
-                   Archive_Image'Last
-               then
-                  return No_Bytes;
-               end if;
-
-               declare
-                  Pack : constant Byte_Array :=
-                    Archive_Image
-                      (Base + Natural (Pack_Pos) ..
-                       Base + Natural (Pack_Pos) + Natural (Pack_Size) - 1);
-                  DS   : Status_Code := Ok;
-               begin
-                  if Is_AES then
-                     if US.Length (Active_Seven_Zip_Password) = 0 then
-                        return No_Bytes;
-                     end if;
-                     declare
-                        Dec : constant Byte_Array :=
-                          Zlib.Seven_Zip_AES.Decrypt_CBC
-                            (Zlib.Seven_Zip_AES.Derive_Key
-                               (US.To_String (Active_Seven_Zip_Password),
-                                Salt (1 .. Salt_Len), Cycles),
-                             IV, Pack);
-                     begin
-                        if Natural (HC_Size) > Dec'Length then
-                           return No_Bytes;
-                        end if;
-                        if Num_Cod = 2 then
-                           return LZMA_Decode_Raw_Encoded_Header
-                             (Dec (Dec'First .. Dec'First + Natural (HC_Size) - 1),
-                              LZMA_P, Natural (Hdr_Size), DS);
-                        else
-                           return Dec (Dec'First ..
-                                       Dec'First + Natural (HC_Size) - 1);
-                        end if;
-                     end;
-                  elsif Is_LZMA then
-                     return LZMA_Decode_Raw_Encoded_Header
-                       (Pack, LZMA_P, Natural (Hdr_Size), DS);
-                  elsif Is_Copy then
-                     return Pack;
-                  else
-                     return No_Bytes;
-                  end if;
-               end;
-            end;
-         end;
-      end Plain_Header;
-
-      Header : constant Byte_Array := Plain_Header;
    begin
-      Status := Unsupported_Method;
-      if Archive_Image'Length < 32
-        or else Archive_Image (Archive_Image'First) /= 16#37#
-        or else Archive_Image (Archive_Image'First + 1) /= 16#7A#
-      then
-         Status := Invalid_Header;
-         return No;
-      end if;
-      if Header'Length = 0 or else Header (Header'First) /= 16#01# then
-         Status := Unsupported_Method;
-         return No;
-      end if;
-
-      --  Walk the plain header. Collect substream sizes/CRCs and file records.
-      declare
-         P : Natural := Header'First + 1;  --  past kHeader
-
-         Max_Sub : constant Natural := 4096;
-         Sub_Size : array (1 .. Max_Sub) of Interfaces.Unsigned_64 :=
-           [others => 0];
-         Sub_CRC  : array (1 .. Max_Sub) of Interfaces.Unsigned_32 :=
-           [others => 0];
-         Sub_Count : Natural := 0;
-
-         Max_Fold : constant Natural := 4096;
-         Folder_Size  : array (1 .. Max_Fold) of Interfaces.Unsigned_64 :=
-           [others => 0];
-         Folder_CRC_Def : array (1 .. Max_Fold) of Boolean := [others => False];
-         Num_Folders : Natural := 0;
-
-         procedure Skip_Number is
-            Dummy : Interfaces.Unsigned_64 := 0;
-            Ok_N  : constant Boolean :=
-              Read_Seven_Zip_Number (Header, P, Header'Last, Dummy);
-         begin
-            if not Ok_N then
-               raise Constraint_Error;
-            end if;
-         end Skip_Number;
-
-         function Num return Interfaces.Unsigned_64 is
-            R : Interfaces.Unsigned_64 := 0;
-         begin
-            if not Read_Seven_Zip_Number (Header, P, Header'Last, R) then
-               raise Constraint_Error;
-            end if;
-            return R;
-         end Num;
-      begin
-         --  Optional MainStreamsInfo.
-         if P <= Header'Last and then Header (P) = 16#04# then
-            P := P + 1;
-            --  PackInfo (0x06): skip to its kEnd.
-            if P <= Header'Last and then Header (P) = 16#06# then
-               P := P + 1;
-               Skip_Number;          --  pack pos
-               declare
-                  NP : constant Natural := Natural (Num);  --  num pack streams
-               begin
-                  loop
-                     exit when P > Header'Last or else Header (P) = 0;
-                     if Header (P) = 16#09# then
-                        P := P + 1;
-                        for K in 1 .. NP loop
-                           Skip_Number;
-                        end loop;
-                     elsif Header (P) = 16#0A# then
-                        P := P + 1;
-                        --  digests: AllDefined byte + CRCs
-                        declare
-                           All_Def : constant Byte := Header (P);
-                        begin
-                           P := P + 1;
-                           for K in 1 .. NP loop
-                              if All_Def /= 0 then
-                                 P := P + 4;
-                              end if;
-                           end loop;
-                        end;
-                     else
-                        exit;
-                     end if;
-                  end loop;
-               end;
-               if P <= Header'Last and then Header (P) = 0 then
-                  P := P + 1;
-               end if;
-            end if;
-
-            --  UnPackInfo (0x07).
-            if P <= Header'Last and then Header (P) = 16#07# then
-               P := P + 1;
-               if P <= Header'Last and then Header (P) = 16#0B# then
-                  P := P + 1;
-                  Num_Folders := Natural (Num);
-                  declare
-                     External : constant Byte := Header (P);
-                  begin
-                     P := P + 1;
-                     if External /= 0 then
-                        Status := Unsupported_Method;
-                        return No;
-                     end if;
-                  end;
-                  --  Parse each folder's coders to learn its out-stream count.
-                  declare
-                     Out_Per : array (1 .. Max_Fold) of Natural :=
-                       [others => 1];
-                  begin
-                     for F in 1 .. Num_Folders loop
-                        declare
-                           NC : constant Natural := Natural (Num);
-                           Tot_In, Tot_Out : Natural := 0;
-                        begin
-                           for C in 1 .. NC loop
-                              declare
-                                 Flag : constant Byte := Header (P);
-                                 ID_Sz : constant Natural :=
-                                   Natural (Flag and 16#0F#);
-                              begin
-                                 P := P + 1 + ID_Sz;
-                                 if (Flag and 16#10#) /= 0 then
-                                    Tot_In := Tot_In + Natural (Num);
-                                    Tot_Out := Tot_Out + Natural (Num);
-                                 else
-                                    Tot_In := Tot_In + 1;
-                                    Tot_Out := Tot_Out + 1;
-                                 end if;
-                                 if (Flag and 16#20#) /= 0 then
-                                    declare
-                                       PS : constant Natural := Natural (Num);
-                                    begin
-                                       P := P + PS;
-                                    end;
-                                 end if;
-                              end;
-                           end loop;
-                           if F <= Max_Fold then
-                              Out_Per (F) := Tot_Out;
-                           end if;
-                           --  Bind pairs (Tot_Out - 1) then packed indices.
-                           for K in 1 .. Tot_Out - 1 loop
-                              Skip_Number;  --  in index
-                              Skip_Number;  --  out index
-                           end loop;
-                           declare
-                              NPacked : constant Natural :=
-                                Tot_In - (Tot_Out - 1);
-                           begin
-                              if NPacked > 1 then
-                                 for K in 1 .. NPacked loop
-                                    Skip_Number;
-                                 end loop;
-                              end if;
-                           end;
-                        end;
-                     end loop;
-                     --  CodersUnPackSize (0x0C): one size per out stream of
-                     --  every folder; the folder size is its last out stream.
-                     if not Seven_Zip_Expect_Byte (Header, P, Header'Last, 16#0C#)
-                     then
-                        Status := Unsupported_Method;
-                        return No;
-                     end if;
-                     for F in 1 .. Num_Folders loop
-                        declare
-                           Last_Size : Interfaces.Unsigned_64 := 0;
-                        begin
-                           for K in 1 .. Out_Per (F) loop
-                              Last_Size := Num;
-                           end loop;
-                           if F <= Max_Fold then
-                              Folder_Size (F) := Last_Size;
-                           end if;
-                        end;
-                     end loop;
-                  end;
-                  --  Optional folder CRCs (0x0A).
-                  if P <= Header'Last and then Header (P) = 16#0A# then
-                     P := P + 1;
-                     declare
-                        All_Def : constant Byte := Header (P);
-                     begin
-                        P := P + 1;
-                        for F in 1 .. Num_Folders loop
-                           if All_Def /= 0 then
-                              if F <= Max_Fold then
-                                 Folder_CRC_Def (F) := True;
-                              end if;
-                              P := P + 4;
-                           end if;
-                        end loop;
-                     end;
-                  end if;
-                  if P <= Header'Last and then Header (P) = 0 then
-                     P := P + 1;  --  end UnPackInfo
-                  end if;
-               end if;
-            end if;
-
-            --  Per-folder substream counts default to 1.
-            declare
-               Streams_Per : array (1 .. Max_Fold) of Natural :=
-                 [others => 1];
-            begin
-               if P <= Header'Last and then Header (P) = 16#08# then
-                  P := P + 1;  --  SubStreamsInfo
-                  if P <= Header'Last and then Header (P) = 16#0D# then
-                     P := P + 1;
-                     for F in 1 .. Num_Folders loop
-                        Streams_Per (F) := Natural (Num);
-                     end loop;
-                  end if;
-                  --  Sizes (0x09): for folders with >1 stream, all but last.
-                  if P <= Header'Last and then Header (P) = 16#09# then
-                     P := P + 1;
-                     for F in 1 .. Num_Folders loop
-                        declare
-                           Sum : Interfaces.Unsigned_64 := 0;
-                        begin
-                           for K in 1 .. Streams_Per (F) - 1 loop
-                              declare
-                                 S : constant Interfaces.Unsigned_64 := Num;
-                              begin
-                                 Sum := Sum + S;
-                                 Sub_Count := Sub_Count + 1;
-                                 if Sub_Count <= Max_Sub then
-                                    Sub_Size (Sub_Count) := S;
-                                 end if;
-                              end;
-                           end loop;
-                           Sub_Count := Sub_Count + 1;  --  last stream
-                           if Sub_Count <= Max_Sub then
-                              Sub_Size (Sub_Count) :=
-                                (if Folder_Size (F) >= Sum
-                                 then Folder_Size (F) - Sum else 0);
-                           end if;
-                        end;
-                     end loop;
-                  else
-                     --  No explicit sizes: each folder is one substream.
-                     for F in 1 .. Num_Folders loop
-                        for K in 1 .. Streams_Per (F) loop
-                           Sub_Count := Sub_Count + 1;
-                           if Sub_Count <= Max_Sub and then K = 1 then
-                              Sub_Size (Sub_Count) := Folder_Size (F);
-                           end if;
-                        end loop;
-                     end loop;
-                  end if;
-                  --  CRCs (0x0A): digests for streams lacking a folder CRC.
-                  if P <= Header'Last and then Header (P) = 16#0A# then
-                     P := P + 1;
-                     declare
-                        All_Def : constant Byte := Header (P);
-                     begin
-                        P := P + 1;
-                        for I in 1 .. Sub_Count loop
-                           if All_Def /= 0 then
-                              if Seven_Zip_Has_Bytes (P, Header'Last, 4) then
-                                 Sub_CRC (I) := Seven_Zip_U32_At (Header, P);
-                                 P := P + 4;
-                              end if;
-                           end if;
-                        end loop;
-                     end;
-                  end if;
-                  --  consume to SubStreamsInfo kEnd
-                  while P <= Header'Last and then Header (P) /= 0 loop
-                     P := P + 1;
-                  end loop;
-                  if P <= Header'Last then
-                     P := P + 1;
-                  end if;
-               else
-                  --  No SubStreamsInfo: one substream per folder.
-                  for F in 1 .. Num_Folders loop
-                     Sub_Count := Sub_Count + 1;
-                     if Sub_Count <= Max_Sub then
-                        Sub_Size (Sub_Count) := Folder_Size (F);
-                     end if;
-                  end loop;
-               end if;
-            end;
-
-            if P <= Header'Last and then Header (P) = 0 then
-               P := P + 1;  --  end MainStreamsInfo
-            end if;
-         end if;
-
-         --  FilesInfo (0x05).
-         if P > Header'Last or else Header (P) /= 16#05# then
-            Status := Unsupported_Method;
-            return No;
-         end if;
-         P := P + 1;
-         declare
-            File_Count : constant Natural := Natural (Num);
-            Has_Stream : array (1 .. Natural'Max (File_Count, 1)) of Boolean :=
-              [others => True];
-            Is_Dir     : array (1 .. Natural'Max (File_Count, 1)) of Boolean :=
-              [others => False];
-            Names      : array (1 .. Natural'Max (File_Count, 1)) of
-              US.Unbounded_String := [others => US.Null_Unbounded_String];
-            Empty_Seen : Natural := 0;
-         begin
-            if File_Count = 0 or else File_Count > Max_Sub then
-               Status := Unsupported_Method;
-               return No;
-            end if;
-            --  Property loop.
-            loop
-               exit when P > Header'Last or else Header (P) = 0;
-               declare
-                  Prop_Id   : constant Byte := Header (P);
-                  Prop_Size : Interfaces.Unsigned_64 := 0;
-               begin
-                  P := P + 1;
-                  if not Read_Seven_Zip_Number (Header, P, Header'Last, Prop_Size)
-                  then
-                     Status := Unsupported_Method;
-                     return No;
-                  end if;
-                  declare
-                     Prop_First : constant Natural := P;
-                     Prop_Last  : constant Natural :=
-                       P + Natural (Prop_Size) - 1;
-                  begin
-                     if Prop_Last > Header'Last then
-                        Status := Unsupported_Method;
-                        return No;
-                     end if;
-                     case Prop_Id is
-                        when 16#0E# =>  --  kEmptyStream
-                           for I in 1 .. File_Count loop
-                              if Seven_Zip_Bit_Is_Set (Header, Prop_First, I) then
-                                 Has_Stream (I) := False;
-                                 Is_Dir (I) := True;
-                              end if;
-                           end loop;
-                        when 16#0F# =>  --  kEmptyFile
-                           Empty_Seen := 0;
-                           for I in 1 .. File_Count loop
-                              if not Has_Stream (I) then
-                                 Empty_Seen := Empty_Seen + 1;
-                                 if Seven_Zip_Bit_Is_Set
-                                   (Header, Prop_First, Empty_Seen)
-                                 then
-                                    Is_Dir (I) := False;  --  empty file
-                                 end if;
-                              end if;
-                           end loop;
-                        when 16#11# =>  --  kName
-                           declare
-                              NP : Natural := Prop_First + 1;  --  skip external
-                              FI : Natural := 1;
-                           begin
-                              while NP + 1 <= Prop_Last and then FI <= File_Count
-                              loop
-                                 declare
-                                    S : US.Unbounded_String :=
-                                      US.Null_Unbounded_String;
-                                 begin
-                                    while NP + 1 <= Prop_Last
-                                      and then not (Header (NP) = 0
-                                                    and then Header (NP + 1) = 0)
-                                    loop
-                                       US.Append
-                                         (S,
-                                          Character'Val
-                                            (Natural (Header (NP)) +
-                                             Natural (Header (NP + 1)) * 256));
-                                       NP := NP + 2;
-                                    end loop;
-                                    Names (FI) := S;
-                                    NP := NP + 2;
-                                    FI := FI + 1;
-                                 end;
-                              end loop;
-                           end;
-                        when others =>
-                           null;  --  MTime/Attributes/etc. not needed here
-                     end case;
-                     P := Prop_Last + 1;
-                  end;
-               end;
-            end loop;
-
-            --  Build the catalogue, mapping streamed files to substreams.
-            return Result : Archive_Entry_Array (1 .. File_Count) do
-               declare
-                  Sub_Idx : Natural := 0;
-               begin
-                  for I in 1 .. File_Count loop
-                     declare
-                        USz : Interfaces.Unsigned_64 := 0;
-                        Crc : Interfaces.Unsigned_32 := 0;
-                     begin
-                        if Has_Stream (I) then
-                           Sub_Idx := Sub_Idx + 1;
-                           if Sub_Idx <= Sub_Count then
-                              USz := Sub_Size (Sub_Idx);
-                              Crc := Sub_CRC (Sub_Idx);
-                           end if;
-                        end if;
-                        Result (I) :=
-                          (Name              => Names (I),
-                           Is_Directory      => Is_Dir (I),
-                           Compression       => 0,
-                           Uncompressed_Size => USz,
-                           Compressed_Size   => 0,
-                           CRC_32            => Crc);
-                     end;
-                  end loop;
-                  Status := Ok;
-               end;
-            end return;
-         end;
-      end;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return No;
+      return List_Seven_Zip_Entries_With_Password (Archive_Image, "", Status);
    end List_Seven_Zip_Entries;
 
    procedure Extract_Archive_To_Directory
@@ -15935,76 +8203,47 @@ package body Zlib is
       Status          : out Status_Code)
    is
       Is_7z : constant Boolean :=
-        Archive_Image'Length >= 6
-        and then Archive_Image (Archive_Image'First) = 16#37#
-        and then Archive_Image (Archive_Image'First + 1) = 16#7A#
-        and then Archive_Image (Archive_Image'First + 2) = 16#BC#
-        and then Archive_Image (Archive_Image'First + 3) = 16#AF#;
-   begin
-      Status := Unsupported_Method;
-      if Is_7z then
-         Active_Seven_Zip_Password := US.To_Unbounded_String (Password);
-      end if;
-      declare
-         List_Status : Status_Code := Ok;
-         Entries     : constant Archive_Entry_Array :=
-           (if Is_7z then List_Seven_Zip_Entries (Archive_Image, List_Status)
-            else List_ZIP_Entries (Archive_Image, List_Status));
-      begin
-         Active_Seven_Zip_Password := US.Null_Unbounded_String;
-         if List_Status /= Ok then
-            Status := List_Status;
-            return;
-         end if;
+        Zlib.Seven_Zip_Container.Has_Archive_Signature (Archive_Image);
 
-         for E of Entries loop
-            declare
-               Name : constant String := US.To_String (E.Name);
-               Rel  : constant String :=
-                 (if Name'Length > 0 and then Name (Name'Last) = '/'
-                  then Name (Name'First .. Name'Last - 1) else Name);
-            begin
-               --  Reject unsafe paths (absolute, "..", drive, backslash).
-               if Rel'Length = 0 or else not Safe_ZIP_Entry_Name (Rel) then
-                  Status := Unsupported_Method;
-                  return;
-               end if;
-               declare
-                  Target : constant String := Destination_Dir & "/" & Rel;
-               begin
-                  if E.Is_Directory then
-                     Ada.Directories.Create_Path (Target);
-                  else
-                     Ada.Directories.Create_Path
-                       (Ada.Directories.Containing_Directory (Target));
-                     declare
-                        XS   : Status_Code := Ok;
-                        Data : constant Byte_Array :=
-                          (if Is_7z
-                           then Extract_Seven_Zip
-                                  (Archive_Image, Name, Password, XS)
-                           else Extract_ZIP (Archive_Image, Name, XS));
-                        WS   : Status_Code := Ok;
-                     begin
-                        if XS /= Ok then
-                           Status := XS;
-                           return;
-                        end if;
-                        Write_File (Target, Data, WS);
-                        if WS /= Ok then
-                           Status := WS;
-                           return;
-                        end if;
-                     end;
-                  end if;
-               end;
-            end;
-         end loop;
-         Status := Ok;
-      end;
+      function List_Seven_Zip_With_Password
+        (Image       : Byte_Array;
+         Password_In : String;
+         Status      : out Status_Code) return Archive_Entry_Array
+      is
+         No : constant Archive_Entry_Array (1 .. 0) :=
+           [others => (others => <>)];
+      begin
+         return List_Seven_Zip_Entries_With_Password (Image, Password_In, Status);
+      exception
+         when others =>
+            Status := Unsupported_Method;
+            return No;
+      end List_Seven_Zip_With_Password;
+
+      function Extract_Seven_Zip_With_Password
+        (Image       : Byte_Array;
+         Entry_Name  : String;
+         Password_In : String;
+         Status      : out Status_Code) return Byte_Array
+      is
+      begin
+         return Extract_Seven_Zip (Image, Entry_Name, Password_In, Status);
+      end Extract_Seven_Zip_With_Password;
+   begin
+      Zlib.Archive_Directory_Extraction.Extract_To_Directory
+        (Archive_Image       => Archive_Image,
+         Destination_Dir     => Destination_Dir,
+         Password            => Password,
+         Is_Seven_Zip        => Is_7z,
+         List_Seven_Zip      => List_Seven_Zip_With_Password'Access,
+         List_ZIP            => List_ZIP_Entries'Access,
+         Extract_Seven_Zip   => Extract_Seven_Zip_With_Password'Access,
+         Extract_ZIP         => Extract_ZIP'Access,
+         Safe_Entry_Name     => Safe_ZIP_Entry_Name'Access,
+         Write_File          => Write_File'Access,
+         Status              => Status);
    exception
       when others =>
-         Active_Seven_Zip_Password := US.Null_Unbounded_String;
          Status := Unsupported_Method;
    end Extract_Archive_To_Directory;
 
@@ -16014,15 +8253,10 @@ package body Zlib is
       Password        : String;
       Status          : out Status_Code)
    is
-      Read_Status : Status_Code := Ok;
-      Image       : constant Byte_Array := Read_File (Archive_Path, Read_Status);
    begin
-      if Read_Status /= Ok then
-         Status := Read_Status;
-         return;
-      end if;
-      Extract_Archive_To_Directory
-        (Image, Destination_Dir, Password, Status);
+      Zlib.Archive_Directory_Extraction.Extract_File_To_Directory
+        (Archive_Path, Destination_Dir, Password, Read_File'Access,
+         Extract_Archive_To_Directory'Access, Status);
    end Extract_Archive_File_To_Directory;
 
    function List_Archive_Entries
@@ -16031,271 +8265,84 @@ package body Zlib is
       Status        : out Status_Code) return Archive_Entry_Array
    is
       Is_7z : constant Boolean :=
-        Archive_Image'Length >= 6
-        and then Archive_Image (Archive_Image'First) = 16#37#
-        and then Archive_Image (Archive_Image'First + 1) = 16#7A#
-        and then Archive_Image (Archive_Image'First + 2) = 16#BC#
-        and then Archive_Image (Archive_Image'First + 3) = 16#AF#;
+        Zlib.Seven_Zip_Container.Has_Archive_Signature (Archive_Image);
+
+      function List_Seven_Zip_With_Password
+        (Image       : Byte_Array;
+         Password_In : String;
+         Status      : out Status_Code) return Archive_Entry_Array
+      is
+         No : constant Archive_Entry_Array (1 .. 0) :=
+           [others => (others => <>)];
+      begin
+         return List_Seven_Zip_Entries_With_Password (Image, Password_In, Status);
+      exception
+         when others =>
+            Status := Unsupported_Method;
+            return No;
+      end List_Seven_Zip_With_Password;
    begin
-      if Is_7z then
-         Active_Seven_Zip_Password := US.To_Unbounded_String (Password);
-         return R : constant Archive_Entry_Array :=
-           List_Seven_Zip_Entries (Archive_Image, Status)
-         do
-            Active_Seven_Zip_Password := US.Null_Unbounded_String;
-         end return;
-      else
-         return List_ZIP_Entries (Archive_Image, Status);
-      end if;
+      return
+        Zlib.Archive_Listing.List_Entries
+          (Archive_Image, Password, Is_7z, List_Seven_Zip_With_Password'Access,
+           List_ZIP_Entries'Access, Status);
    end List_Archive_Entries;
+
+   function Extract_Seven_Zip_File_Callback
+     (Archive      : Byte_Array;
+      Entry_Name   : String;
+      Status       : out Status_Code;
+      Is_Directory : out Boolean;
+      Metadata     : out Seven_Zip_Entry_Metadata) return Byte_Array;
 
    function Extract_Seven_Zip_Metadata
      (Archive_Image : Byte_Array;
       Entry_Name    : String;
       Status        : out Status_Code) return Seven_Zip_Entry_Metadata
    is
-      Kind     : Seven_Zip_Entry_Kind := Seven_Zip_File_Entry;
-      Metadata : Seven_Zip_Entry_Metadata := No_Seven_Zip_Entry_Metadata;
-      Payload  : constant Byte_Array :=
-        Extract_Seven_Zip_Entry
-          (Archive_Image, Entry_Name, Status, Kind, Metadata);
-      pragma Unreferenced (Payload);
    begin
-      if Status /= Ok then
-         return No_Seven_Zip_Entry_Metadata;
-      end if;
-
-      Metadata.Is_Directory := Kind = Seven_Zip_Directory_Entry;
-      return Metadata;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return No_Seven_Zip_Entry_Metadata;
+      return
+        Zlib.Seven_Zip_File_Extraction.Extract_Metadata
+          (Archive_Image, Entry_Name, Extract_Seven_Zip_File_Callback'Access,
+           Status);
    end Extract_Seven_Zip_Metadata;
+
+   function Extract_Seven_Zip_File_Callback
+     (Archive      : Byte_Array;
+      Entry_Name   : String;
+      Status       : out Status_Code;
+      Is_Directory : out Boolean;
+      Metadata     : out Seven_Zip_Entry_Metadata) return Byte_Array
+   is
+      Entry_Kind : Seven_Zip_Entry_Kind := Seven_Zip_File_Entry;
+      Payload    : constant Byte_Array :=
+        Extract_Seven_Zip_Entry (Archive, Entry_Name, "", Status, Entry_Kind, Metadata);
+   begin
+      Is_Directory := Entry_Kind = Seven_Zip_Directory_Entry;
+      return Payload;
+   end Extract_Seven_Zip_File_Callback;
 
    procedure Extract_Seven_Zip_Stored_File
      (Input_Path  : String;
       Output_Path : String;
       Entry_Name  : String;
-      Status      : out Status_Code)
-   is
-      Read_Status  : Status_Code := Ok;
-      Write_Status : Status_Code := Ok;
+      Status      : out Status_Code) is
    begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return;
-      end if;
-      if not Seven_Zip_Output_File_Writable (Output_Path) then
-         Status := Output_File_Error;
-         return;
-      end if;
-
-      declare
-         Archive : constant Byte_Array := Read_File (Input_Path, Read_Status);
-      begin
-         if Read_Status /= Ok then
-            Status := Read_Status;
-            return;
-         end if;
-
-         declare
-            Entry_Kind : Seven_Zip_Entry_Kind := Seven_Zip_File_Entry;
-            Metadata : Seven_Zip_Entry_Metadata;
-            Payload : constant Byte_Array :=
-              Extract_Seven_Zip_Entry
-                (Archive, Entry_Name, Status, Entry_Kind, Metadata);
-         begin
-            if Status /= Ok then
-               return;
-            end if;
-
-            if Entry_Kind = Seven_Zip_Directory_Entry then
-               begin
-                  Ada.Directories.Create_Path
-                    (Ada.Directories.Containing_Directory (Output_Path));
-                  Ada.Directories.Create_Path (Output_Path);
-               exception
-                  when others =>
-                     Status := Output_File_Error;
-                     return;
-               end;
-
-               Seven_Zip_Apply_Metadata (Output_Path, Metadata);
-               Status := Ok;
-               return;
-            end if;
-
-            begin
-               Ada.Directories.Create_Path
-                 (Ada.Directories.Containing_Directory (Output_Path));
-            exception
-               when others =>
-                  Status := Output_File_Error;
-                  return;
-            end;
-
-            Write_File (Output_Path, Payload, Write_Status);
-            if Write_Status /= Ok then
-               Status := Write_Status;
-               return;
-            end if;
-
-            Seven_Zip_Apply_Metadata (Output_Path, Metadata);
-            Status := Ok;
-         end;
-      end;
-   exception
-      when others =>
-         Status := Output_File_Error;
+      Zlib.Seven_Zip_File_Extraction.Extract_File
+        (Input_Path, Output_Path, Entry_Name, Read_File'Access,
+         Write_File'Access, Extract_Seven_Zip_File_Callback'Access, Status);
    end Extract_Seven_Zip_Stored_File;
 
    procedure Extract_Seven_Zip_File
      (Input_Path  : String;
       Output_Path : String;
       Entry_Name  : String;
-      Status      : out Status_Code)
-   is
-      Read_Status  : Status_Code := Ok;
-      Write_Status : Status_Code := Ok;
+      Status      : out Status_Code) is
    begin
-      Status := Unsupported_Method;
-      if not Seven_Zip_Entry_Name_Valid (Entry_Name) then
-         return;
-      end if;
-      if not Seven_Zip_Output_File_Writable (Output_Path) then
-         Status := Output_File_Error;
-         return;
-      end if;
-
-      declare
-         Archive : constant Byte_Array := Read_File (Input_Path, Read_Status);
-      begin
-         if Read_Status /= Ok then
-            Status := Read_Status;
-            return;
-         end if;
-
-         declare
-            Entry_Kind : Seven_Zip_Entry_Kind := Seven_Zip_File_Entry;
-            Metadata : Seven_Zip_Entry_Metadata;
-            Payload : constant Byte_Array :=
-              Extract_Seven_Zip_Entry
-                (Archive, Entry_Name, Status, Entry_Kind, Metadata);
-         begin
-            if Status /= Ok then
-               return;
-            end if;
-
-            if Entry_Kind = Seven_Zip_Directory_Entry then
-               begin
-                  Ada.Directories.Create_Path
-                    (Ada.Directories.Containing_Directory (Output_Path));
-                  Ada.Directories.Create_Path (Output_Path);
-               exception
-                  when others =>
-                     Status := Output_File_Error;
-                     return;
-               end;
-
-               Seven_Zip_Apply_Metadata (Output_Path, Metadata);
-               Status := Ok;
-               return;
-            end if;
-
-            begin
-               Ada.Directories.Create_Path
-                 (Ada.Directories.Containing_Directory (Output_Path));
-            exception
-               when others =>
-                  Status := Output_File_Error;
-                  return;
-            end;
-
-            Write_File (Output_Path, Payload, Write_Status);
-            if Write_Status /= Ok then
-               Status := Write_Status;
-               return;
-            end if;
-
-            Seven_Zip_Apply_Metadata (Output_Path, Metadata);
-            Status := Ok;
-         end;
-      end;
-   exception
-      when others =>
-         Status := Output_File_Error;
+      Zlib.Seven_Zip_File_Extraction.Extract_File
+        (Input_Path, Output_Path, Entry_Name, Read_File'Access,
+         Write_File'Access, Extract_Seven_Zip_File_Callback'Access, Status);
    end Extract_Seven_Zip_File;
-
-   function Safe_Seven_Zip_Output_Name (Entry_Name : String) return Boolean is
-      Segment_Length : Natural := 0;
-      Segment_Start  : Natural := Entry_Name'First;
-
-      function Segment_Is_Dot return Boolean is
-      begin
-         return Segment_Length = 1
-           and then Entry_Name (Segment_Start) = '.';
-      end Segment_Is_Dot;
-
-      function Segment_Is_Dot_Dot return Boolean is
-      begin
-         return Segment_Length = 2
-           and then Entry_Name (Segment_Start) = '.'
-           and then Entry_Name (Segment_Start + 1) = '.';
-      end Segment_Is_Dot_Dot;
-
-      function Finish_Segment return Boolean is
-      begin
-         return Segment_Length > 0
-           and then not Segment_Is_Dot
-           and then not Segment_Is_Dot_Dot;
-      end Finish_Segment;
-   begin
-      if Entry_Name'Length = 0
-        or else Contains_NUL (Entry_Name)
-        or else Entry_Name (Entry_Name'First) = '/'
-      then
-         return False;
-      end if;
-
-      for I in Entry_Name'Range loop
-         case Entry_Name (I) is
-            when '/' =>
-               if not Finish_Segment then
-                  return False;
-               end if;
-               Segment_Length := 0;
-               Segment_Start := I + 1;
-            when '\' | ':' =>
-               return False;
-            when others =>
-               Segment_Length := Segment_Length + 1;
-         end case;
-      end loop;
-
-      return Finish_Segment
-        or else (Entry_Name (Entry_Name'Last) = '/'
-                 and then Segment_Length = 0);
-   exception
-      when others =>
-         return False;
-   end Safe_Seven_Zip_Output_Name;
-
-   function Seven_Zip_Output_Path
-     (Output_Dir : String;
-      Entry_Name : String) return String
-   is
-      Raw : constant String :=
-        (if Output_Dir'Length > 0 and then Output_Dir (Output_Dir'Last) = '/'
-         then Output_Dir & Entry_Name
-         else Output_Dir & "/" & Entry_Name);
-   begin
-      if Raw'Length > 1 and then Raw (Raw'Last) = '/' then
-         return Raw (Raw'First .. Raw'Last - 1);
-      end if;
-
-      return Raw;
-   end Seven_Zip_Output_Path;
 
    procedure Extract_Seven_Zip_Files_Impl
      (Input_Path   : String;
@@ -16303,180 +8350,10 @@ package body Zlib is
       Entry_Names  : Text_Array;
       Status       : out Status_Code)
    is
-      Read_Status  : Status_Code := Ok;
-      Write_Status : Status_Code := Ok;
-      type Payload_Vector_Array is array (Positive range <>) of Byte_Vectors.Vector;
-      type Entry_Kind_Array is array (Positive range <>) of Seven_Zip_Entry_Kind;
    begin
-      Status := Unsupported_Method;
-
-      if Output_Dir'Length = 0 or else Entry_Names'Length = 0 then
-         return;
-      end if;
-
-      for Offset in 0 .. Entry_Names'Length - 1 loop
-         declare
-            Entry_Name : constant String :=
-              US.To_String (Entry_Names (Entry_Names'First + Offset));
-         begin
-            if not Safe_Seven_Zip_Output_Name (Entry_Name) then
-               return;
-            end if;
-
-            if Offset > 0 then
-               for Previous_Offset in 0 .. Offset - 1 loop
-                  if Entry_Name =
-                    US.To_String
-                      (Entry_Names (Entry_Names'First + Previous_Offset))
-                  then
-                     return;
-                  end if;
-               end loop;
-            end if;
-         end;
-      end loop;
-
-      if not Seven_Zip_Output_Directory_Writable (Output_Dir) then
-         Status := Output_File_Error;
-         return;
-      end if;
-
-      declare
-         Archive : constant Byte_Array := Read_File (Input_Path, Read_Status);
-      begin
-         if Read_Status /= Ok then
-            Status := Read_Status;
-            return;
-         end if;
-
-         declare
-            Payloads : Payload_Vector_Array (1 .. Entry_Names'Length);
-            Entry_Kinds : Entry_Kind_Array (1 .. Entry_Names'Length) :=
-              [others => Seven_Zip_File_Entry];
-            Entry_Metadata : array (1 .. Entry_Names'Length)
-              of Seven_Zip_Entry_Metadata :=
-                [others => No_Seven_Zip_Entry_Metadata];
-         begin
-            for Offset in 0 .. Entry_Names'Length - 1 loop
-               declare
-                  Entry_Name : constant String :=
-                    US.To_String (Entry_Names (Entry_Names'First + Offset));
-                  Entry_Kind : Seven_Zip_Entry_Kind := Seven_Zip_File_Entry;
-                  Metadata : Seven_Zip_Entry_Metadata;
-                  Payload : constant Byte_Array :=
-                    Extract_Seven_Zip_Entry
-                      (Archive, Entry_Name, Status, Entry_Kind, Metadata);
-               begin
-                  if Status /= Ok then
-                     return;
-                  end if;
-
-                  Entry_Kinds (Offset + 1) := Entry_Kind;
-                  Entry_Metadata (Offset + 1) := Metadata;
-                  for B of Payload loop
-                     Payloads (Offset + 1).Append (B);
-                  end loop;
-               end;
-            end loop;
-
-            begin
-               Ada.Directories.Create_Path (Output_Dir);
-            exception
-               when others =>
-                  Status := Output_File_Error;
-                  return;
-            end;
-
-            for Offset in 0 .. Entry_Names'Length - 1 loop
-               declare
-                  Entry_Name : constant String :=
-                    US.To_String (Entry_Names (Entry_Names'First + Offset));
-                  Output_Path : constant String :=
-                    Seven_Zip_Output_Path (Output_Dir, Entry_Name);
-                  Parent_Path : constant String :=
-                    Ada.Directories.Containing_Directory (Output_Path);
-               begin
-                  begin
-                     if Ada.Directories.Exists (Output_Path)
-                       and then
-                        Ada.Directories.Kind (Output_Path) =
-                           Ada.Directories.Directory
-                       and then Entry_Kinds (Offset + 1) /=
-                         Seven_Zip_Directory_Entry
-                     then
-                        Status := Output_File_Error;
-                        return;
-                     end if;
-
-                     if Ada.Directories.Exists (Parent_Path)
-                       and then
-                         Ada.Directories.Kind (Parent_Path) /=
-                           Ada.Directories.Directory
-                     then
-                        Status := Output_File_Error;
-                        return;
-                     end if;
-                  exception
-                     when others =>
-                        Status := Output_File_Error;
-                        return;
-                  end;
-               end;
-            end loop;
-
-            for Offset in 0 .. Entry_Names'Length - 1 loop
-               declare
-                  Entry_Name : constant String :=
-                    US.To_String (Entry_Names (Entry_Names'First + Offset));
-               begin
-                  declare
-                     Output_Path : constant String :=
-                       Seven_Zip_Output_Path (Output_Dir, Entry_Name);
-                     Payload : constant Byte_Array :=
-                       To_Byte_Array (Payloads (Offset + 1));
-                  begin
-                     if Entry_Kinds (Offset + 1) =
-                       Seven_Zip_Directory_Entry
-                     then
-                        begin
-                           Ada.Directories.Create_Path (Output_Path);
-                        exception
-                           when others =>
-                              Status := Output_File_Error;
-                              return;
-                        end;
-                        Seven_Zip_Apply_Metadata
-                          (Output_Path, Entry_Metadata (Offset + 1));
-                     else
-                        begin
-                           Ada.Directories.Create_Path
-                             (Ada.Directories.Containing_Directory
-                                (Output_Path));
-                        exception
-                           when others =>
-                              Status := Output_File_Error;
-                              return;
-                        end;
-
-                        Write_File (Output_Path, Payload, Write_Status);
-                        if Write_Status /= Ok then
-                           Status := Write_Status;
-                           return;
-                        end if;
-
-                        Seven_Zip_Apply_Metadata
-                          (Output_Path, Entry_Metadata (Offset + 1));
-                     end if;
-                  end;
-               end;
-            end loop;
-         end;
-
-         Status := Ok;
-      end;
-   exception
-      when others =>
-         Status := Output_File_Error;
+      Zlib.Seven_Zip_File_Extraction.Extract_Files
+        (Input_Path, Output_Dir, Entry_Names, Read_File'Access,
+         Write_File'Access, Extract_Seven_Zip_File_Callback'Access, Status);
    end Extract_Seven_Zip_Files_Impl;
 
    procedure Extract_Seven_Zip_Stored_Files
@@ -16500,7 +8377,11 @@ package body Zlib is
    end Extract_Seven_Zip_Files;
 
    function U32_To_Byte
-     (Value : Interfaces.Unsigned_32; Shift : Natural) return Byte is
+     (Value : Interfaces.Unsigned_32; Shift : Natural) return Byte
+     with
+       SPARK_Mode => On,
+       Pre        => Shift <= 31
+   is
    begin
       return Byte (Interfaces.Shift_Right (Value, Shift) and 16#FF#);
    end U32_To_Byte;
@@ -16520,8 +8401,7 @@ package body Zlib is
       Output : Byte_Array (1 .. Output_Length);
       Out_I  : Natural := Output'First;
       In_I   : Natural := Input'First;
-      Adler  : constant Interfaces.Unsigned_32 :=
-        Zlib.Checksums.Adler32 (Input);
+      Adler  : constant Interfaces.Unsigned_32 := Compute_Adler32 (Input);
 
       Remaining : Natural := Input'Length;
       This_Len  : Natural;
@@ -16638,6 +8518,13 @@ package body Zlib is
          return Empty_Result;
    end Deflate;
 
+   function Deflate_Bound (Input_Length : Natural) return Natural
+     with SPARK_Mode => On
+   is
+   begin
+      return Saturating_Compression_Bound (Input_Length, Wrapper_Size => 6);
+   end Deflate_Bound;
+
    function Deflate
      (Input : Byte_Array; Level : Compression_Level; Status : out Status_Code)
       return Byte_Array is
@@ -16664,7 +8551,7 @@ package body Zlib is
            Mode           => Mode,
            Status         => Status,
            Dictionary_Set => True,
-           Dictionary_ID  => Zlib.Checksums.Adler32 (Dictionary));
+           Dictionary_ID  => Compute_Adler32 (Dictionary));
    end Deflate_With_Dictionary;
 
    function Deflate_Raw
@@ -16677,8 +8564,15 @@ package body Zlib is
           (Input  => Input,
            Header => Raw_Deflate,
            Mode   => Mode,
-           Status => Status);
+          Status => Status);
    end Deflate_Raw;
+
+   function Deflate_Raw_Bound (Input_Length : Natural) return Natural
+     with SPARK_Mode => On
+   is
+   begin
+      return Saturating_Compression_Bound (Input_Length, Wrapper_Size => 0);
+   end Deflate_Raw_Bound;
 
    function Deflate_Raw
      (Input : Byte_Array; Level : Compression_Level; Status : out Status_Code)
@@ -16703,8 +8597,15 @@ package body Zlib is
           (Input    => Input,
            Mode     => Mode,
            Metadata => No_GZip_Metadata,
-           Status   => Status);
+          Status   => Status);
    end GZip;
+
+   function GZip_Bound (Input_Length : Natural) return Natural
+     with SPARK_Mode => On
+   is
+   begin
+      return Saturating_Compression_Bound (Input_Length, Wrapper_Size => 18);
+   end GZip_Bound;
 
    function GZip
      (Input    : Byte_Array;
@@ -16766,7 +8667,9 @@ package body Zlib is
            Level    => Level);
    end GZip;
 
-   function Text_Bytes (Text : String) return Byte_Array is
+   function Text_Bytes (Text : String) return Byte_Array
+     with SPARK_Mode => On
+   is
    begin
       if Text'Length = 0 then
          declare
@@ -16777,10 +8680,10 @@ package body Zlib is
       end if;
 
       declare
-         Result : Byte_Array (1 .. Text'Length);
+         Result : Byte_Array (Text'Range);
       begin
          for I in Text'Range loop
-            Result (I - Text'First + 1) :=
+            Result (I) :=
               Byte (Character'Pos (Text (I)));
          end loop;
          return Result;

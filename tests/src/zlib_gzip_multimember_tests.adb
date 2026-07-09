@@ -184,7 +184,23 @@ package body Zlib_GZip_Multimember_Tests is
       return Result;
    end Make_GZip;
 
-   procedure Test_Single_Member_Rejects_Second_Member
+   procedure Test_Default_GZip_Decodes_Second_Member
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Status   : Zlib.Status_Code;
+      G1       : constant Zlib.Byte_Array := Make_GZip (F.Plain_Stored, Zlib.Stored, "stored member");
+      G2       : constant Zlib.Byte_Array := Make_GZip (F.Plain_Fixed, Zlib.Fixed, "fixed member");
+      Both     : constant Zlib.Byte_Array := G1 & G2;
+      Expected : constant Zlib.Byte_Array := F.Plain_Stored & F.Plain_Fixed;
+      Decoded  : constant Zlib.Byte_Array := Zlib.Inflate_With_Header (Both, Zlib.GZip, Status);
+   begin
+      Assert (Status = Zlib.Ok,
+              "default one-shot gzip inflate must accept a second concatenated member");
+      Assert_Same (Decoded, Expected, "default gzip output concatenates payloads");
+   end Test_Default_GZip_Decodes_Second_Member;
+
+   procedure Test_Explicit_Single_Member_Rejects_Second_Member
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
@@ -192,12 +208,13 @@ package body Zlib_GZip_Multimember_Tests is
       G1      : constant Zlib.Byte_Array := Make_GZip (F.Plain_Stored, Zlib.Stored, "stored member");
       G2      : constant Zlib.Byte_Array := Make_GZip (F.Plain_Fixed, Zlib.Fixed, "fixed member");
       Both    : constant Zlib.Byte_Array := G1 & G2;
-      Decoded : constant Zlib.Byte_Array := Zlib.Inflate_With_Header (Both, Zlib.GZip, Status);
+      Decoded : constant Zlib.Byte_Array :=
+        Zlib.Inflate_With_Header (Both, Zlib.GZip, Zlib.Single_Member, Status);
    begin
       pragma Unreferenced (Decoded);
       Assert (Status = Zlib.Invalid_Header,
-              "default gzip inflate must reject a second concatenated member");
-   end Test_Single_Member_Rejects_Second_Member;
+              "explicit single-member gzip inflate must reject a second concatenated member");
+   end Test_Explicit_Single_Member_Rejects_Second_Member;
 
    procedure Test_Single_Member_Rejects_Trailing_Garbage
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -211,7 +228,7 @@ package body Zlib_GZip_Multimember_Tests is
    begin
       pragma Unreferenced (Decoded);
       Assert (Status = Zlib.Invalid_Header,
-              "single-member gzip inflate must reject trailing garbage");
+              "default one-shot gzip inflate must reject trailing garbage");
    end Test_Single_Member_Rejects_Trailing_Garbage;
 
    procedure Test_Multi_Member_Decodes_Concatenated_Members
@@ -299,6 +316,38 @@ package body Zlib_GZip_Multimember_Tests is
       Assert_Result_Prefix (Result, Last, Expected,
                             "multi-member streaming split by member");
    end Test_Streaming_Multi_Member_Split_Calls;
+
+   procedure Test_Streaming_Default_GZip_Decodes_Second_Member
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      G1       : constant Zlib.Byte_Array := Make_GZip (F.Plain_Stored, Zlib.Stored, "stored member");
+      G2       : constant Zlib.Byte_Array := Make_GZip (F.Plain_Fixed, Zlib.Fixed, "fixed member");
+      Expected : constant Zlib.Byte_Array := F.Plain_Stored & F.Plain_Fixed;
+      Input    : constant Ada.Streams.Stream_Element_Array := To_Stream_Array (G1 & G2);
+      Filter   : Zlib.Filter_Type;
+      In_Last  : Ada.Streams.Stream_Element_Offset;
+      Out_Data : Ada.Streams.Stream_Element_Array (1 .. 4096);
+      Out_Last : Ada.Streams.Stream_Element_Offset;
+      Result   : Zlib.Byte_Array (1 .. 4096);
+      Last     : Natural := 0;
+   begin
+      Zlib.Inflate_Init (Filter, Header => Zlib.GZip);
+      Zlib.Translate
+        (Filter   => Filter,
+         In_Data  => Input,
+         In_Last  => In_Last,
+         Out_Data => Out_Data,
+         Out_Last => Out_Last,
+         Flush    => Zlib.Finish);
+      Copy_Output (Out_Data, Out_Last, Result, Last);
+
+      Assert (In_Last = Input'Last, "default streaming gzip must consume both members");
+      Assert (Zlib.Stream_End (Filter), "default streaming gzip must finish after both members");
+      Assert_Result_Prefix
+        (Result, Last, Expected, "default streaming gzip concatenates member payloads");
+      Zlib.Close (Filter);
+   end Test_Streaming_Default_GZip_Decodes_Second_Member;
 
    procedure Test_Streaming_Multi_Member_Header_Split_Bytewise
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -428,8 +477,11 @@ package body Zlib_GZip_Multimember_Tests is
       use AUnit.Test_Cases.Registration;
    begin
       Register_Routine
-        (T, Test_Single_Member_Rejects_Second_Member'Access,
-         "single-member rejects concatenated gzip member");
+        (T, Test_Default_GZip_Decodes_Second_Member'Access,
+         "one-shot gzip decodes concatenated members by default");
+      Register_Routine
+        (T, Test_Explicit_Single_Member_Rejects_Second_Member'Access,
+         "explicit single-member rejects concatenated gzip member");
       Register_Routine
         (T, Test_Single_Member_Rejects_Trailing_Garbage'Access,
          "single-member rejects trailing garbage");
@@ -445,6 +497,9 @@ package body Zlib_GZip_Multimember_Tests is
       Register_Routine
         (T, Test_Streaming_Multi_Member_Split_Calls'Access,
          "streaming multi-member decodes members split across calls");
+      Register_Routine
+        (T, Test_Streaming_Default_GZip_Decodes_Second_Member'Access,
+         "streaming gzip decodes concatenated members by default");
       Register_Routine
         (T, Test_Streaming_Multi_Member_Header_Split_Bytewise'Access,
          "streaming multi-member accepts byte-split header");

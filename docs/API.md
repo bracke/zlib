@@ -13,6 +13,18 @@ type Byte_Array is array (Natural range <>) of Byte;
 The API is binary-safe. It does not treat input as text, require NUL
 termination, or modify payload bytes through character conversion.
 
+## Reentrancy and task safety
+
+Independent operations are reentrant. Multiple Ada tasks may call one-shot
+buffer APIs, file helpers, archive helpers, or streaming APIs at the same time
+when each task uses its own buffers, streaming filter objects, and output paths.
+
+The package does not internally synchronize caller-owned mutable objects.
+Do not share a live `Filter_Type`, `Compression_Filter_Type`, mutable buffer,
+or overlapping filesystem destination between tasks unless the caller protects
+that access externally. File and archive helpers also assume that concurrent
+callers choose distinct output files or directories.
+
 ## One-shot API
 
 ```ada
@@ -142,6 +154,68 @@ function Seven_Zip_Deflate
    Metadata   : Seven_Zip_Entry_Metadata;
    Status     : out Status_Code)
    return Byte_Array;
+type Seven_Zip_Filter_Method is
+  (Seven_Zip_Filter_X86_BCJ, Seven_Zip_Filter_ARM_BCJ,
+   Seven_Zip_Filter_ARMT_BCJ, Seven_Zip_Filter_ARM64_BCJ,
+   Seven_Zip_Filter_PPC_BCJ, Seven_Zip_Filter_SPARC_BCJ,
+   Seven_Zip_Filter_IA64_BCJ, Seven_Zip_Filter_RISCV_BCJ,
+   Seven_Zip_Filter_Delta);
+type Seven_Zip_Codec_Method is
+  (Seven_Zip_Codec_Deflate, Seven_Zip_Codec_BZip2, Seven_Zip_Codec_LZMA,
+   Seven_Zip_Codec_LZMA2, Seven_Zip_Codec_PPMd);
+type Seven_Zip_Graph_Method is
+  (Seven_Zip_Graph_Copy, Seven_Zip_Graph_Deflate, Seven_Zip_Graph_BZip2,
+   Seven_Zip_Graph_LZMA, Seven_Zip_Graph_LZMA2, Seven_Zip_Graph_PPMd,
+   Seven_Zip_Graph_Delta, Seven_Zip_Graph_X86_BCJ,
+   Seven_Zip_Graph_ARM_BCJ, Seven_Zip_Graph_ARMT_BCJ,
+   Seven_Zip_Graph_ARM64_BCJ, Seven_Zip_Graph_PPC_BCJ,
+   Seven_Zip_Graph_SPARC_BCJ, Seven_Zip_Graph_IA64_BCJ,
+   Seven_Zip_Graph_RISCV_BCJ, Seven_Zip_Graph_BCJ2);
+type Seven_Zip_Graph_Coder is record
+   Method         : Seven_Zip_Graph_Method;
+   Delta_Distance : Positive;
+end record;
+type Seven_Zip_Graph_Coder_Array is
+  array (Positive range <>) of Seven_Zip_Graph_Coder;
+type Seven_Zip_Bind_Pair is record
+   In_Index  : Natural;
+   Out_Index : Natural;
+end record;
+--  In_Index and Out_Index are zero-based 7z stream indices.
+type Seven_Zip_Bind_Pair_Array is
+  array (Positive range <>) of Seven_Zip_Bind_Pair;
+type Seven_Zip_Stream_Index_Array is array (Positive range <>) of Natural;
+--  Packed stream indices are zero-based 7z stream indices.
+type Seven_Zip_Size_Array is
+  array (Positive range <>) of Interfaces.Unsigned_64;
+function Seven_Zip_Filtered
+  (Input      : Byte_Array;
+   Entry_Name : String;
+   Filter     : Seven_Zip_Filter_Method;
+   Codec      : Seven_Zip_Codec_Method := Seven_Zip_Codec_LZMA;
+   Status     : out Status_Code)
+   return Byte_Array;
+function Seven_Zip_Filtered
+  (Input          : Byte_Array;
+   Entry_Name     : String;
+   Filter         : Seven_Zip_Filter_Method;
+   Codec          : Seven_Zip_Codec_Method;
+   Delta_Distance : Positive;
+   Metadata       : Seven_Zip_Entry_Metadata;
+   Status         : out Status_Code)
+   return Byte_Array;
+function Seven_Zip_Method_Graph
+  (Packed_Data    : Byte_Array;
+   Entry_Name     : String;
+   Coders         : Seven_Zip_Graph_Coder_Array;
+   Bind_Pairs     : Seven_Zip_Bind_Pair_Array;
+   Packed_Streams : Seven_Zip_Stream_Index_Array;
+   Pack_Sizes     : Seven_Zip_Size_Array;
+   Unpack_Sizes   : Seven_Zip_Size_Array;
+   Unpacked_CRC   : Interfaces.Unsigned_32;
+   Metadata       : Seven_Zip_Entry_Metadata;
+   Status         : out Status_Code)
+   return Byte_Array;
 procedure Seven_Zip_Stored_File
   (Input_Path, Output_Path, Entry_Name : String;
    Status : out Status_Code);
@@ -226,13 +300,6 @@ function Seven_Zip_PPMd
    Entry_Name : String;
    Metadata   : Seven_Zip_Entry_Metadata;
    Status     : out Status_Code) return Byte_Array;
-procedure Seven_Zip_External_File
-  (Input_Path  : String;
-   Output_Path : String;
-   Method_Name : String;
-   Solid       : Boolean;
-   Password    : String;
-   Status      : out Status_Code);
 procedure Seven_Zip_PPMd_File
   (Input_Path  : String;
    Output_Path : String;
@@ -246,7 +313,6 @@ function Is_ZIP_External_Method
   (Method : Interfaces.Unsigned_16) return Boolean;
 function Compress_ZIP_External_File
   (Input_Path        : String;
-   Temp_Base         : String;
    Method_Name       : String;
    Method            : out Interfaces.Unsigned_16;
    Crc32             : out Interfaces.Unsigned_32;
@@ -254,15 +320,9 @@ function Compress_ZIP_External_File
    Status            : out Status_Code) return Byte_Array;
 function Extract_ZIP_External_Entry
   (Archive_Image : Byte_Array;
-   Temp_Base     : String;
    Entry_Name    : String;
    Password      : String;
    Status        : out Status_Code) return Byte_Array;
-procedure Extract_Seven_Zip_External_File
-  (Input_Path : String;
-   Output_Dir : String;
-   Password   : String;
-   Status     : out Status_Code);
 function Extract_Seven_Zip_Stored
   (Archive_Image : Byte_Array;
    Entry_Name    : String;
@@ -296,22 +356,25 @@ procedure Extract_Seven_Zip_Files
    Status      : out Status_Code);
 ```
 
-`Looks_Like_Zlib_Header` and `Looks_Like_GZip_Header` are lightweight wrapper-prefix predicates for callers that need to select an explicit mode before decode. They do not validate payload bytes, trailers, checksums, or member completeness, and they do not change the no-auto-detection inflate contract.
+`Looks_Like_Zlib_Header` and `Looks_Like_GZip_Header` are lightweight
+wrapper-prefix predicates used by the implicit inflate paths and available to
+callers that need to select a concrete mode before decode. They do not validate
+payload bytes, trailers, checksums, or member completeness.
 
-`Inflate` accepts complete zlib streams and supports stored, fixed-Huffman, and
-dynamic-Huffman Deflate blocks. It validates the zlib header and Adler-32
-footer. It is exactly equivalent to `Inflate_With_Header` with
-`Header => Zlib_Header`; it does not auto-detect gzip or raw Deflate input.
+`Inflate` accepts complete zlib, gzip, or raw Deflate streams using lightweight
+wrapper auto-detection. Syntactic zlib headers select zlib wrapper validation,
+syntactic gzip headers select gzip validation, and other input is attempted as
+raw Deflate.
 
-`Inflate_With_Header` accepts complete compressed buffers with explicit wrapper
-selection: `Default` and `Zlib_Header` mean zlib wrapper plus Adler-32
-validation, `GZip` means a gzip member plus CRC32/ISIZE validation, and
-`Raw_Deflate` means a raw Deflate payload with no wrapper, trailer, or checksum
-validation. Wrong-wrapper inputs return deterministic non-`Ok` statuses.
+`Inflate_With_Header` accepts complete compressed buffers. `Header => Default`
+uses the same implicit auto-detection as `Inflate`. Concrete headers are strict:
+`Zlib_Header` means zlib wrapper plus Adler-32 validation, `GZip` means a gzip
+member plus CRC32/ISIZE validation, and `Raw_Deflate` means a raw Deflate
+payload with no wrapper, trailer, or checksum validation. Wrong-wrapper inputs
+to concrete modes return deterministic non-`Ok` statuses.
 `Inflate_Raw` is a convenience wrapper for complete raw Deflate payloads and is
 exactly equivalent to `Inflate_With_Header (Input, Raw_Deflate, Status)`. It
-does not auto-detect zlib or gzip wrappers. `Inflate` remains zlib-wrapper-only,
-and `Inflate_With_Header` remains the general explicit wrapper API.
+does not auto-detect zlib or gzip wrappers.
 
 `Deflate_Stored` emits valid zlib streams using stored Deflate blocks
 and remains the compatibility/no-compression output path. `Deflate_Fixed` emits
@@ -372,6 +435,24 @@ explicit entry name. They self-verify the generated archive with the native
 extractor before returning `Ok`. They do not call a local `7z` executable.
 Metadata overloads for stored and compressed native 7z writers emit
 header-only directory entries when `Metadata.Is_Directory` is true.
+`Seven_Zip_Filtered` emits a native single-entry non-encrypted compressed
+filtered archive. It applies the selected branch or Delta filter to the input,
+compresses the filtered bytes with Deflate, BZip2, LZMA, LZMA2, or PPMd, and
+writes a two-coder 7z folder with the matching bind pair. The default codec is
+LZMA, so x86 executable payloads can be written as BCJ+LZMA with
+`Seven_Zip_Filter_X86_BCJ`. RISC-V uses the 7z 24.x compact branch-filter
+method ID. The metadata overload also supports Delta distances 1 through 256
+and header-only directory entries.
+`Seven_Zip_Method_Graph` is the low-level method-graph writer. It writes a
+single-entry non-encrypted 7z archive from caller-supplied packed stream bytes,
+coder graph metadata, bind pairs, packed stream indices, packed and unpacked
+sizes, and the final unpacked CRC. It is intentionally a container writer: it
+does not run arbitrary codec DAGs or synthesize packed payloads from plain
+input. Bind pairs and packed stream indices use the 7z format's zero-based
+stream indices and out-of-range indices fail closed with a non-Ok status.
+Supported graph nodes are the built-in non-encrypted methods and filters,
+including BCJ2. Coder properties use this library's normal defaults except
+Delta coders, which take the per-coder `Delta_Distance`.
 `Seven_Zip_Stored_Files` writes a
 multi-entry solid Copy-coder archive from parallel `Text_Array` input-path and
 distinct entry-name lists. Ordinary files become packed substreams and
@@ -407,9 +488,9 @@ extraction accepts compressed, uncompressed, reset/properties, state-reset, and
 state-continuing chunks for supported lc/lp/pb properties in the single-folder
 layout. Supported extraction also accepts covered solid substreams, BCJ2 graph
 layouts with Copy or supported main pre-coders, and bounded linear
-filter-chain layouts made from supported single-input coders and x86 BCJ/Delta
-filters, including standard zero-based, reverse-linear, reordered zero-based,
-and legacy one-based linear bind pairs.
+filter-chain layouts made from supported single-input coders and supported
+branch/Delta filters, including standard zero-based, reverse-linear, reordered
+zero-based, and legacy one-based linear bind pairs.
 Archives with duplicate matching entry names are rejected.
 Common archive/file metadata fields and SFX prefixes are skipped while
 extracting supported payload layouts. Byte-array extraction returns payload
@@ -431,9 +512,14 @@ segments, `..` segments, backslashes, and drive-style entry names. They verify
 all requested payloads before writing any output file. The neutral name returns
 `Unsupported_Method` when native extraction cannot handle the requested method.
 
-The native 7z APIs are intentionally not a full 7z compression stack.
-General 7z method graph encoding and 7z encryption are not emitted in process;
-encrypted 7z payloads are not decoded. `Seven_Zip_PPMd`,
+The native 7z APIs are a broad pure-Ada 7z implementation for the supported
+method set documented in `README.md` and `docs/SEVEN_ZIP_PLAN.md`.
+Arbitrary non-encrypted method graph containers can be emitted through
+`Seven_Zip_Method_Graph` when the caller supplies already packed stream bytes;
+automatic graph execution from plain input is provided only by the higher-level
+specific writers. Supported AES-encrypted payloads and encrypted headers are
+handled by the native password overloads.
+`Seven_Zip_PPMd`,
 `Seven_Zip_PPMd_File`, and `Seven_Zip_PPMd_Files` emit verified PPMd output
 without calling a local `7z` executable; empty PPMd output uses a
 range-initialized empty stream, modeled stock-compatible candidates use
@@ -448,11 +534,8 @@ creation and unencrypted extraction for classic and ZIP64 metadata are separate
 in-process ZIP member-payload paths. The ZIP-LZMA path is an in-tree range
 coder/literal coder with normal-match distance coding including pos-special,
 direct-bit, align-bit, and rep-match distances emitted by this library.
-`Seven_Zip_External_File` and `Extract_Seven_Zip_External_File` are
-compatibility placeholders for the former external bridge. They do not invoke
-a local `7z` executable; unsupported broader creation, extraction, unsupported
-solid layouts, and password-protected archives fail
-closed with deterministic status codes.
+Unsupported broader 7z creation and layouts outside the native supported set
+fail closed with deterministic status codes through the native API surface.
 
 The one-shot API reports failures through `Status_Code`, not exceptions.
 Returned output after a non-`Ok` status must be treated as invalid partial data.
@@ -501,13 +584,16 @@ procedure Close
    Ignore_Error : Boolean := False);
 ```
 
-`Default` is exactly `Zlib_Header`; it never auto-detects gzip or raw streams.
-`Zlib_Header` accepts a zlib wrapper, Deflate payload, and Adler-32 trailer.
-`GZip` accepts one gzip member and validates CRC32/ISIZE. `Raw_Deflate`
-accepts a Deflate payload with no wrapper, no trailer, and no checksum
-validation. It is available through both `Inflate_With_Header` for complete
-buffers and `Inflate_Init` for streaming input. Plain one-shot `Inflate`
-remains zlib-wrapper-only. `Deflate_Stored`, `Deflate_Fixed`,
+For one-shot and streaming inflate, `Default` auto-detects zlib, gzip, or raw
+Deflate input. Streaming `Default` waits for two prefix bytes, selects gzip for
+`1F 8B`, zlib for a syntactically valid zlib CMF/FLG pair, and raw Deflate
+otherwise. Gzip input accepts concatenated members by default in both one-shot
+and streaming gzip modes. `Zlib_Header` accepts a zlib wrapper, Deflate payload,
+and Adler-32 trailer. `GZip` accepts gzip member syntax and validates
+CRC32/ISIZE. `Raw_Deflate` accepts a Deflate payload with no wrapper, no
+trailer, and no checksum validation. It is available through both
+`Inflate_With_Header` for complete buffers and `Inflate_Init` for streaming
+input. `Deflate_Stored`, `Deflate_Fixed`,
 `Deflate_Dynamic`, and `Deflate` all produce zlib-wrapped output.
 
 `Status_Error` means lifecycle misuse. `Zlib_Error` means malformed,
@@ -604,8 +690,6 @@ implementation units and may change without a public API bump:
 ```text
 Zlib.Bits
 Zlib.Bit_Writer
-Zlib.Checksums
-Zlib.CRC32_Internal
 Zlib.Deflate_Tables
 Zlib.Dynamic_Compress
 Zlib.Fixed_Compress
@@ -618,15 +702,22 @@ Zlib.Stream_Inflate
 Zlib.Wrapper
 ```
 
+Zlib's Adler-32 trailer and preset-dictionary DICTID calculation is supplied by
+`CryptoLib.Checksums` internally; it is not re-exported by the root `Zlib`
+package.
+
 ## Wrapper contract
 
-Strict inflate APIs do not perform wrapper auto-detection. `Default` is a
-synonym for `Zlib_Header`, not a probing mode. `Inflate` accepts only
-zlib-wrapped input and is equivalent to `Inflate_With_Header (Input,
-Zlib_Header, Status)`. Use `Inflate_Auto` only when lightweight one-shot wrapper
-discrimination is wanted.
+One-shot `Inflate`, `Inflate_Auto`, and `Inflate_With_Header` with
+`Header => Default` perform lightweight wrapper auto-detection. Concrete
+headers remain wrapper-strict: `Zlib_Header` accepts only zlib-wrapped input,
+`GZip` accepts only gzip input, and `Raw_Deflate` accepts only raw Deflate
+input. Gzip input accepts concatenated members unless the caller passes
+`GZip_Mode => Single_Member`.
+Streaming inflate and compression keep `Default` as their zlib wrapper default.
 
-Use `Inflate_With_Header` when a caller knows it has gzip or raw Deflate data:
+Use a concrete `Inflate_With_Header` mode when a caller knows it has gzip or raw
+Deflate data and wants strict boundaries:
 
 ```ada
 Decoded := Zlib.Inflate_With_Header (Input, Zlib.GZip, Status);
@@ -702,14 +793,14 @@ Raw Deflate compression is exposed only through the root `Zlib` package:
 - `Inflate_Init (Filter, Header => Raw_Deflate)`
 
 `Raw_Deflate` is wrapper-strict. Raw output has no checksum trailer and must not
-be passed to zlib or gzip inflate paths. `Default` remains exactly
-`Zlib_Header`; strict APIs do not auto-detect wrappers. `Inflate_Auto` is the
-explicit convenience API for lightweight wrapper discrimination.
+be passed to zlib or gzip inflate paths. One-shot and streaming inflate
+`Default` auto-detect wrappers. `Inflate_Auto` is an explicit alias for the
+same one-shot lightweight wrapper discrimination.
 
 
 ## Raw Deflate release hardening
 
-Raw Deflate compression is release-hardened by `zlib_raw_release_tests`, `zlib_raw_cross_wrapper_conformance_tests`, the raw examples, and the raw tools. Raw Deflate inflate convenience APIs are covered by `zlib_inflate_raw_api_tests`. The contract remains unchanged: `Deflate_*` APIs emit zlib-wrapped streams, `GZip*` APIs emit gzip-wrapped streams, `Deflate_Raw*` APIs emit raw Deflate blocks only, `Inflate_Raw*` APIs consume raw Deflate payloads only, `Seven_Zip_Stored*` APIs emit Copy-coder `.7z` archives including header-only directory entries and solid stored file-list archives with no-stream directory entries, `Seven_Zip_Deflate*` APIs emit Deflate `.7z` archives, `Seven_Zip_BZip2*` APIs emit BZip2 `.7z` archives, `Seven_Zip_LZMA*` APIs emit LZMA `.7z` archives, `Seven_Zip_LZMA2*` APIs emit LZMA2 `.7z` archives with valid compressed or uncompressed chunks, `Extract_Seven_Zip*` APIs extract those supported native 7z layouts including LZMA2 reset/properties, state-reset, state-continuing chunks, native PPMd empty/repeated-symbol/root-symbol/periodic-prefix, stock-7z multi-block streams with LZMA encoded headers, stock-7z no-stream empty-file entries, stock-7z BCJ+PPMd filter chains, and BCJ2 graphs with Copy, PPMd, or supported main pre-coders, `Seven_Zip_PPMd`, `Seven_Zip_PPMd_File`, and `Seven_Zip_PPMd_Files` emit native PPMd 7z archives for this crate's extractor without calling local `7z`, while `Seven_Zip_External_File` and `Extract_Seven_Zip_External_File` are compatibility placeholders that fail closed without invoking local `7z`, ZIP BZip2, ZIP-LZMA streams, and Zstandard creation and unencrypted extraction for classic and ZIP64 metadata are in-process, `ZIP`/`ZIP_File`/`ZIP_Files` emit ZIP archives, `Inflate` is zlib-wrapper-only, `Inflate_With_Header` performs explicit wrapper selection, and `Inflate_Auto` is the convenience wrapper-discriminating inflate API. `Auto` remains deterministic and block-local; the library still has no zlib-compatible compression-ratio promise.
+Raw Deflate compression is release-hardened by `zlib_raw_release_tests`, `zlib_raw_cross_wrapper_conformance_tests`, the raw examples, and the raw tools. Raw Deflate inflate convenience APIs are covered by `zlib_inflate_raw_api_tests`. The contract remains unchanged: `Deflate_*` APIs emit zlib-wrapped streams, `GZip*` APIs emit gzip-wrapped streams, `Deflate_Raw*` APIs emit raw Deflate blocks only, `Inflate_Raw*` APIs consume raw Deflate payloads only, `Seven_Zip_Stored*` APIs emit Copy-coder `.7z` archives including header-only directory entries and solid stored file-list archives with no-stream directory entries, `Seven_Zip_Deflate*` APIs emit Deflate `.7z` archives, `Seven_Zip_BZip2*` APIs emit BZip2 `.7z` archives, `Seven_Zip_LZMA*` APIs emit LZMA `.7z` archives, `Seven_Zip_LZMA2*` APIs emit LZMA2 `.7z` archives with valid compressed or uncompressed chunks, `Seven_Zip_Filtered` emits single-entry compressed filtered `.7z` archives, `Seven_Zip_Method_Graph` emits low-level single-entry non-encrypted method-graph `.7z` containers from caller-supplied packed stream bytes, `Extract_Seven_Zip*` APIs extract those supported native 7z layouts including LZMA2 reset/properties, state-reset, state-continuing chunks, native PPMd empty/repeated-symbol/root-symbol/periodic-prefix, stock-7z multi-block streams with LZMA encoded headers, stock-7z no-stream empty-file entries, stock-7z BCJ+PPMd filter chains, and BCJ2 graphs with Copy, PPMd, or supported main pre-coders, `Seven_Zip_PPMd`, `Seven_Zip_PPMd_File`, and `Seven_Zip_PPMd_Files` emit native PPMd 7z archives for this crate's extractor without calling local `7z`, ZIP BZip2, ZIP-LZMA streams, and Zstandard creation and unencrypted extraction for classic and ZIP64 metadata are in-process, `ZIP`/`ZIP_File`/`ZIP_Files` emit ZIP archives, `Inflate`, `Inflate_Auto`, `Inflate_With_Header` with `Header => Default`, and streaming `Inflate_Init` with `Header => Default` auto-detect zlib/gzip/raw input, gzip input accepts concatenated members unless `GZip_Mode => Single_Member` is requested, and concrete inflate modes remain wrapper-strict. `Auto` remains deterministic and block-local.
 
 ## Gzip metadata API
 
@@ -752,13 +843,14 @@ Metadata is valid only with `Header => GZip`. For zlib and raw Deflate output,
 non-default metadata raises `Status_Error` in the streaming API and maps to a
 deterministic non-`Ok` one-shot status.
 
-## Explicit gzip multi-member inflate
+## Gzip multi-member inflate
 
-The default gzip inflate APIs are strict single-member APIs. The existing
-`Inflate_With_Header (Input, GZip, Status)` overload rejects bytes that follow
-the first validated gzip member.
+The default gzip inflate APIs accept concatenated gzip members. The existing
+`Inflate_With_Header (Input, GZip, Status)` overload and streaming
+`Inflate_Init (Filter, Header => GZip)` validate every member and return or
+emit the byte concatenation of their decoded payloads.
 
-Use the explicit overload when concatenated gzip members are intended:
+Use the explicit overload when a caller needs to force a member policy:
 
 ```ada
 Decoded := Zlib.Inflate_With_Header
@@ -767,6 +859,9 @@ Decoded := Zlib.Inflate_With_Header
    GZip_Mode => Zlib.Multi_Member,
    Status    => Status);
 ```
+
+Pass `GZip_Mode => Zlib.Single_Member` to reject bytes that follow the first
+validated gzip member.
 
 Streaming callers use the three-argument `Inflate_Init` overload:
 
@@ -794,7 +889,10 @@ type Compression_Level is range 0 .. 9;
 Default_Level : constant Compression_Level := 6;
 ```
 
-`Compression_Level` is a convenience policy, not an exact zlib-compatible tuning contract. Use `Compression_Mode` when a test or consumer requires exact `Stored`, `Fixed`, `Dynamic`, or `Auto` behavior. Use `Compression_Level` when a caller wants a stable broad effort setting.
+`Compression_Level` is a convenience policy for broad compressor effort. Use
+`Compression_Mode` when a test or consumer requires exact `Stored`, `Fixed`,
+`Dynamic`, or `Auto` behavior. Use `Compression_Level` when a caller wants a
+stable broad effort setting.
 
 The level mapping is deterministic and intentionally conservative:
 
@@ -804,7 +902,9 @@ The level mapping is deterministic and intentionally conservative:
 - `Level => 4 .. 7` maps to `Mode => Auto` with conservative lazy matching.
 - `Level => 8 .. 9` maps to `Mode => Auto` with bounded optimal parsing and the highest matcher effort.
 
-Because the compressor has conservative lazy matching and bounded block-local optimal parsing but no whole-stream block scoring, adjacent levels may still produce identical output. No public level may emit invalid output, and no level promises zlib-compatible compression ratios.
+Because the compressor has conservative lazy matching and bounded block-local
+optimal parsing but no whole-stream block scoring, adjacent levels may still
+produce identical output. Every public level must emit valid output.
 
 Level overloads exist for one-shot zlib, gzip, and raw Deflate compression, file helpers, and streaming `Deflate_Init`. Level selection does not change wrapper semantics: `Deflate` still emits zlib, `GZip` still emits gzip, and `Deflate_Raw` still emits raw Deflate blocks only.
 
@@ -840,20 +940,20 @@ The one-shot convenience file APIs remain available. The `*_File_Streaming` APIs
 Dictionary-aware zlib file streaming is available through `Inflate_File_With_Dictionary_Streaming` and `Deflate_File_With_Dictionary_Streaming`. These helpers are zlib-header-only because gzip and raw Deflate do not use the zlib FDICT wrapper mechanism.
 
 
-## Public checksum utilities
+## Public bound utilities
 
-The root `Zlib` package exposes byte-oriented checksum helpers for consumers that need the same integrity values used by the wrapper formats without depending on internal child packages:
+The root `Zlib` package exposes conservative output-size bounds for callers that need to preflight or preallocate buffers before choosing an output path. Adler-32 and CRC-32 checksum calculation are internal zlib integrity behavior backed by `CryptoLib.Checksums`; consumers that need standalone checksum routines should use cryptolib directly.
 
 ```ada
-function Adler32
-  (Input : Byte_Array)
-   return Interfaces.Unsigned_32;
-
-function CRC32
-  (Input : Byte_Array)
-   return Interfaces.Unsigned_32;
+function Deflate_Bound
+  (Input_Length : Natural)
+   return Natural;
+function GZip_Bound
+  (Input_Length : Natural)
+   return Natural;
+function Deflate_Raw_Bound
+  (Input_Length : Natural)
+   return Natural;
 ```
 
-`Adler32` computes the standard Adler-32 value used by zlib stream trailers and zlib preset-dictionary DICTID values. `CRC32` computes the standard gzip CRC-32 value using polynomial `0xEDB88320`, the checksum used by gzip payload trailers and FHCRC calculation. `CRC32_State`, `CRC32_Reset`, `CRC32_Update`, and `CRC32_Value` provide the same CRC-32 calculation incrementally for callers that process files or container payloads in chunks. The checksum APIs operate on bytes: NUL bytes, bytes above `0x7F`, and CR/LF bytes are included exactly, with no text conversion or encoding assumption.
-
-These utilities only compute checksum values. They do not compress data, inflate data, parse wrapper headers, or validate an entire stream by themselves.
+`Deflate_Bound`, `GZip_Bound`, and `Deflate_Raw_Bound` return conservative output-size bounds for the package's zlib, minimal-gzip, and raw-Deflate one-shot compression outputs. They are intended for callers that need to preflight or preallocate buffers before choosing an output path. The bounds are intentionally not exact compressed sizes, and they saturate at `Natural'Last` instead of overflowing for extreme input lengths.

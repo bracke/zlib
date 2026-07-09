@@ -12,6 +12,7 @@ package body Zlib.Raw_Inflate is
    function Has_Non_Zero_Length
      (Lengths : Zlib.Huffman.Code_Length_Array)
       return Boolean
+      with SPARK_Mode => On
    is
    begin
       for I in Lengths'Range loop

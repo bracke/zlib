@@ -18,6 +18,8 @@
 - public streaming API shape: `Filter_Type`, `Header_Type`, `Flush_Mode`,
   `Inflate_Init`, `Is_Open`, `Translate`, `Flush`, `Stream_End`, and `Close`
 - deterministic streaming lifecycle behavior
+- reentrant independent operations without hidden synchronization of shared
+  caller-owned mutable state
 - zlib Adler-32 validation
 - gzip CRC32 and ISIZE validation
 
@@ -41,8 +43,9 @@ Implemented:
 - fixed-Huffman zlib output
 - dynamic-Huffman zlib output
 - streaming zlib inflate
-- streaming single-member gzip inflate by default
-- explicit multi-member gzip inflate through `GZip_Member_Mode => Multi_Member`
+- multi-member gzip inflate by default
+- explicit strict single-member gzip inflate through
+  `GZip_Member_Mode => Single_Member`
 - streaming raw Deflate inflate through `Header => Raw_Deflate`
 - one-shot raw Deflate output through `Deflate_Raw` and `Deflate_Raw_File`
   for `Stored`, `Fixed`, `Dynamic`, and `Auto`
@@ -51,82 +54,64 @@ Implemented:
 - explicit one-shot gzip and raw Deflate inflate through `Inflate_With_Header`
 - compression levels 0 through 9 as broad strategy/effort policy
 - gzip metadata output through explicit `GZip_Metadata` APIs
-- native stored, Deflate, BZip2, LZMA, and LZMA2 `.7z` output/extraction,
-  plus native PPMd `.7z` extraction for empty streams with or without range
-  headers, repeated-symbol, simple root-symbol, periodic-prefix, stock-7z non-solid multi-block streams with
-  LZMA encoded headers, stock-7z no-stream empty-file entries, stock-7z
-  BCJ+PPMd filter chains, BCJ2 graphs with Copy, PPMd, or supported main
-  pre-coders, and unsupported-method failure for broader PPMd entries,
-  plus covered solid substream, BCJ2 graph layouts with supported main
-  pre-coders, and bounded linear filter-chain extraction layouts made from
-  supported single-input coders and x86 BCJ/Delta filters, including standard
-  zero-based, reverse-linear, and
-  reordered zero-based and legacy one-based linear bind pairs,
+- native stored, Deflate, BZip2, LZMA, LZMA2, and PPMd `.7z`
+  output/extraction, including general PPMd7 encode/decode, stock-7z
+  non-solid multi-block streams with LZMA encoded headers, stock-7z no-stream
+  empty-file entries, stock-7z BCJ+PPMd filter chains, BCJ2 graphs with Copy,
+  PPMd, or supported main pre-coders, covered solid substream layouts, and
+  bounded linear filter-chain extraction layouts made from supported
+  single-input coders and branch/Delta filters, including standard zero-based,
+  reverse-linear, and reordered zero-based and legacy one-based linear bind
+  pairs,
   through `Seven_Zip_Stored`, `Seven_Zip_Deflate`, `Seven_Zip_BZip2`,
-  `Seven_Zip_LZMA`, `Seven_Zip_LZMA2`, their file helpers, and their
-  file-list helpers
+  `Seven_Zip_LZMA`, `Seven_Zip_LZMA2`, `Seven_Zip_Filtered`,
+  `Seven_Zip_Method_Graph`, their file helpers, and their file-list helpers
+- native AES-256 7z payload encryption/decryption, encrypted headers, and
+  password handling via the sibling Ada `cryptolib` crate
+- solid LZMA, LZMA2, and PPMd multi-entry 7z writers, including encrypted
+  solid archives
+- multi-volume 7z read/write helpers
+- branch-filter encode/decode for x86, ARM, ARM64, ARMT, PPC, SPARC, IA-64,
+  RISC-V JAL, and Delta; RISC-V stock-7z validation is wired into the optional
+  interop lane and runs when stock 7-Zip 24.x+ is available
 - neutral native extraction aliases through `Extract_Seven_Zip`,
   `Extract_Seven_Zip_File`, and `Extract_Seven_Zip_Files`
-- compatibility placeholders for former external 7z creation/extraction via
-  `Seven_Zip_External_File` and `Extract_Seven_Zip_External_File`; these fail
-  closed without invoking a local `7z` executable
 - zlib preset dictionary compression, inflate, and streaming file APIs
-- public Adler-32 and CRC32 checksum helpers
+- internal Adler-32 and CRC32 wrapper/archive validation through CryptoLib.Checksums
 - deterministic fuzzing tools and smoke tests
 - stored, fixed-Huffman, and dynamic-Huffman Deflate decoding
 - bounded 32 KiB LZ77 sliding-window history
 - deterministic lifecycle/error behavior
 
-Not yet implemented (planned — see `docs/SEVEN_ZIP_PLAN.md`):
-
 The project goal is **full, complete in-process 7z encode and decode**:
 read any standard `.7z` archive `7z`/p7zip can produce, and produce archives
-they can read, all in pure Ada with no external codec libraries. The list below
-is current work-in-progress toward that goal, **not** a set of permanent
-non-goals. The currently shipped layouts are progress, not the boundary.
+they can read, all in pure Ada with no external codec libraries.
 
 Remaining work toward full 7z support:
 
-- a general PPMd (variant H / PPMd7) encoder and decoder for arbitrary input,
-  replacing the current generate-and-verify writer and the narrow decode subset
-- AES-256 payload encryption, encrypted headers, and password-protected archives
-- solid compression: a single shared compressed stream across multiple entries
-  (not just independently packed per-entry substreams)
-- the full branch-filter family for both encode and decode — ARM, ARM64, ARMT,
-  PPC, SPARC, IA-64, and RISC-V — alongside the existing x86 BCJ and Delta
-- a competitive LZMA/LZMA2 encoder (optimal parsing, tunable lc/lp/pb and
-  dictionary) so output size matches stock `7z`, not just decodes correctly
-- multi-volume (split) archives
+- RISC-V stock-7z branch-filter validation execution on a stock 7-Zip 24.x+
+  binary; the validation lane is implemented and skipped on older binaries
 
-Separately, the zlib Deflate compressor's whole-stream optimal parsing
-(default-zlib-equivalent ratios) remains out of scope for the zlib path; it is
-independent of the 7z LZMA encoder above.
-
-The native 7z APIs are currently narrow in-process container APIs and are being
-widened toward the full goal above. `Seven_Zip_Stored`
+The native 7z APIs are in-process container APIs. `Seven_Zip_Stored`
 handles stored files with the 7z Copy coder, `Seven_Zip_Deflate` handles raw
 Deflate payloads, `Seven_Zip_BZip2` handles BZip2 payloads, `Seven_Zip_LZMA`
-handles LZMA payloads with the library default properties, and
-`Seven_Zip_LZMA2` handles valid LZMA2 chunks. Native PPMd extraction covers
-empty, repeated-symbol, simple root-symbol, periodic-prefix, stock-7z
-non-solid multi-block streams with LZMA encoded headers, stock-7z
-no-stream empty-file entries, stock-7z BCJ+PPMd filter chains, and
-BCJ2 graphs with Copy, PPMd, or supported main pre-coders. The PPMd model table is allocated from the archive's
-declared PPMd memory and requested output size rather than a fixed
-stream-independent context cap; broader PPMd entries fail closed with a non-Ok
-status.
+handles LZMA payloads with the library default properties, `Seven_Zip_LZMA2`
+handles valid LZMA2 chunks, and `Seven_Zip_PPMd` handles PPMd7 payloads.
 The corresponding `*_Files`
 helpers write multi-entry file-list archives with independently packed file
 entries, no-stream directory entries, and distinct entry names.
 `Seven_Zip_PPMd`, `Seven_Zip_PPMd_File`, and
 `Seven_Zip_PPMd_Files` emit native PPMd archives
-accepted by this crate's native extractor without calling local `7z`; empty
-output uses a range-initialized empty stream, modeled stock-compatible
-candidates use generated bytes, repeated/periodic payloads use specialized forms
-when verified, and other supported payloads use a verified native root-context
-fallback.
-These native APIs do not imply
-encryption or a native general-purpose 7z codec stack.
+accepted by this crate's native extractor and stock `7z` without calling a
+local `7z`.
+`Seven_Zip_Filtered` emits a single-entry two-coder compressed filtered folder
+with one supported pre-filter and one supported terminal codec; stock `7z`
+accepts the generated BCJ+LZMA and Delta+LZMA archives covered by the optional
+interop tool.
+`Seven_Zip_Method_Graph` emits arbitrary supported non-encrypted single-entry
+method-graph containers from caller-supplied packed stream bytes and zero-based
+7z bind-pair and packed-stream indices. The graph writer does not automatically
+execute arbitrary codec graphs from plain input.
 The native extractor skips SFX prefixes
 and common archive/file metadata fields while extracting supported payload
 layouts. Covered solid-substream, BCJ2 graph, and bounded linear filter-chain
@@ -144,10 +129,5 @@ traversing output paths.
 Duplicate matching entry names are rejected during extraction. Requested
 payloads are verified before any output file is written.
 
-For broader 7z use cases, the former external bridge APIs are retained as
-compatibility placeholders. `Seven_Zip_External_File` and
-`Extract_Seven_Zip_External_File` do not invoke local `7z`; unsupported broader
-creation, extraction, unsupported solid layouts, and
-password-protected archives fail closed with deterministic status codes. These
-external APIs are separate from the deterministic native Copy/Deflate
-writer/parser.
+Unsupported broader 7z creation and extraction requests fail closed with
+deterministic status codes.

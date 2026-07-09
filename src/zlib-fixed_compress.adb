@@ -1,17 +1,22 @@
+with Ada.Streams;
 with Interfaces;
+with CryptoLib.Checksums;
 with Zlib.Bit_Writer;
-with Zlib.Checksums;
 with Zlib.Deflate_Tables;
 with Zlib.LZ77_Matcher;
 
 package body Zlib.Fixed_Compress is
    use type Interfaces.Unsigned_32;
 
-   function Reverse_Bits (Value : Natural; Count : Natural) return Natural is
+   function Reverse_Bits (Value : Natural; Count : Natural) return Natural
+     with Pre => Count <= 9,
+          SPARK_Mode => On
+   is
       Work   : Natural := Value;
       Result : Natural := 0;
    begin
       for I in 1 .. Count loop
+         pragma Loop_Invariant (Result < 2 ** (I - 1));
          Result := Result * 2 + (Work mod 2);
          Work := Work / 2;
       end loop;
@@ -21,6 +26,7 @@ package body Zlib.Fixed_Compress is
 
    procedure Fixed_Code
      (Symbol : Natural; Code : out Natural; Length : out Natural)
+     with SPARK_Mode => On
    is
       Canonical : Natural;
    begin
@@ -54,12 +60,30 @@ package body Zlib.Fixed_Compress is
    end Write_Fixed_Symbol;
 
    function U32_To_Byte
-     (Value : Interfaces.Unsigned_32; Shift : Natural) return Zlib.Byte is
+     (Value : Interfaces.Unsigned_32; Shift : Natural) return Zlib.Byte
+     with Pre => Shift <= 24,
+          SPARK_Mode => On
+   is
    begin
       return Zlib.Byte (Interfaces.Shift_Right (Value, Shift) and 16#FF#);
    end U32_To_Byte;
 
-   function Length_Symbol_For (Length : Natural) return Natural is
+   function Compute_Adler32
+     (Input : Zlib.Byte_Array)
+      return Interfaces.Unsigned_32
+   is
+      State : CryptoLib.Checksums.Adler32_State;
+   begin
+      CryptoLib.Checksums.Adler32_Reset (State);
+      for B of Input loop
+         CryptoLib.Checksums.Adler32_Update (State, Ada.Streams.Stream_Element (B));
+      end loop;
+      return CryptoLib.Checksums.Adler32_Value (State);
+   end Compute_Adler32;
+
+   function Length_Symbol_For (Length : Natural) return Natural
+     with SPARK_Mode => On
+   is
    begin
       if Length = Zlib.LZ77_Matcher.Max_Match_Length then
          return 285;
@@ -79,7 +103,9 @@ package body Zlib.Fixed_Compress is
       return 285;
    end Length_Symbol_For;
 
-   function Distance_Symbol_For (Distance : Natural) return Natural is
+   function Distance_Symbol_For (Distance : Natural) return Natural
+     with SPARK_Mode => On
+   is
    begin
       for Symbol in Zlib.Deflate_Tables.Distance_Symbol loop
          if Distance >= Zlib.Deflate_Tables.Distance_Base (Symbol)
@@ -135,7 +161,7 @@ package body Zlib.Fixed_Compress is
    is
       W      : Zlib.Bit_Writer.Writer;
       Adler  : constant Interfaces.Unsigned_32 :=
-        Zlib.Checksums.Adler32 (Input);
+        Compute_Adler32 (Input);
       Tokens : constant Zlib.LZ77_Matcher.Token_Array :=
         Zlib.LZ77_Matcher.Tokenize
           (Input, Zlib.LZ77_Matcher.Chain_Limit_For_Level (1));

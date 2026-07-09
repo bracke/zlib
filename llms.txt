@@ -19,19 +19,23 @@ The headline goal is **full, pure-Ada 7z encode and decode** — read any standa
 external codec libraries. What is listed under "Public API families" below is
 *current progress*, not the final boundary. Important honest caveats for agents:
 
-- 7z **decode** is complete for Copy / Deflate / BZip2 / LZMA / LZMA2 and a
-  narrow, growing subset of PPMd and filter-chain layouts; anything else fails
-  closed with `Unsupported_Method`.
-- 7z **PPMd write** is currently *generate-and-verify*: it emits only payloads
-  it can model (empty, repeated, periodic, root-context) and verify by decoding,
-  **not** a general PPMd encoder. A real PPMd7 encoder is planned.
-- Branch filters (x86 BCJ, Delta) are **decode-only** today; the rest of the
-  family and encode-side filters are planned.
-- AES encryption, solid compression, and multi-volume archives are **not yet
-  implemented**.
+- 7z **decode** covers the implemented pure-Ada method set: Copy / Deflate /
+  BZip2 / LZMA / LZMA2 / PPMd7, branch/Delta filters, BCJ2 graphs,
+  AES-encrypted payloads and headers, solid archives, and multi-volume archives.
+- 7z **PPMd write** uses the real `Zlib.PPMd7` encoder; container paths call
+  `Zlib.PPMd7.Compress` and `Zlib.PPMd7.Decompress` directly.
+- Branch filters (x86/ARM/ARMT/ARM64/PPC/SPARC/IA-64/RISC-V BCJ) and Delta
+  have encode/decode transforms, and `Seven_Zip_Filtered` writes
+  non-encrypted compressed filtered archives with one pre-filter plus a
+  supported codec.
+- `Seven_Zip_Method_Graph` writes low-level non-encrypted method graph
+  containers from caller-supplied packed stream bytes.
 
-See `docs/SEVEN_ZIP_PLAN.md` for the ordered implementation plan and
-`docs/CONSTRAINTS.md` for the precise done-versus-planned breakdown.
+See `docs/SEVEN_ZIP_PLAN.md` for the ordered implementation plan,
+`docs/CONSTRAINTS.md` for the precise done-versus-planned breakdown, and
+`tools/bin/seven_zip_interop_check` for the optional stock-7z interop lane,
+including file-list directory entries, BCJ2, RISC-V when stock support is
+available, and encrypted wrong-password checks.
 
 ## Read first
 
@@ -45,17 +49,22 @@ See `docs/SEVEN_ZIP_PLAN.md` for the ordered implementation plan and
 
 ## Public API families
 
-- `Inflate`: one-shot zlib input only
-- `Inflate_With_Header`: explicit one-shot zlib/gzip/raw input
+- `Inflate`: one-shot zlib/gzip/raw input with lightweight auto-detection
+- `Inflate_With_Header`: one-shot input; `Default` auto-detects, concrete
+  `Zlib_Header`/`GZip`/`Raw_Deflate` modes are wrapper-strict. `GZip`
+  accepts concatenated members unless `GZip_Mode => Single_Member` is requested
 - `Inflate_Raw`: one-shot raw Deflate input
 - `Deflate`, `Deflate_Stored`, `Deflate_Fixed`, `Deflate_Dynamic`: zlib output
 - `GZip`: gzip output
 - `Deflate_Raw`: raw Deflate output
 - `Seven_Zip_Stored`, `Seven_Zip_Deflate`, `Seven_Zip_BZip2`,
   `Seven_Zip_LZMA`, `Seven_Zip_LZMA2`, `Seven_Zip_PPMd`: native 7z output;
-  PPMd emits verified PPMd streams without calling local `7z`, selecting among
-  modeled stock-compatible candidates, repeated/periodic forms, a native
-  root-context fallback, and complete generated-archive self-checks
+  `Seven_Zip_Filtered`: native single-entry compressed filtered 7z output
+  such as BCJ+LZMA or Delta+Deflate; `Seven_Zip_Method_Graph`: low-level
+  single-entry non-encrypted method-graph container output from already packed
+  stream bytes; PPMd emits verified PPMd streams without calling local `7z`,
+  selecting among modeled stock-compatible candidates, repeated/periodic forms,
+  a native root-context fallback, and complete generated-archive self-checks
 - `Seven_Zip_Stored`/`Seven_Zip_Deflate`/`Seven_Zip_BZip2`/`Seven_Zip_LZMA`/
   `Seven_Zip_LZMA2`/`Seven_Zip_PPMd` metadata overloads: native single-entry
   7z output with supported per-entry modification FILETIME and Windows
@@ -83,24 +92,33 @@ See `docs/SEVEN_ZIP_PLAN.md` for the ordered implementation plan and
 - `Inflate_Init`, `Translate`, `Flush`, `Stream_End`, `Close`: streaming inflate
 - `Deflate_Init`, `Compress`, `Compress_Flush`, `Compress_Stream_End`,
   `Compress_Close`: streaming compression
-- `Adler32`, `CRC32`: checksum helpers
+- `Deflate_Bound`, `GZip_Bound`, `Deflate_Raw_Bound`: conservative output
+  bounds for one-shot compression
 
 ## Wrapper rules
 
-- `Default` means exactly `Zlib_Header`.
-- No public API auto-detects wrappers.
-- `Inflate` is zlib-wrapper-only.
+- one-shot `Default` and `Inflate` auto-detect zlib/gzip/raw wrappers.
+- streaming inflate `Default` auto-detects zlib, gzip, or raw Deflate input;
+  streaming compression `Default` means `Zlib_Header`.
+- concrete wrapper modes remain wrapper-strict.
 - `GZip` emits gzip, not zlib.
 - `Deflate_Raw` emits raw Deflate payload bytes only, with no wrapper checksum.
-- Multi-member gzip input is explicit through `GZip_Member_Mode`.
-- Multi-member gzip output and ZIP container support are out of scope.
+- Multi-member gzip input is implicit for one-shot and streaming gzip input;
+  strict single-member input is explicit through `GZip_Member_Mode`.
+- Multi-member gzip output and ZIP container support are available through
+  explicit public APIs.
 
 ## Validation
+
+Use Alire GNAT 15 only. The manifests require `gnat_native = "^15"`, and the
+release guards fail unless `alr exec -- gnatls --version` reports GNATLS 15.x.
+Do not validate with plain system `gnat*`, `gnatprove`, or `gprbuild`.
 
 Preferred repository validation:
 
 ```sh
 alr build
+alr exec -- gnatls --version
 alr exec -- gprbuild -P zlib.gpr
 cd tests && alr exec -- gprbuild -P tests.gpr
 cd tests && ./bin/tests

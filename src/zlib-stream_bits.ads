@@ -68,6 +68,17 @@ package Zlib.Stream_Bits is
    --  @param Source Source argument supplied to Read_Byte_Aligned
    --  @param Status Status argument supplied to Read_Byte_Aligned
    --  @return result produced by Read_Byte_Aligned
+   function Peek_Byte_Aligned
+     (Source : Bit_Source;
+      Offset : Natural;
+      Status : out Read_Status)
+      return Ada.Streams.Stream_Element;
+   --  Return a byte from an already byte-aligned source without consuming it.
+   --  Offset is zero-based from the next byte that would be read.
+   --  @param Source Source argument supplied to Peek_Byte_Aligned
+   --  @param Offset Offset argument supplied to Peek_Byte_Aligned
+   --  @param Status Status argument supplied to Peek_Byte_Aligned
+   --  @return result produced by Peek_Byte_Aligned
    function Input_Consumed
      (Source : Bit_Source)
       return Natural;

@@ -259,6 +259,8 @@ begin
    declare
       Input            : constant Zlib.Byte_Array := Load_Input;
       Last_Output_Len  : Natural := 0;
+      Min_Output_Len   : Natural := Natural'Last;
+      Max_Output_Len   : Natural := 0;
       Start_Time       : Ada.Calendar.Time;
       Stop_Time        : Ada.Calendar.Time;
       Total_In         : Natural := 0;
@@ -304,6 +306,8 @@ begin
             end if;
 
             Last_Output_Len := Encoded'Length;
+            Min_Output_Len := Natural'Min (Min_Output_Len, Encoded'Length);
+            Max_Output_Len := Natural'Max (Max_Output_Len, Encoded'Length);
             Total_In := Total_In + Input'Length;
             Total_Compressed := Total_Compressed + Encoded'Length;
          end;
@@ -319,9 +323,15 @@ begin
       TIO.Put_Line ("input bytes:" & Natural'Image (Input'Length));
       TIO.Put_Line ("output bytes:" & Natural'Image (Last_Output_Len));
       TIO.Put_Line ("compressed bytes:" & Natural'Image (Last_Output_Len));
+      TIO.Put_Line ("min compressed bytes:" & Natural'Image (Min_Output_Len));
+      TIO.Put_Line ("max compressed bytes:" & Natural'Image (Max_Output_Len));
+      TIO.Put_Line
+        ("avg compressed bytes:" & Natural'Image (Total_Compressed / Config.Repeat_Count));
       TIO.Put_Line ("ratio:" & Long_Float'Image (Ratio (Last_Output_Len, Input'Length)) & "%");
+      TIO.Put_Line ("avg ratio:" & Long_Float'Image (Ratio (Total_Compressed, Total_In)) & "%");
       TIO.Put_Line ("repeat:" & Positive'Image (Config.Repeat_Count));
       TIO.Put_Line ("elapsed:" & Duration'Image (Stop_Time - Start_Time) & " s");
+      TIO.Put_Line ("avg elapsed:" & Duration'Image ((Stop_Time - Start_Time) / Config.Repeat_Count) & " s");
       TIO.Put_Line
         ("throughput:"
          & Long_Float'Image (Throughput_MiB_S (Total_In, Stop_Time - Start_Time))

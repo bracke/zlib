@@ -24,6 +24,7 @@ package body Zlib.Stream_Inflate is
    function Has_Non_Zero_Length
      (Lengths : Zlib.Huffman.Code_Length_Array)
       return Boolean
+      with SPARK_Mode => On
    is
    begin
       for I in Lengths'Range loop
@@ -60,6 +61,7 @@ package body Zlib.Stream_Inflate is
    begin
       D.Inflate := Need_Block_Header;
       D.Wrapper := Need_CMF;
+      D.Active_Header := Zlib.Default;
       D.BFinal := False;
       D.CMF := 0;
       D.FLG := 0;
@@ -79,12 +81,12 @@ package body Zlib.Stream_Inflate is
       D.Expected_Dictionary_ID := 0;
       D.Dictionary_ID := 0;
       D.Dictionary_Supplied := False;
-      Zlib.Checksums.Reset (D.Adler);
+      CryptoLib.Checksums.Adler32_Reset (D.Adler);
       D.GZip_FLG := 0;
       D.GZip_XLEN := 0;
       D.GZip_Extra_Left := 0;
-      Zlib.CRC32_Internal.Reset (D.GZip_Header_CRC);
-      Zlib.CRC32_Internal.Reset (D.GZip_Data_CRC);
+      CryptoLib.Checksums.CRC32_Reset (D.GZip_Header_CRC);
+      CryptoLib.Checksums.CRC32_Reset (D.GZip_Data_CRC);
       D.GZip_HCRC := 0;
       D.GZip_Expected_CRC := 0;
       D.GZip_Expected_ISIZE := 0;
@@ -98,6 +100,7 @@ package body Zlib.Stream_Inflate is
    begin
       D.Inflate := Need_Block_Header;
       D.Wrapper := Need_GZip_ID1;
+      D.Active_Header := Zlib.GZip;
       D.BFinal := False;
       D.CMF := 0;
       D.FLG := 0;
@@ -114,12 +117,12 @@ package body Zlib.Stream_Inflate is
       D.Length_Value := 0;
       D.Distance_Value := 0;
       D.Expected_Adler := 0;
-      Zlib.Checksums.Reset (D.Adler);
+      CryptoLib.Checksums.Adler32_Reset (D.Adler);
       D.GZip_FLG := 0;
       D.GZip_XLEN := 0;
       D.GZip_Extra_Left := 0;
-      Zlib.CRC32_Internal.Reset (D.GZip_Header_CRC);
-      Zlib.CRC32_Internal.Reset (D.GZip_Data_CRC);
+      CryptoLib.Checksums.CRC32_Reset (D.GZip_Header_CRC);
+      CryptoLib.Checksums.CRC32_Reset (D.GZip_Data_CRC);
       D.GZip_HCRC := 0;
       D.GZip_Expected_CRC := 0;
       D.GZip_Expected_ISIZE := 0;
@@ -152,6 +155,7 @@ package body Zlib.Stream_Inflate is
      (CMF : Ada.Streams.Stream_Element;
       FLG : Ada.Streams.Stream_Element)
       return Boolean
+     with SPARK_Mode => On
    is
       Combined : constant Natural := Natural (CMF) * 256 + Natural (FLG);
       CM       : constant Natural := Natural (CMF) mod 16;
@@ -165,6 +169,7 @@ package body Zlib.Stream_Inflate is
    function FDICT_Set
      (FLG : Ada.Streams.Stream_Element)
       return Boolean
+     with SPARK_Mode => On
    is
    begin
       return (Natural (FLG) / 32) mod 2 = 1;
@@ -283,7 +288,7 @@ package body Zlib.Stream_Inflate is
          Repeat_Symbol := D.Pending_Repeat_Symbol;
       else
          declare
-            Table : constant Zlib.Huffman.Decode_Table := D.Code_Length_Table;
+            Table : Zlib.Huffman.Decode_Table renames D.Code_Length_Table;
          begin
             Decode_Huffman_Symbol
               (D, Source, Table, Decoded_Symbol, Status);
@@ -442,12 +447,12 @@ package body Zlib.Stream_Inflate is
    is
    begin
       if Header = Zlib.GZip then
-         Zlib.CRC32_Internal.Update (D.GZip_Data_CRC, B);
+         CryptoLib.Checksums.CRC32_Update (D.GZip_Data_CRC, B);
          D.GZip_ISIZE := D.GZip_ISIZE + 1;
       elsif Header = Zlib.Raw_Deflate then
          null;
       else
-         Zlib.Checksums.Update (D.Adler, B);
+         CryptoLib.Checksums.Adler32_Update (D.Adler, B);
       end if;
    end Note_Output;
 
@@ -716,7 +721,8 @@ package body Zlib.Stream_Inflate is
 
             when Compressed_Symbol =>
                declare
-                  Table          : constant Zlib.Huffman.Decode_Table := D.Lit_Len_Table;
+                  Table          : Zlib.Huffman.Decode_Table
+                                     renames D.Lit_Len_Table;
                   Decoded_Symbol : Natural;
                begin
                   Decode_Huffman_Symbol
@@ -793,7 +799,8 @@ package body Zlib.Stream_Inflate is
                end if;
 
                declare
-                  Table          : constant Zlib.Huffman.Decode_Table := D.Dist_Table;
+                  Table          : Zlib.Huffman.Decode_Table
+                                     renames D.Dist_Table;
                   Decoded_Symbol : Natural;
                begin
                   Decode_Huffman_Symbol
@@ -879,17 +886,65 @@ package body Zlib.Stream_Inflate is
       B : Ada.Streams.Stream_Element)
    is
    begin
-      Zlib.CRC32_Internal.Update (D.GZip_Header_CRC, B);
+      CryptoLib.Checksums.CRC32_Update (D.GZip_Header_CRC, B);
    end Header_Byte;
 
    function GZip_Flag_Set
      (D    : Decoder;
       Mask : Natural)
       return Boolean
+     with SPARK_Mode => On
    is
    begin
       return (Interfaces.Unsigned_32 (D.GZip_FLG) and Interfaces.Unsigned_32 (Mask)) /= 0;
    end GZip_Flag_Set;
+
+   procedure Select_Default_Header
+     (D      : in out Decoder;
+      Source : in out Zlib.Stream_Bits.Bit_Source;
+      Status : out Decode_Status)
+   is
+      Peek_Status : Zlib.Stream_Bits.Read_Status;
+      First       : Ada.Streams.Stream_Element;
+      Second      : Ada.Streams.Stream_Element;
+   begin
+      First := Zlib.Stream_Bits.Peek_Byte_Aligned (Source, 0, Peek_Status);
+      case Peek_Status is
+         when Zlib.Stream_Bits.Ok =>
+            null;
+         when Zlib.Stream_Bits.Need_Input =>
+            Status := Need_Input;
+            return;
+         when Zlib.Stream_Bits.Invalid_State =>
+            Fail (D, Status, Malformed, Zlib.Invalid_Header);
+            return;
+      end case;
+
+      Second := Zlib.Stream_Bits.Peek_Byte_Aligned (Source, 1, Peek_Status);
+      case Peek_Status is
+         when Zlib.Stream_Bits.Ok =>
+            null;
+         when Zlib.Stream_Bits.Need_Input =>
+            Status := Need_Input;
+            return;
+         when Zlib.Stream_Bits.Invalid_State =>
+            Fail (D, Status, Malformed, Zlib.Invalid_Header);
+            return;
+      end case;
+
+      if First = 16#1F# and then Second = 16#8B# then
+         D.Active_Header := Zlib.GZip;
+         D.Wrapper := Need_GZip_ID1;
+      elsif Header_Valid (First, Second) then
+         D.Active_Header := Zlib.Zlib_Header;
+         D.Wrapper := Need_CMF;
+      else
+         D.Active_Header := Zlib.Raw_Deflate;
+         D.Wrapper := Deflate_Data;
+      end if;
+
+      Status := Ok;
+   end Select_Default_Header;
 
    procedure Decode
      (D      : in out Decoder;
@@ -901,9 +956,18 @@ package body Zlib.Stream_Inflate is
       B : Ada.Streams.Stream_Element;
    begin
       if Header = Zlib.Raw_Deflate and then D.Wrapper = Need_CMF then
+         D.Active_Header := Zlib.Raw_Deflate;
          D.Wrapper := Deflate_Data;
       elsif Header = Zlib.GZip and then D.Wrapper = Need_CMF then
+         D.Active_Header := Zlib.GZip;
          D.Wrapper := Need_GZip_ID1;
+      elsif Header = Zlib.Zlib_Header and then D.Wrapper = Need_CMF then
+         D.Active_Header := Zlib.Zlib_Header;
+      elsif Header = Zlib.Default and then D.Wrapper = Need_CMF then
+         Select_Default_Header (D, Source, Status);
+         if Status /= Ok then
+            return;
+         end if;
       end if;
 
       loop
@@ -1175,20 +1239,20 @@ package body Zlib.Stream_Inflate is
                end if;
                D.GZip_HCRC := D.GZip_HCRC or
                  Interfaces.Shift_Left (Interfaces.Unsigned_32 (B), 8);
-               if D.GZip_HCRC /= (Zlib.CRC32_Internal.Value (D.GZip_Header_CRC) and 16#FFFF#) then
+               if D.GZip_HCRC /= (CryptoLib.Checksums.CRC32_Value (D.GZip_Header_CRC) and 16#FFFF#) then
                   Fail (D, Status, Checksum_Error, Zlib.Invalid_Checksum);
                   return;
                end if;
                D.Wrapper := Deflate_Data;
 
             when Deflate_Data =>
-               Step_Deflate (D, Header, Source, Window, Status);
+               Step_Deflate (D, D.Active_Header, Source, Window, Status);
                if Status = Ok and then D.Inflate = Finished then
-                  if Header = Zlib.GZip then
+                  if D.Active_Header = Zlib.GZip then
                      D.GZip_Expected_CRC := 0;
                      D.GZip_Expected_ISIZE := 0;
                      D.Wrapper := Need_GZip_CRC_0;
-                  elsif Header = Zlib.Raw_Deflate then
+                  elsif D.Active_Header = Zlib.Raw_Deflate then
                      D.Wrapper := Done;
                      Status := Stream_End;
                      return;
@@ -1237,7 +1301,7 @@ package body Zlib.Stream_Inflate is
                D.Expected_Adler :=
                  D.Expected_Adler or Interfaces.Unsigned_32 (B);
 
-               if D.Expected_Adler /= Zlib.Checksums.Value (D.Adler) then
+               if D.Expected_Adler /= CryptoLib.Checksums.Adler32_Value (D.Adler) then
                   Fail (D, Status, Checksum_Error, Zlib.Invalid_Checksum);
                   return;
                end if;
@@ -1279,7 +1343,7 @@ package body Zlib.Stream_Inflate is
                end if;
                D.GZip_Expected_CRC := D.GZip_Expected_CRC or
                  Interfaces.Shift_Left (Interfaces.Unsigned_32 (B), 24);
-               if D.GZip_Expected_CRC /= Zlib.CRC32_Internal.Value (D.GZip_Data_CRC) then
+               if D.GZip_Expected_CRC /= CryptoLib.Checksums.CRC32_Value (D.GZip_Data_CRC) then
                   Fail (D, Status, Checksum_Error, Zlib.Invalid_Checksum);
                   return;
                end if;
@@ -1327,7 +1391,7 @@ package body Zlib.Stream_Inflate is
                return;
 
             when Done =>
-               if Header = Zlib.GZip then
+               if D.Active_Header = Zlib.GZip then
                   Status := Member_End;
                else
                   Status := Stream_End;
@@ -1344,6 +1408,7 @@ package body Zlib.Stream_Inflate is
    function Is_Finished
      (D : Decoder)
       return Boolean
+     with SPARK_Mode => On
    is
    begin
       return D.Wrapper = Done;
@@ -1352,6 +1417,7 @@ package body Zlib.Stream_Inflate is
    function Is_Failed
      (D : Decoder)
       return Boolean
+     with SPARK_Mode => On
    is
    begin
       return D.Wrapper = Failed or else D.Inflate = Failed;
@@ -1360,9 +1426,19 @@ package body Zlib.Stream_Inflate is
    function Last_Status
      (D : Decoder)
       return Zlib.Status_Code
+     with SPARK_Mode => On
    is
    begin
       return D.Last_Status;
    end Last_Status;
+
+   function Active_Header
+     (D : Decoder)
+      return Zlib.Header_Type
+     with SPARK_Mode => On
+   is
+   begin
+      return D.Active_Header;
+   end Active_Header;
 
 end Zlib.Stream_Inflate;

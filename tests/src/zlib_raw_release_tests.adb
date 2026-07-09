@@ -446,8 +446,16 @@ package body Zlib_Raw_Release_Tests is
          Payload,
          Label & ": one-shot raw semantic roundtrip");
       Assert (Status = Zlib.Ok, Label & ": one-shot raw semantic status");
-      Assert_Rejected (Streamed, Zlib.Default, Label & ": streamed raw rejected by default Inflate");
-      Assert_Rejected (One_Shot, Zlib.Default, Label & ": one-shot raw rejected by default Inflate");
+      Assert_Same
+        (Zlib.Inflate_With_Header (Streamed, Zlib.Default, Status),
+         Payload,
+         Label & ": streamed raw auto-detected by default Inflate");
+      Assert (Status = Zlib.Ok, Label & ": streamed raw default status");
+      Assert_Same
+        (Zlib.Inflate_With_Header (One_Shot, Zlib.Default, Status),
+         Payload,
+         Label & ": one-shot raw auto-detected by default Inflate");
+      Assert (Status = Zlib.Ok, Label & ": one-shot raw default status");
       Assert (Streamed'Length > 0, Label & ": streamed raw output non-empty");
       Assert (One_Shot'Length > 0, Label & ": one-shot raw output non-empty");
    end Assert_Raw_Roundtrip;
@@ -619,7 +627,11 @@ package body Zlib_Raw_Release_Tests is
                Payload,
                Mode_Name (Mode) & " raw accepted by Raw_Deflate");
             Assert (Status = Zlib.Ok, Mode_Name (Mode) & " raw accepted status");
-            Assert_Rejected (Raw_Out, Zlib.Default, Mode_Name (Mode) & " raw rejected by Default");
+            Assert_Same
+              (Zlib.Inflate_With_Header (Raw_Out, Zlib.Default, Status),
+               Payload,
+               Mode_Name (Mode) & " raw accepted by Default");
+            Assert (Status = Zlib.Ok, Mode_Name (Mode) & " raw Default status");
             Assert_Rejected (Raw_Out, Zlib.Zlib_Header, Mode_Name (Mode) & " raw rejected by Zlib_Header");
             Assert_Rejected (Raw_Out, Zlib.GZip, Mode_Name (Mode) & " raw rejected by GZip");
             Assert_Rejected (Zlib_Out, Zlib.Raw_Deflate, Mode_Name (Mode) & " zlib rejected by Raw_Deflate");

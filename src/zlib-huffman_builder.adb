@@ -3,11 +3,15 @@ package body Zlib.Huffman_Builder is
    function Ceil_Log2
      (Value : Positive)
       return Natural
+     with SPARK_Mode => On
    is
       Power  : Natural := 1;
       Result : Natural := 0;
    begin
-      while Power < Value loop
+      while Power < Value and then Result < Max_Deflate_Code_Length + 1 loop
+         pragma Loop_Invariant (Result <= Max_Deflate_Code_Length + 1);
+         pragma Loop_Invariant (Power <= 2 ** Result);
+         pragma Loop_Variant (Increases => Result);
          Power := Power * 2;
          Result := Result + 1;
       end loop;

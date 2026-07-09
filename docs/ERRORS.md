@@ -12,7 +12,7 @@
 | `Ok` | Operation completed successfully. |
 | `Invalid_Header` | zlib header is malformed or fails wrapper validation. |
 | `Unsupported_Method` | zlib/gzip compression method is not Deflate. |
-| `Unsupported_Preset_Dictionary` | zlib header requests a preset dictionary; dictionaries are unsupported. |
+| `Unsupported_Preset_Dictionary` | zlib header requests a preset dictionary but no matching dictionary was supplied. |
 | `Invalid_Checksum` | Adler-32 validation failed for zlib input, or CRC32/ISIZE validation failed for gzip input. |
 | `Invalid_Block_Type` | Deflate block type is invalid or unsupported. |
 | `Invalid_Stored_Block` | Stored-block `LEN`/`NLEN` validation failed. |

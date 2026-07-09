@@ -12,6 +12,13 @@ with Zlib;
 
 Do not import child packages from consumer code.
 
+## Parallel callers
+
+Independent jobs are reentrant: use separate buffers, streaming filter objects,
+and output paths per Ada task. Shared `Filter_Type`, `Compression_Filter_Type`,
+mutable buffers, or overlapping filesystem destinations need caller-side
+synchronization.
+
 ## Core data and result types
 
 | Need | Declaration |
@@ -28,13 +35,16 @@ Do not import child packages from consumer code.
 
 | Input format | API |
 | --- | --- |
-| zlib-wrapped Deflate | `Inflate (Input, Status)` |
-| explicit zlib/gzip/raw wrapper | `Inflate_With_Header (Input, Header, Status)` |
+| zlib/gzip/raw Deflate with one-shot auto-detection | `Inflate (Input, Status)` |
+| default auto-detect or explicit zlib/gzip/raw wrapper | `Inflate_With_Header (Input, Header, Status)` |
 | explicit gzip single or multi-member | `Inflate_With_Header (Input, Header => GZip, GZip_Mode => ..., Status => Status)` |
 | raw Deflate payload | `Inflate_Raw (Input, Status)` |
 | zlib stream requiring preset dictionary | `Inflate_With_Dictionary (Input, Dictionary, Status)` |
 
-`Inflate` is zlib-only. It does not auto-detect gzip or raw Deflate.
+`Inflate`, `Inflate_With_Header` with `Header => Default`, and streaming
+`Inflate_Init` with `Header => Default` auto-detect zlib, gzip, or raw Deflate
+input. Gzip input accepts concatenated members by default; concrete headers
+remain wrapper-strict.
 
 ## One-shot compression
 
@@ -58,12 +68,13 @@ Do not import child packages from consumer code.
 | native Copy-coder 7z output with metadata | `Seven_Zip_Stored (Input, Entry_Name, Metadata, Status)` |
 | native header-only 7z directory entry | `Seven_Zip_Stored` metadata overload with `Metadata.Is_Directory = True` |
 | Deflate/BZip2/LZMA/LZMA2/PPMd 7z output | `Seven_Zip_Deflate`, `Seven_Zip_BZip2`, `Seven_Zip_LZMA`, `Seven_Zip_LZMA2`, `Seven_Zip_PPMd` |
+| compressed filtered 7z output | `Seven_Zip_Filtered (Input, Entry_Name, Filter, Codec, Status)` |
+| explicit 7z method graph container output | `Seven_Zip_Method_Graph (Packed_Data, Entry_Name, Coders, Bind_Pairs, Packed_Streams, Pack_Sizes, Unpack_Sizes, Unpacked_CRC, Metadata, Status)` |
 | compressed 7z output with metadata | `Seven_Zip_Deflate`, `Seven_Zip_BZip2`, `Seven_Zip_LZMA`, `Seven_Zip_LZMA2`, `Seven_Zip_PPMd` metadata overloads |
 | extract supported native 7z layouts | `Extract_Seven_Zip_Stored`, `Extract_Seven_Zip` |
 | inspect supported 7z entry metadata | `Extract_Seven_Zip_Metadata` |
 | file helper 7z output/extraction | `Seven_Zip_*_File`, `Extract_Seven_Zip_*_File`; dirs are header-only |
 | file-list 7z output/extraction | `Seven_Zip_*_Files`, `Extract_Seven_Zip_*_Files`; dirs are no-stream |
-| broader 7z compatibility placeholders | `Seven_Zip_External_File`, `Extract_Seven_Zip_External_File` |
 
 Native 7z extraction covers the library Copy/Deflate/BZip2/LZMA/LZMA2 layouts,
 selected solid/filter-chain layouts including standard zero-based,
@@ -73,11 +84,17 @@ mode-ladder streams including empty streams with range headers, stock-7z
 no-stream empty-file entries, BCJ+PPMd filter chains, and BCJ2 graphs with
 Copy, PPMd, or supported main pre-coders.
 The PPMd model table is sized from declared PPMd memory and requested output
-size. `Seven_Zip_PPMd` and `Seven_Zip_PPMd_Files` emit verified PPMd streams
+size. `Seven_Zip_Filtered` emits non-encrypted compressed filtered archives
+such as BCJ+LZMA and Delta+Deflate, including the RISC-V 7z 24.x compact
+branch-filter method ID. `Seven_Zip_Method_Graph` emits arbitrary
+supported non-encrypted 7z method graph containers from caller-supplied packed
+streams using zero-based 7z bind-pair and packed-stream indices.
+`Seven_Zip_PPMd` and `Seven_Zip_PPMd_Files` emit verified PPMd streams
 without calling local `7z`; candidate selection includes stock-compatible
 modeled candidates, repeated/periodic forms, and a native root-context
 fallback. File and file-list helpers create needed parent directories and
-restore supported directories, modification times, and read-only attributes.
+restore supported directories,
+modification times, and read-only attributes.
 Neutral 7z extraction
 fails closed for broader unsupported methods. It is not a general-purpose 7z
 codec.
@@ -131,6 +148,10 @@ Use this order:
 5. Check `Stream_End (Filter)`.
 6. Call `Close (Filter)`.
 
+`Inflate_Init (Filter, Header => Default)` auto-detects zlib, gzip, or raw
+Deflate input. Concrete headers remain wrapper-strict. Detected gzip input uses
+multi-member mode unless `GZip_Mode => Single_Member` is passed.
+
 For dictionary streams, call `Inflate_Set_Dictionary` only after the stream asks
 for a preset dictionary through the documented failure/status path.
 
@@ -154,8 +175,12 @@ wrapper/trailer bytes. `Header => Zlib_Header` emits zlib wrapper/trailer bytes.
 
 | Need | API |
 | --- | --- |
-| zlib Adler-32 | `Adler32 (Input)` |
-| gzip CRC32 | `CRC32 (Input)` |
+| zlib Adler-32 | internal wrapper validation via `CryptoLib.Checksums` |
+| gzip/ZIP/7z CRC32 | internal wrapper/archive validation via `CryptoLib.Checksums` |
+| direct Adler-32 or CRC32 | use `CryptoLib.Checksums` |
+| conservative zlib output bound | `Deflate_Bound (Input_Length)` |
+| conservative gzip output bound | `GZip_Bound (Input_Length)` |
+| conservative raw Deflate output bound | `Deflate_Raw_Bound (Input_Length)` |
 
 ## Wrapper matrix
 

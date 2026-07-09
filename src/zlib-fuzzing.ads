@@ -17,6 +17,7 @@ package Zlib.Fuzzing is
       Compression_Level_Target,
       Lifecycle_Target,
       Mutation_Target,
+      Flush_Target,
       Tiny_Buffer_Target);
 
    type Fuzz_Result is record
@@ -70,20 +71,23 @@ package Zlib.Fuzzing is
    --  @return result produced by Last_Hex_Snippet
 
    function Expected_Failures_Are_Allowed
-     (Target : Target_Kind) return Boolean;
+     (Target : Target_Kind) return Boolean
+     with SPARK_Mode => On;
    --  Return the Expected Failures Are Allowed result.
    --  @param Target Target argument supplied to Expected_Failures_Are_Allowed
    --  @return result produced by Expected_Failures_Are_Allowed
 
    function Acceptable
-     (Target : Target_Kind; Result : Fuzz_Result) return Boolean;
+     (Target : Target_Kind; Result : Fuzz_Result) return Boolean
+     with SPARK_Mode => On;
    --  Return the Acceptable result.
    --  @param Target Target argument supplied to Acceptable
    --  @param Result Result argument supplied to Acceptable
    --  @return result produced by Acceptable
 
    function Same_Result
-     (Left : Fuzz_Result; Right : Fuzz_Result) return Boolean;
+     (Left : Fuzz_Result; Right : Fuzz_Result) return Boolean
+     with SPARK_Mode => On;
    --  Return the Same Result result.
    --  @param Left Left argument supplied to Same_Result
    --  @param Right Right argument supplied to Same_Result

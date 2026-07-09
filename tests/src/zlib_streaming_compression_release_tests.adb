@@ -674,10 +674,10 @@ package body Zlib_Streaming_Compression_Release_Tests is
       end;
 
       declare
-         Rejected : constant Zlib.Byte_Array := Zlib.Inflate (Gout, Status);
-         pragma Unreferenced (Rejected);
+         Decoded : constant Zlib.Byte_Array := Zlib.Inflate (Gout, Status);
       begin
-         Assert (Status /= Zlib.Ok, "gzip output rejected by Inflate");
+         Assert (Status = Zlib.Ok, "gzip output auto-detected by Inflate");
+         Assert_Same (Decoded, Payload, "gzip output Inflate auto-detect payload");
       end;
    end Test_Wrapper_Strictness_Final;
 
@@ -904,7 +904,7 @@ package body Zlib_Streaming_Compression_Release_Tests is
          "zlib and gzip trailers split across one-byte output calls validate endian/checksum contracts");
       Registration.Register_Routine
         (T, Test_Wrapper_Strictness_Final'Access,
-         "wrong-wrapper output is rejected without auto-detection");
+         "concrete wrong-wrapper output is rejected while Inflate auto-detects");
       Registration.Register_Routine
         (T, Test_Stream_End_Only_After_Output_Drained'Access,
          "Compress_Stream_End becomes true only after final output is drained");

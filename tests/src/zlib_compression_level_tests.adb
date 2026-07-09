@@ -46,6 +46,36 @@ package body Zlib_Compression_Level_Tests is
       return Result;
    end Repeated_Input;
 
+   function Distance_Choice_Input return Zlib.Byte_Array is
+      Result : Zlib.Byte_Array (1 .. 8192);
+   begin
+      for I in Result'Range loop
+         case I mod 97 is
+            when 0 .. 31 =>
+               Result (I) := Zlib.Byte (Character'Pos ('a') + (I mod 7));
+            when 32 .. 63 =>
+               Result (I) := Zlib.Byte (Character'Pos ('A') + (I mod 5));
+            when others =>
+               Result (I) := Zlib.Byte ((I * 19 + I / 11) mod 251);
+         end case;
+      end loop;
+
+      for Base in 1 .. 16 loop
+         declare
+            Target : constant Natural := 4096 + Base * 64;
+         begin
+            for Offset in 0 .. 47 loop
+               Result (Target + Offset) := Result (Base * 64 + Offset);
+            end loop;
+            for Offset in 0 .. 47 loop
+               Result (Target + 128 + Offset) := Result (Target + Offset);
+            end loop;
+         end;
+      end loop;
+
+      return Result;
+   end Distance_Choice_Input;
+
    function Git_Shaped_Input return Zlib.Byte_Array is
    begin
       return
@@ -237,6 +267,25 @@ package body Zlib_Compression_Level_Tests is
       end loop;
    end Test_Level_Output_Deterministic;
 
+   procedure Test_High_Level_Distance_Tuning_Does_Not_Regress
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Input          : constant Zlib.Byte_Array := Distance_Choice_Input;
+      Default_Status : Zlib.Status_Code;
+      High_Status    : Zlib.Status_Code;
+      Default_Output : constant Zlib.Byte_Array :=
+        Zlib.Deflate_Raw (Input, Zlib.Default_Level, Default_Status);
+      High_Output    : constant Zlib.Byte_Array :=
+        Zlib.Deflate_Raw (Input, Zlib.Compression_Level'(9), High_Status);
+   begin
+      Assert (Default_Status = Zlib.Ok, "default-level distance tuning setup");
+      Assert (High_Status = Zlib.Ok, "level 9 distance tuning status");
+      Assert
+        (High_Output'Length <= Default_Output'Length,
+         "level 9 distance tuning must not produce larger raw output than default level");
+   end Test_High_Level_Distance_Tuning_Does_Not_Regress;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
@@ -256,5 +305,8 @@ package body Zlib_Compression_Level_Tests is
                                      "gzip metadata level overload roundtrips");
       Registration.Register_Routine (T, Test_Level_Output_Deterministic'Access,
                                      "level outputs are deterministic");
+      Registration.Register_Routine
+        (T, Test_High_Level_Distance_Tuning_Does_Not_Regress'Access,
+         "high levels keep distance-tuned output bounded");
    end Register_Tests;
 end Zlib_Compression_Level_Tests;

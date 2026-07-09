@@ -1,8 +1,7 @@
 with Ada.Streams;
 with Interfaces;
 
-with Zlib.Checksums;
-with Zlib.CRC32_Internal;
+with CryptoLib.Checksums;
 with Zlib.Huffman;
 with Zlib.Sliding_Window;
 with Zlib.Stream_Bits;
@@ -134,26 +133,37 @@ package Zlib.Stream_Inflate is
    --  @param Status Status argument supplied to Decode
    function Is_Finished
      (D : Decoder)
-      return Boolean;
+      return Boolean
+     with SPARK_Mode => On;
    --  Return True after the active wrapper mode has fully validated.
    --  @param D D argument supplied to Is_Finished
    --  @return result produced by Is_Finished
    function Is_Failed
      (D : Decoder)
-      return Boolean;
+      return Boolean
+     with SPARK_Mode => On;
    --  Return True after a malformed, unsupported, or checksum failure.
    --  @param D D argument supplied to Is_Failed
    --  @return result produced by Is_Failed
    function Last_Status
      (D : Decoder)
-      return Zlib.Status_Code;
+      return Zlib.Status_Code
+     with SPARK_Mode => On;
    --  Return the public status code corresponding to the last failure.
    --  @param D D argument supplied to Last_Status
    --  @return result produced by Last_Status
+   function Active_Header
+     (D : Decoder)
+      return Zlib.Header_Type
+     with SPARK_Mode => On;
+   --  Return the concrete wrapper selected for the active decode operation.
+   --  @param D D argument supplied to Active_Header
+   --  @return result produced by Active_Header
 private
    type Decoder is record
       Inflate        : Inflate_State := Need_Block_Header;
       Wrapper        : Wrapper_State := Need_CMF;
+      Active_Header  : Zlib.Header_Type := Zlib.Default;
       BFinal         : Boolean := False;
       CMF            : Ada.Streams.Stream_Element := 0;
       FLG            : Ada.Streams.Stream_Element := 0;
@@ -185,7 +195,7 @@ private
       Length_Value   : Natural range 0 .. 258 := 0;
       Distance_Value : Natural range 0 .. 32_768 := 0;
 
-      Adler          : Zlib.Checksums.Adler32_State;
+      Adler          : CryptoLib.Checksums.Adler32_State;
       Expected_Adler : Interfaces.Unsigned_32 := 0;
       Dictionary_ID  : Interfaces.Unsigned_32 := 0;
       Expected_Dictionary_ID : Interfaces.Unsigned_32 := 0;
@@ -194,8 +204,8 @@ private
       GZip_FLG       : Ada.Streams.Stream_Element := 0;
       GZip_XLEN      : Natural range 0 .. 65_535 := 0;
       GZip_Extra_Left : Natural range 0 .. 65_535 := 0;
-      GZip_Header_CRC : Zlib.CRC32_Internal.CRC32_State;
-      GZip_Data_CRC   : Zlib.CRC32_Internal.CRC32_State;
+      GZip_Header_CRC : CryptoLib.Checksums.CRC32_State;
+      GZip_Data_CRC   : CryptoLib.Checksums.CRC32_State;
       GZip_HCRC       : Interfaces.Unsigned_32 := 0;
       GZip_Expected_CRC   : Interfaces.Unsigned_32 := 0;
       GZip_Expected_ISIZE : Interfaces.Unsigned_32 := 0;

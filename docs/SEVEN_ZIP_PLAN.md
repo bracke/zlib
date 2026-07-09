@@ -5,43 +5,63 @@ decode any standard `.7z` archive that `7z`/p7zip can produce, and produce
 archives they can read back, with no external codec libraries and no shelling
 out to a local `7z`.
 
-This plan is grounded in the current implementation, which lives almost entirely
-in the monolithic `src/zlib.adb` (~23k lines). Line anchors below are accurate as
-of this writing; treat them as starting points, not guarantees.
+This plan is grounded in the current implementation. The public 7z API remains
+in `src/zlib.ads`, while most writer/listing/filesystem orchestration and shared
+container helpers now live in internal child packages. The root body still owns
+public wrapper glue, codec callbacks that depend on root Deflate/LZMA entry
+points, and the large native 7z folder decode paths. Encoded-header recovery is
+shared by extraction and listing through `Zlib.Seven_Zip_Header_Reading`.
+Passwords are threaded through read/list/extract callbacks as explicit decode
+context.
 
 ## Where the 7z code lives today
 
-| Concern | Location (`src/zlib.adb`) |
+| Concern | Location |
 |---|---|
-| Coder method enum (`Seven_Zip_Coder_Method`) | grep `Seven_Zip_Coder_Method` |
-| Writer coder-metadata emission (`Append_Seven_Zip_Coder`) | ~6719–6789 |
-| Single-file archive assembly (`Seven_Zip_Single_File`) | ~12566–12677 |
-| Method-ID parsing on decode | ~19351–19512 |
-| Folder / bind-pair analysis | ~19524–19809 |
-| Single-coder decode dispatch (`Run_Post_Coders`) | ~20463–20615 |
-| BCJ2 multi-coder dispatch (`Decode_BCJ2_Main_Chain`) | ~21298–21442 |
-| Delta decode (`Seven_Zip_Delta_Decode`) | ~6791–6822 |
-| x86 BCJ decode (`Seven_Zip_BCJ_X86_Decode`) | ~11365–11415 |
-| BCJ2 decode (`Seven_Zip_BCJ2_Decode`) | ~11417–11457 |
-| PPMd decoder (`Seven_Zip_PPMd_Decode`) | ~6824–11074 |
-| PPMd generate-and-verify writer (`Seven_Zip_PPMd_Encode`) | ~16807–17285 |
+| Public contract and compatibility wrappers | `src/zlib.ads`, `src/zlib.adb` |
+| Method IDs, descriptors, arity, and classification | `Zlib.Seven_Zip_Methods` |
+| Coder descriptor emission and writer properties | `Zlib.Seven_Zip_Coders` |
+| Container header/envelope construction | `Zlib.Seven_Zip_Container` |
+| Method-graph stream arithmetic and validation | `Zlib.Seven_Zip_Graphs` |
+| 7z UInt64 and little-endian scalar helpers | `Zlib.Seven_Zip_Numbers` |
+| Safe entry and filesystem path validation | `Zlib.Seven_Zip_Paths` |
+| FilesInfo parsing, target lookup, metadata images, and source metadata | `Zlib.Seven_Zip_Properties` |
+| Branch filters, Delta, and BCJ2 transforms | `Zlib.Seven_Zip_Filters` |
+| AES-256/SHA-256/KDF/CBC support | `Zlib.Seven_Zip_AES` |
+| PPMd7 codec | `Zlib.PPMd7` |
+| Single-entry codec and method-graph writers | `Zlib.Seven_Zip_Codec_Writing` |
+| File and file-list writer orchestration | `Zlib.Seven_Zip_File_Writing` |
+| BCJ2 writer orchestration | `Zlib.Seven_Zip_BCJ2_Writing` |
+| Encrypted writer orchestration | `Zlib.Seven_Zip_Encrypted_Writing` |
+| Filtered writer orchestration | `Zlib.Seven_Zip_Filtered_Writing` |
+| Header-encrypted writer orchestration | `Zlib.Seven_Zip_Header_Encryption` |
+| Encoded-header read recovery and normalization | `Zlib.Seven_Zip_Header_Reading` |
+| Read-side folder graph analysis and linear chain decode; BCJ2 graph decode; PPMd fallback; substream slicing | `Zlib.Seven_Zip_Folder_Decoding` |
+| Filesystem extraction staging and metadata application | `Zlib.Seven_Zip_File_Extraction` |
+| Split-volume read/write/extract orchestration | `Zlib.Seven_Zip_Volumes` |
+| Archive listing dispatch | `Zlib.Archive_Listing` |
+| Archive directory extraction dispatch | `Zlib.Archive_Directory_Extraction` |
+| Native 7z folder decode loops | `src/zlib.adb` |
 
-### Architectural debt to address alongside the features
+### Remaining architecture debt
 
-The 7z subsystem is one 23k-line file with `if/elsif` method-ID matching and
-nested dispatch functions. Before or during the larger workstreams, extract the
-7z code into internal child packages so each codec is independently testable:
+The largest remaining 7z cleanup is native read-side orchestration in
+`src/zlib.adb`. Listing dispatch has moved into `Zlib.Seven_Zip_Listing`;
+encoded-header recovery is shared through `Zlib.Seven_Zip_Header_Reading`; and
+folder graph analysis, bind-pair mapping, linear coder-chain execution, BCJ2 graph decode, PPMd fallback
+policy, and solid substream slicing are shared through `Zlib.Seven_Zip_Folder_Decoding`. password handling now uses explicit decode context
+instead of root-global state. FilesInfo target-entry walking is shared through
+`Zlib.Seven_Zip_Properties`. The root body still carries StreamsInfo section
+ordering and codec callback dispatch.
 
-- `Zlib.Seven_Zip.Filters` — branch/delta converters (this is milestone 1).
-- `Zlib.Seven_Zip.PPMd` — model + range coder, both directions.
-- `Zlib.Seven_Zip.LZMA` — encoder/decoder and properties.
-- `Zlib.Seven_Zip.Crypto` — AES-256, SHA-256, key derivation.
-- `Zlib.Seven_Zip.Container` — header parse/build, folders, bind pairs, streams.
+Future cleanup should extract these pieces without changing the public root API:
 
-Replace the hard-coded method-ID `if/elsif` chains (parse side ~19351 and
-dispatch side ~20463) with a single table mapping method-ID → codec descriptor
-(decode fn, encode fn, property shape). New codecs then become table entries plus
-a package, not surgery on a 23k-line procedure.
+- Broader reuse between `Zlib.Seven_Zip_Listing` and extraction after
+  StreamsInfo and folder metadata are parsed.
+
+Replace remaining decode dispatch chains with descriptors where practical. New
+codecs should become table entries plus a package, not surgery on a root-body
+procedure.
 
 ## Standard 7z method IDs (reference)
 
@@ -76,15 +96,15 @@ read, (2) self-contained low-risk work first, (3) the hard codec/crypto work
 last. Each milestone ends with round-trip tests and, where a reference `7z` is
 available in CI, cross-tool interop tests.
 
-### M1 — Full branch-filter family (encode + decode) — DONE (except RISC-V)
+### M1 — Full branch-filter family (encode + decode) — DONE
 
 Each branch filter is a deterministic byte transform with a known algorithm
 (LZMA SDK `Bra*.c` / xz). No entropy coding, no allocation.
 
 - Internal package `Zlib.Seven_Zip_Filters` provides `Branch_Convert`
   (encode/decode) for x86 (full masked BCJ), ARM, ARMT, ARM64, PPC, SPARC,
-  IA-64, plus Delta. Each pair is exact inverses; functions return 1-based
-  arrays (codebase convention).
+  IA-64, RISC-V JAL, plus Delta. Each pair is exact inverses; functions return
+  1-based arrays (codebase convention).
 - Method-IDs are wired into the decode parser (classic 4-byte **and** compact
   1-byte forms), every decode dispatch site, the BCJ2 pre-coder case, and
   writer coder emission. The buggy simplified inline x86 decoder was replaced
@@ -92,22 +112,29 @@ Each branch filter is a deterministic byte transform with a known algorithm
 - Tested by round-trips, interop known-answer vectors, and frozen stock-7z
   fixtures; **validated against stock 7-Zip 23.01** (all filters × multiple
   binaries/sizes decode byte-identically).
-- **RISC-V is deferred** (Task #8): 7-Zip 23.01 predates the RISC-V filter, so
-  it cannot be cross-validated; shipping the intricate converter unvalidated is
-  avoided. Add it once a 7-Zip 24.x+ is available.
+- RISC-V method `0B` and the 32-bit JAL converter are implemented and covered
+  by local round-trip and known-answer tests. Stock RISC-V archive validation
+  is wired into `tools/bin/seven_zip_interop_check` and runs when a 7-Zip 24.x+
+  binary is available; this workstation has 23.01, which predates the filter.
 
-### M2 — Writer multi-coder folders (filter + codec with bind pairs)
+### M2 — Writer multi-coder folders (filter + codec with bind pairs) — DONE
 
-The writer currently emits only single-coder folders. To *produce* filtered
-archives (and later, solid ones), the header builder must emit folders with
-multiple coders, bind pairs, and ordered pack streams.
+The writer emits public single-entry compressed filtered archives through
+`Seven_Zip_Filtered`. It applies one supported branch/Delta pre-filter,
+compresses the filtered bytes with Deflate, BZip2, LZMA, LZMA2, or PPMd, and
+emits the two-coder folder, bind pair, ordered packed stream, sizes, and CRCs.
+The lower-level `Seven_Zip_Method_Graph` writer emits arbitrary supported
+non-encrypted single-entry 7z method graph containers from caller-supplied
+packed stream bytes, coders, bind pairs, packed stream indexes, stream sizes,
+and the final unpacked CRC. It is a container writer; callers remain
+responsible for producing packed bytes that match the graph.
 
-- Generalize `Seven_Zip_Single_File` / `Append_Seven_Zip_Coder` to take a coder
-  chain rather than one coder.
-- Emit `NumCoders`, per-coder in/out stream counts, `BindPairs`, and
-  `PackedStreams` correctly.
-- Tests: build filter→LZMA archives and read them back with our own extractor
-  (which already supports bounded linear filter chains) and with stock `7z`.
+- Tested by building BCJ+LZMA and Delta+Deflate archives and reading them back
+  with the native extractor's bounded linear filter-chain path.
+- Tested by building an explicit BCJ+Delta+Deflate graph archive from
+  pre-packed bytes and reading it back with the native extractor.
+- BCJ2 stored archive writing remains covered by the separate `Seven_Zip_BCJ2`
+  writer.
 
 ### M3 — General PPMd7 (variant H) codec — DONE (real, bit-exact)
 
@@ -129,8 +156,9 @@ and the 7z range decoder **and** encoder. `Compress`/`Decompress` are the API.
 Fully complete: `Glue_Free_Blocks` (the memory-pressure coalescing path) is
 implemented and validated bit-exact vs stock on 1–2 MB inputs at 1 MB `mem`,
 orders 4–32, both directions. The ~8500 lines of fake PPMd code (pattern
-encoders + canned decoder) have been deleted; the historic decode entry points
-remain only as thin shims to `Zlib.PPMd7.Decompress`.
+encoders + canned decoder) and the historic local decode shims have been
+deleted; container paths call `Zlib.PPMd7.Compress` and
+`Zlib.PPMd7.Decompress` directly.
 
 ### M3.5 — LZMA/LZMA2 standard-compliance (CORRECTNESS — mostly DONE)
 
@@ -180,20 +208,27 @@ This is a prerequisite for any real LZMA interop and should land before M4.
 
 `LZMA_Encode_Bounded` uses an **HC3 hash-chain** match finder (matches extend to
 the LZMA maximum of 273) feeding a **price-based optimal parser** (M4+): a
-forward shortest-path DP over 2 KB segments that carries `State` + the four
+forward shortest-path DP over 8 KB segments that carries `State` + the four
 repeat distances per offset and prices every literal/match/rep against an
-integer LZMA-SDK bit-price table. Long matches (≥ nice-len) are taken whole for
-speed. Emission reuses the proven range-coder routines, so a misprice only costs
-ratio, never correctness. Output stays standard — stock `7z` reads it and our
-decoder reads it; LZMA2 shares the encoder.
+integer LZMA-SDK bit-price table. The parser includes one-byte `rep0` short
+reps for interrupted repeats. Direct, filtered, file-list, solid, encrypted
+LZMA 7z output, native ZIP LZMA payloads, and compressed LZMA2 chunks try a
+bounded set of valid `lc`/`lp`/`pb` property candidates and write the winning
+property byte into the coder metadata or chunk header. Long matches
+(≥ nice-len) are taken whole for speed. Parser passes start at 8 KB and extend
+up to 32 KB when a nice-length match would otherwise cross the pass boundary,
+matching the intended flush-at-long-match behavior while keeping memory bounded.
+Emission
+reuses the proven range-coder routines, so a misprice only costs ratio, never
+correctness. Output stays standard — stock `7z` reads it and our decoder reads
+it; LZMA2 shares the encoder.
 
 Result vs stock `7z` LZMA: **within +1.9% everywhere** (most under +1%), and it
 **beats** stock on text (−1%) and highly-repetitive data (−16%). Throughput
 ≈0.6 s per 300 KB. (The pre-optimal greedy+lazy+rep encoder was +3.4..11%.)
 
-Still future work: 7z-style flush-at-long-match segmentation (removes the small
-residual match split at segment boundaries on pathological inputs) and per-input
-`lc`/`lp`/`pb` tuning (defaults 3/0/2).
+Per-input `lc`/`lp`/`pb` tuning already covers direct, filtered, file-list,
+solid, encrypted, ZIP LZMA, and compressed LZMA2 writer paths.
 
 ### M5 — Solid compression — DONE
 
@@ -220,7 +255,7 @@ on many similar files (e.g. 1.3 KB solid vs 5.4 KB non-solid). 845/845 green.
   AES-256-CBC encrypt/decrypt. Validated bit-exact vs stock (decrypting a
   stock pack reproduces the exact inner stream).
 - **Decode**: the AES coder is parsed (`06F10701` + control/salt/IV props),
-  the active password drives key derivation, and the decrypted pack (block
+  the requested password drives key derivation, and the decrypted pack (block
   padding dropped to the coder unpack size) feeds the inner coder.
   `Extract_Seven_Zip (.., Password, ..)` overload. Works for AES+LZMA /
   AES+LZMA2 data **and** encrypted headers (`mhe=on`), various sizes.
@@ -243,15 +278,30 @@ stock 7-Zip.
 
 ## Cross-cutting: interop test harness
 
-Add an optional CI lane that, when a real `7z`/`p7zip` binary is present:
+An optional stock-7z lane is implemented as `tools/bin/seven_zip_interop_check`.
+When a real `7z`/`p7zip` binary is present, it:
 
-- for every codec/filter, encodes with us → decodes with `7z`, and encodes with
-  `7z` → decodes with us;
-- runs on a fixed corpus (text, machine code per architecture, random,
-  incompressible, empty, large).
+- encodes Copy, Deflate, BZip2, LZMA, LZMA2, and PPMd with us, extracts them
+  with stock `7z`, and byte-compares empty, code-shaped, text-like, and large
+  deterministic payloads;
+- encodes the same six methods with stock `7z`, extracts them with us, and
+  byte-compares the same payload corpus;
+- exercises non-solid multi-entry file-list archives with files plus no-stream
+  directory entries for all six methods in both directions;
+- exercises BCJ+LZMA and Delta+LZMA filtered archives in both directions across
+  non-empty corpus variants;
+- probes for the stock `RISCV` method and, when available, exercises
+  RISCV+LZMA filtered archives in both directions across non-empty corpus
+  variants;
+- exercises BCJ2 archives in both directions;
+- exercises solid LZMA, LZMA2, and PPMd multi-file archives in both directions;
+- exercises AES-encrypted LZMA payloads and encrypted headers in both
+  directions, including encrypted-header listing and wrong-password rejection;
+- exercises multi-volume archives in both directions.
 
-Keep it optional so the default pure-Ada build/test path stays dependency-free,
-matching the existing release-checklist philosophy.
+It skips successfully when `7z` is absent, and skips only the RISC-V stock
+cases when the present `7z` predates that method, so the default pure-Ada
+build/test path stays dependency-free.
 
 ## Definition of done
 

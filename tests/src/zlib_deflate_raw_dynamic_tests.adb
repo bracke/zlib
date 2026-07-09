@@ -136,12 +136,13 @@ package body Zlib_Deflate_Raw_Dynamic_Tests is
         Zlib.Inflate_With_Header (Compressed, Zlib.Zlib_Header, Zlib_Status);
       GZip_Attempt : constant Zlib.Byte_Array :=
         Zlib.Inflate_With_Header (Compressed, Zlib.GZip, GZip_Status);
-      pragma Unreferenced (Default_Attempt, Zlib_Attempt, GZip_Attempt);
+      pragma Unreferenced (Zlib_Attempt, GZip_Attempt);
    begin
       Assert (Status = Zlib.Ok, Message & ": Deflate_Raw Dynamic status");
       Assert (Inflated_Status = Zlib.Ok, Message & ": raw inflate status");
       Assert_Same (Inflated, Input, Message & ": roundtrip");
-      Assert (Default_Status /= Zlib.Ok, Message & ": rejected by default Inflate");
+      Assert (Default_Status = Zlib.Ok, Message & ": auto-detected by default Inflate");
+      Assert_Same (Default_Attempt, Input, Message & ": default Inflate output");
       Assert (Zlib_Status /= Zlib.Ok, Message & ": rejected as zlib");
       Assert (GZip_Status /= Zlib.Ok, Message & ": rejected as gzip");
    end Assert_Roundtrip;

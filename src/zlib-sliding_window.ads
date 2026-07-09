@@ -30,13 +30,15 @@ package Zlib.Sliding_Window is
    --  @param Data Data argument supplied to Seed
    function Total_Output
      (W : Window)
-      return Natural;
+      return Natural
+     with SPARK_Mode => On;
    --  Return total decoded bytes accepted into the window.
    --  @param W W argument supplied to Total_Output
    --  @return result produced by Total_Output
    function Pending_Output
      (W : Window)
-      return Natural;
+      return Natural
+     with SPARK_Mode => On;
    --  Return bytes waiting to be drained by the public API.
    --  @param W W argument supplied to Pending_Output
    --  @return result produced by Pending_Output
@@ -100,7 +102,8 @@ package Zlib.Sliding_Window is
    --  @param Out_Last Out_Last argument supplied to Drain_Append
    function Copy_Active
      (W : Window)
-      return Boolean;
+      return Boolean
+     with SPARK_Mode => On;
    --  Return True while an LZ77 match copy still has bytes remaining.
    --  @param W W argument supplied to Copy_Active
    --  @return result produced by Copy_Active

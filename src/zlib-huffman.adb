@@ -1,21 +1,24 @@
 package body Zlib.Huffman is
 
-   function Reverse_Bits (Value : Natural; Length : Natural) return Natural is
+   function Reverse_Bits (Value : Natural; Length : Natural) return Natural
+     with Pre => Length <= Max_Code_Bits,
+          SPARK_Mode => On
+   is
       Result : Natural := 0;
       Temp   : Natural := Value;
    begin
-      for I in 0 .. Length - 1 loop
-         if Temp mod 2 = 1 then
-            Result := Result + 2 ** (Length - 1 - I);
-         end if;
-
+      for I in 1 .. Length loop
+         pragma Loop_Invariant (Result < 2 ** (I - 1));
+         Result := Result * 2 + (Temp mod 2);
          Temp := Temp / 2;
       end loop;
 
       return Result;
    end Reverse_Bits;
 
-   procedure Clear (Table : out Decode_Table) is
+   procedure Clear (Table : out Decode_Table)
+     with SPARK_Mode => On
+   is
    begin
       Table := (Lookup => [others => <>], Min_Length => 0, Max_Length => 0, Used_Count => 0);
    end Clear;
@@ -25,12 +28,13 @@ package body Zlib.Huffman is
       Code   : Natural;
       Length : Code_Length;
       Symbol : Symbol_Value;
-      Status : out Zlib.Status_Code) is
+      Status : out Zlib.Status_Code)
+     with Pre => Length > 0
+                   and then Length <= Max_Code_Bits
+                   and then Code < Table_Size,
+          SPARK_Mode => On
+   is
    begin
-      pragma Assert (Length > 0, "Huffman lookup length must be > 0");
-      pragma Assert (Length <= 15, "Huffman lookup length must be <= 15");
-      pragma Assert (Code < Table_Size, "Huffman lookup code out of range");
-
       if Table.Lookup (Code).Used then
          Status := Zlib.Invalid_Huffman_Code;
          return;
@@ -52,8 +56,12 @@ package body Zlib.Huffman is
          end if;
       end if;
 
-      Table.Used_Count := Table.Used_Count + 1;
-      Status := Zlib.Ok;
+      if Table.Used_Count = Natural'Last then
+         Status := Zlib.Invalid_Huffman_Code;
+      else
+         Table.Used_Count := Table.Used_Count + 1;
+         Status := Zlib.Ok;
+      end if;
    end Fill_Lookup;
 
    procedure Build

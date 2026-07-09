@@ -160,7 +160,10 @@ package body Zlib_Streaming_GZip_Tests is
       Pos    : Natural := Input'First;
    begin
       Result_Last := Result'First - 1;
-      Zlib.Inflate_Init (Filter, Header => Zlib.GZip);
+      Zlib.Inflate_Init
+        (Filter    => Filter,
+         Header    => Zlib.GZip,
+         GZip_Mode => Zlib.Single_Member);
 
       while Pos <= Input'Last loop
          declare
@@ -433,7 +436,7 @@ package body Zlib_Streaming_GZip_Tests is
       Zlib.Close (Filter);
    end Test_Stream_End_Waits_For_Trailer;
 
-   procedure Test_Extra_Bytes_After_Member
+   procedure Test_Explicit_Single_Member_Leaves_Extra_Bytes
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
@@ -449,15 +452,19 @@ package body Zlib_Streaming_GZip_Tests is
       end loop;
       In_Data (26) := 16#00#;
 
-      Zlib.Inflate_Init (Filter, Header => Zlib.GZip);
+      Zlib.Inflate_Init
+        (Filter    => Filter,
+         Header    => Zlib.GZip,
+         GZip_Mode => Zlib.Single_Member);
+
       Zlib.Translate (Filter, In_Data, In_Last, Out_Data, Out_Last);
 
       Assert (Zlib.Stream_End (Filter),
-              "single-member gzip must complete before extra byte");
+              "explicit single-member gzip must complete before extra byte");
       Assert (In_Last = 25,
-              "single-member gzip must leave post-member input unconsumed");
+              "explicit single-member gzip must leave post-member input unconsumed");
       Zlib.Close (Filter);
-   end Test_Extra_Bytes_After_Member;
+   end Test_Explicit_Single_Member_Leaves_Extra_Bytes;
 
    overriding procedure Register_Tests
      (T : in out Test_Case)
@@ -494,7 +501,7 @@ package body Zlib_Streaming_GZip_Tests is
       Registration.Register_Routine (T, Test_Truncated_Trailer'Access, "Finish on truncated trailer raises");
       Registration.Register_Routine (T, Test_Stream_End_Waits_For_Trailer'Access,
                                      "Stream_End waits for valid gzip trailer");
-      Registration.Register_Routine (T, Test_Extra_Bytes_After_Member'Access,
-                                     "single-member gzip leaves extra bytes unconsumed");
+      Registration.Register_Routine (T, Test_Explicit_Single_Member_Leaves_Extra_Bytes'Access,
+                                     "explicit single-member gzip leaves extra bytes unconsumed");
    end Register_Tests;
 end Zlib_Streaming_GZip_Tests;

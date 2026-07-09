@@ -1,14 +1,19 @@
 with Ada.Command_Line;
 with Ada.Directories;
+with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
 with GNAT.OS_Lib;
 
+with Project_Tools.Ada_Source;
+with Project_Tools.AUnit_Checks;
 with Project_Tools.Processes;
 with Project_Tools.Release_Checks;
 with Project_Tools.Tree_Checks;
 
 procedure Check_All is
+   use Ada.Strings.Unbounded;
+
    Root   : constant String := Ada.Directories.Full_Name (".");
    Alr    : constant String := Project_Tools.Processes.Locate_Command ("alr");
    Checks : constant Project_Tools.Release_Checks.Checker :=
@@ -21,19 +26,101 @@ procedure Check_All is
       Args    : GNAT.OS_Lib.Argument_List;
       Quiet   : Boolean := False) renames Project_Tools.Release_Checks.Run;
 
+   procedure Require_Readme_Tool (Main_Name : String) is
+   begin
+      Project_Tools.Release_Checks.Require_Text
+        (Checks, "README.md", "- `" & Main_Name & "`");
+   end Require_Readme_Tool;
+
+   procedure Require_Alire_GNAT_15 is
+      Output : Unbounded_String;
+   begin
+      Project_Tools.Processes.Run
+        (Label   => "GNAT 15 toolchain guard",
+         Dir     => Root,
+         Program => Alr,
+         Args    =>
+           [new String'("exec"), new String'("--"), new String'("gnatls"),
+            new String'("--version")],
+         Output  => Output,
+         Quiet   => True);
+
+      if Index (Output, "GNATLS 15.") = 0 then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "wrong Ada compiler: zlib validation must run through Alire GNAT 15; got:");
+         Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error, To_String (Output));
+         Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         raise Program_Error;
+      end if;
+   end Require_Alire_GNAT_15;
+
 begin
    Project_Tools.Processes.Require_Command
      ("alr", "alr executable not found on PATH");
-   Project_Tools.Processes.Require_Command
-     ("gprbuild", "gprbuild executable not found on PATH");
-   Project_Tools.Processes.Require_Command
-     ("gnatprove", "gnatprove executable not found on PATH");
+   Require_Alire_GNAT_15;
+   Project_Tools.Release_Checks.Require_Text
+     (Checks, "alire.toml", "gnat_native = ""^15""");
+   Project_Tools.Release_Checks.Require_Text
+     (Checks, "tests/alire.toml", "gnat_native = ""^15""");
+   Project_Tools.Release_Checks.Require_Text
+     (Checks, "check_zlib/alire.toml", "gnat_native = ""^15""");
 
    Project_Tools.Release_Checks.Require_File (Checks, "zlib.gpr");
    Project_Tools.Release_Checks.Require_File (Checks, "tests/tests.gpr");
    Project_Tools.Release_Checks.Require_File (Checks, "examples/examples.gpr");
    Project_Tools.Release_Checks.Require_File (Checks, "tools/tools.gpr");
    Project_Tools.Release_Checks.Require_File (Checks, "check_zlib/check_zlib.gpr");
+   Project_Tools.AUnit_Checks.Require_Registered_Test_Packages
+     (Test_Dir               => Root & "/tests/src",
+      Spec_Pattern           => "zlib_*_tests.ads",
+      Suite_Path             => Root & "/tests/src/zlib_suite.adb",
+      Documentation_Path     => Root & "/docs/TESTING.md",
+      Documented_Stem_Prefix => "- `zlib_");
+   Project_Tools.Release_Checks.Require_GPR_Main_Inventory
+     (Project_File                 => Root & "/tools/tools.gpr",
+      Documentation_File           => Root & "/tools/README.md",
+      Source_Directory             => Root & "/tools",
+      Alternate_Stem_Prefix        => "fuzz_",
+      Alternate_Source_Directory   => Root & "/tools/fuzz",
+     Alternate_Documentation_File => Root & "/docs/FUZZING.md",
+     Runner_File                  => Root & "/tools/check_all.adb",
+     Runner_Token_Prefix          => "./tools/bin/");
+   Require_Readme_Tool ("zlib_inflate_file.adb");
+   Require_Readme_Tool ("zlib_deflate_stored_file.adb");
+   Require_Readme_Tool ("zlib_deflate_fixed_file.adb");
+   Require_Readme_Tool ("zlib_deflate_dynamic_file.adb");
+   Require_Readme_Tool ("zlib_compress_file.adb");
+   Require_Readme_Tool ("zlib_streaming_roundtrip.adb");
+   Require_Readme_Tool ("gzip_file.adb");
+   Require_Readme_Tool ("gzip_metadata_file.adb");
+   Require_Readme_Tool ("gzip_streaming_roundtrip.adb");
+   Require_Readme_Tool ("raw_deflate_file.adb");
+   Require_Readme_Tool ("raw_inflate_file.adb");
+   Require_Readme_Tool ("raw_roundtrip.adb");
+   Require_Readme_Tool ("raw_vs_zlib_vs_gzip.adb");
+   Require_Readme_Tool ("zlib_bench_inflate.adb");
+   Require_Readme_Tool ("zlib_bench_deflate.adb");
+   Require_Readme_Tool ("zlib_bench_gzip.adb");
+   Require_Readme_Tool ("zlib_bench_raw.adb");
+   Require_Readme_Tool ("zlib_bench_matrix.adb");
+   Require_Readme_Tool ("seven_zip_interop_check.adb");
+   Require_Readme_Tool ("smoke_test.adb");
+   Require_Readme_Tool ("check_all.adb");
+   Require_Readme_Tool ("tools/fuzz/fuzz_inflate.adb");
+   Require_Readme_Tool ("tools/fuzz/fuzz_streaming_inflate.adb");
+   Require_Readme_Tool ("tools/fuzz/fuzz_compress_roundtrip.adb");
+   Require_Readme_Tool ("tools/fuzz/fuzz_compress_levels.adb");
+   Require_Readme_Tool ("tools/fuzz/fuzz_wrapper_mix.adb");
+   Require_Readme_Tool ("tools/fuzz/fuzz_dictionary.adb");
+   Require_Readme_Tool ("tools/fuzz/fuzz_gzip_metadata.adb");
+   Require_Readme_Tool ("tools/fuzz/fuzz_mutation.adb");
+   Require_Readme_Tool ("tools/fuzz/fuzz_flush.adb");
+   Require_Readme_Tool ("tools/fuzz/fuzz_lifecycle.adb");
+   Require_Readme_Tool ("tools/fuzz/fuzz_tiny_buffers.adb");
+   Project_Tools.Ada_Source.Require_Public_GNATdoc_Tags
+     (Spec_Path   => Root & "/src/zlib.ads",
+      Tags_Before => False);
    Project_Tools.Release_Checks.Require_Text
      (Checks, "src/zlib.ads", "function Seven_Zip_Stored");
    Project_Tools.Release_Checks.Require_Text
@@ -65,10 +152,6 @@ begin
    Project_Tools.Release_Checks.Require_Text
      (Checks, "src/zlib.ads", "procedure Seven_Zip_LZMA2_Files");
    Project_Tools.Release_Checks.Require_Text
-     (Checks, "src/zlib.ads", "procedure Seven_Zip_External_File");
-   Project_Tools.Release_Checks.Require_Text
-     (Checks, "src/zlib.ads", "procedure Extract_Seven_Zip_External_File");
-   Project_Tools.Release_Checks.Require_Text
      (Checks, "src/zlib.ads", "Level       : Compression_Level");
    Project_Tools.Release_Checks.Require_Text
      (Checks, "src/zlib.ads", "function Extract_Seven_Zip_Stored");
@@ -96,10 +179,31 @@ begin
      (Checks, "src/zlib.ads", "procedure ZIP_Files");
    Project_Tools.Release_Checks.Require_Text
      (Checks, "README.md",
-      "native stored, Deflate, BZip2, LZMA, and LZMA2 `.7z` output");
+      "native stored, Deflate, BZip2, LZMA, LZMA2, and PPMd `.7z`");
    Project_Tools.Release_Checks.Require_Text
      (Checks, "docs/CONSTRAINTS.md",
-      "native stored, Deflate, BZip2, LZMA, and LZMA2 `.7z` output");
+      "native stored, Deflate, BZip2, LZMA, LZMA2, and PPMd `.7z`");
+   Project_Tools.Release_Checks.Require_Text
+     (Checks, "docs/ARCHITECTURE.md",
+      "explicit decode context instead of root-global state");
+   Project_Tools.Release_Checks.Require_Text
+     (Checks, "docs/ARCHITECTURE.md",
+      "Zlib.Seven_Zip_Header_Reading");
+   Project_Tools.Release_Checks.Require_Text
+     (Checks, "docs/ARCHITECTURE.md",
+      "Zlib.Seven_Zip_Folder_Decoding");
+   Project_Tools.Release_Checks.Require_Text
+     (Checks, "docs/ARCHITECTURE.md",
+      "linear coder-chain execution");
+   Project_Tools.Release_Checks.Require_Text
+     (Checks, "docs/SEVEN_ZIP_PLAN.md",
+      "password handling now uses explicit decode context");
+   Project_Tools.Release_Checks.Require_Text
+     (Checks, "docs/SEVEN_ZIP_PLAN.md",
+      "Encoded-header read recovery and normalization");
+   Project_Tools.Release_Checks.Require_Text
+     (Checks, "docs/SEVEN_ZIP_PLAN.md",
+      "Read-side folder graph analysis and linear chain decode");
    Project_Tools.Release_Checks.Require_Text
      (Checks, "docs/API.md", "`Seven_Zip_Stored` emits a native `.7z` archive image");
    Project_Tools.Release_Checks.Require_Text
@@ -108,8 +212,6 @@ begin
      (Checks, "docs/API.md", "`Compression_Mode` or `Compression_Level`");
    Project_Tools.Release_Checks.Require_Text
      (Checks, "docs/API.md", "`Extract_Seven_Zip_Stored` verifies and extracts");
-   Project_Tools.Release_Checks.Require_Text
-     (Checks, "docs/API.md", "`Seven_Zip_External_File` and");
    Project_Tools.Release_Checks.Require_Text
      (Checks, "docs/API.md", "ZIP_External_Method_Name");
    Project_Tools.Release_Checks.Require_Text
@@ -130,8 +232,6 @@ begin
    Project_Tools.Release_Checks.Require_Text
      (Checks, "docs/COMPRESSION.md",
       "Broader 7z creation and extraction is available only through");
-   Project_Tools.Release_Checks.Require_Text
-     (Checks, "README.md", "opt-in external `.7z` creation/extraction");
    Project_Tools.Release_Checks.Require_Text
      (Checks, "tests/src/zlib_seven_zip_tests.adb", "native stored 7z extracts its own Copy-coder archives");
    Project_Tools.Release_Checks.Require_Text
@@ -299,14 +399,6 @@ begin
      (Checks, "tests/src/zlib_seven_zip_tests.adb",
       "native 7z extraction accepts broader PPMd streams");
    Project_Tools.Release_Checks.Require_Text
-     (Checks, "src/zlib.adb", "Use_State_Blocks : Boolean := False");
-   Project_Tools.Release_Checks.Require_Text
-     (Checks, "src/zlib.adb", "function PPMd_Has_State_Block");
-   Project_Tools.Release_Checks.Require_Text
-     (Checks, "src/zlib.adb", "function PPMd_Ensure_State_Capacity");
-   Project_Tools.Release_Checks.Require_Text
-     (Checks, "src/zlib.adb", "Use_State_Blocks => True");
-   Project_Tools.Release_Checks.Require_Text
      (Checks, "tests/src/zlib_seven_zip_tests.adb",
       "native 7z extraction rejects malformed PPMd properties");
    Project_Tools.Release_Checks.Require_Text
@@ -460,21 +552,6 @@ begin
      (Checks, "tests/src/zlib_release_contract_tests.adb", "external-style root 7z file-list API compiles");
    Project_Tools.Release_Checks.Require_Text
      (Checks, "tests/src/zlib_zip_external_codec_tests.adb",
-      "external 7z bridge creates and extracts broad archives when available");
-   Project_Tools.Release_Checks.Require_Text
-     (Checks, "tests/src/zlib_zip_external_codec_tests.adb",
-      "external 7z bridge preserves directories when available");
-   Project_Tools.Release_Checks.Require_Text
-     (Checks, "tests/src/zlib_zip_external_codec_tests.adb",
-      "external 7z extraction reports output directory errors");
-   Project_Tools.Release_Checks.Require_Text
-     (Checks, "tests/src/zlib_zip_external_codec_tests.adb",
-      "external 7z creation overwrites archives without stale entries");
-   Project_Tools.Release_Checks.Require_Text
-     (Checks, "tests/src/zlib_zip_external_codec_tests.adb",
-      "external 7z bridge reports missing input method and password errors");
-   Project_Tools.Release_Checks.Require_Text
-     (Checks, "tests/src/zlib_zip_external_codec_tests.adb",
       "ZIP BZip2 payloads are created in-process");
    Project_Tools.Release_Checks.Require_Text
      (Checks, "tests/src/zlib_zip_external_codec_tests.adb",
@@ -610,6 +687,11 @@ begin
       "./tools/bin/fuzz_mutation",
       [new String'("64"), new String'("69")]);
    Run
+     ("fuzz flush",
+      Root,
+      "./tools/bin/fuzz_flush",
+      [new String'("64"), new String'("73")]);
+   Run
      ("fuzz lifecycle",
       Root,
       "./tools/bin/fuzz_lifecycle",
@@ -620,11 +702,16 @@ begin
       "./tools/bin/fuzz_tiny_buffers",
       [new String'("64"), new String'("71")]);
 
-   Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr (Root & "/obj");
-   Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr (Root & "/tests/obj");
-   Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr (Root & "/examples/obj");
-   Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr (Root & "/tools/obj");
-   Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr (Root & "/check_zlib/obj");
+   Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr
+     (Root & "/obj", Allow_GNAT_Package_Spec_Stderr => True);
+   Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr
+     (Root & "/tests/obj", Allow_GNAT_Package_Spec_Stderr => True);
+   Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr
+     (Root & "/examples/obj", Allow_GNAT_Package_Spec_Stderr => True);
+   Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr
+     (Root & "/tools/obj", Allow_GNAT_Package_Spec_Stderr => True);
+   Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr
+     (Root & "/check_zlib/obj", Allow_GNAT_Package_Spec_Stderr => True);
 
    Ada.Text_IO.Put_Line ("zlib release checklist passed");
 exception

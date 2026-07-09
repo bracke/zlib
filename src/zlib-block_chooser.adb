@@ -12,8 +12,9 @@ package body Zlib.Block_Chooser is
      (Bits               : Natural;
       Starting_Bit_Index : Natural)
       return Natural
+     with SPARK_Mode => On
    is
-      Used : constant Natural := (Starting_Bit_Index + Bits) mod 8;
+      Used : constant Natural := (Starting_Bit_Index mod 8 + Bits mod 8) mod 8;
    begin
       return (if Used = 0 then 0 else 8 - Used);
    end Pad_To_Byte;
@@ -22,6 +23,8 @@ package body Zlib.Block_Chooser is
      (Bits               : Natural;
       Starting_Bit_Index : Natural)
       return Natural
+     with Pre => Bits <= Natural'Last - 7,
+          SPARK_Mode => On
    is
    begin
       return Bits + Pad_To_Byte (Bits, Starting_Bit_Index);
@@ -30,6 +33,7 @@ package body Zlib.Block_Chooser is
    function Length_Symbol_For
      (Length : Natural)
       return Natural
+     with SPARK_Mode => On
    is
    begin
       if Length = Zlib.LZ77_Matcher.Max_Match_Length then
@@ -51,6 +55,7 @@ package body Zlib.Block_Chooser is
    function Distance_Symbol_For
      (Distance : Natural)
       return Natural
+     with SPARK_Mode => On
    is
    begin
       for Symbol in Zlib.Deflate_Tables.Distance_Symbol loop
@@ -69,27 +74,48 @@ package body Zlib.Block_Chooser is
      (Payload_Length     : Natural;
       Starting_Bit_Index : Natural := 0)
       return Natural
+     with SPARK_Mode => On
    is
-      Remaining : Natural := Payload_Length;
-      Started   : Boolean := False;
-      Bits      : Natural := 0;
-      Bit_Pos   : Natural := Starting_Bit_Index mod 8;
-      This_Len  : Natural;
-      Header    : Natural;
+      First_Header : constant Natural := 3 + Pad_To_Byte (3, Starting_Bit_Index mod 8);
+      Block_Size   : constant Natural := Max_Compress_Block_Size;
+      Blocks       : Natural;
+      Bits         : Natural;
    begin
-      loop
-         This_Len := Natural'Min (Remaining, Max_Compress_Block_Size);
-         Header := 3;
-         Header := Header + Pad_To_Byte (Header, Bit_Pos);
-         Bits := Bits + Header + 32 + 8 * This_Len;
-         Bit_Pos := 0;
-         Started := True;
+      Blocks := Payload_Length / Block_Size;
+      if Payload_Length mod Block_Size /= 0 or else Blocks = 0 then
+         if Blocks = Natural'Last then
+            return Natural'Last;
+         end if;
+         Blocks := Blocks + 1;
+      end if;
 
-         exit when Remaining <= This_Len;
-         Remaining := Remaining - This_Len;
-      end loop;
+      Bits := First_Header;
 
-      pragma Assert (Started, "stored bit scorer must score at least one block");
+      if Bits > Natural'Last - 32 then
+         return Natural'Last;
+      end if;
+      Bits := Bits + 32;
+
+      if Blocks > 1 then
+         if Blocks - 1 > Natural'Last / 40 then
+            return Natural'Last;
+         end if;
+
+         if Bits > Natural'Last - (Blocks - 1) * 40 then
+            return Natural'Last;
+         end if;
+         Bits := Bits + (Blocks - 1) * 40;
+      end if;
+
+      if Payload_Length > Natural'Last / 8 then
+         return Natural'Last;
+      end if;
+
+      if Bits > Natural'Last - Payload_Length * 8 then
+         return Natural'Last;
+      end if;
+      Bits := Bits + Payload_Length * 8;
+
       return Bits;
    end Stored_Bit_Size;
 
@@ -257,6 +283,7 @@ package body Zlib.Block_Chooser is
      (Candidate : Candidate_Score;
       Current   : Candidate_Score)
       return Boolean
+     with SPARK_Mode => On
    is
    begin
       if not Candidate.Valid then
@@ -275,6 +302,7 @@ package body Zlib.Block_Chooser is
       Fixed_Candidate   : Candidate_Score;
       Dynamic_Candidate : Candidate_Score)
       return Candidate_Score
+     with SPARK_Mode => On
    is
       Best : Candidate_Score := Stored_Candidate;
    begin
@@ -332,7 +360,9 @@ package body Zlib.Block_Chooser is
       end if;
    end Choose;
 
-   function To_Mode (Kind : Block_Kind) return Compression_Mode is
+   function To_Mode (Kind : Block_Kind) return Compression_Mode
+     with SPARK_Mode => On
+   is
    begin
       case Kind is
          when Stored_Block =>

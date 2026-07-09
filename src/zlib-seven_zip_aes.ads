@@ -1,12 +1,10 @@
 --  Support level: private internal implementation.
 --
 --  7z AES-256 encryption helpers (method 06F10701: AES-256 + SHA-256).
---  Key derivation and the AES-256-CBC cipher are provided by the cryptolib
---  crate; this package adapts them to the crate's Byte_Array interface and the
---  7z key-derivation rule. Validated bit-exact against stock 7-Zip: decrypting
---  a stock-encrypted pack reproduces the exact inner (e.g. LZMA) stream.
-
-with Interfaces;
+--  Key derivation, AES-256-CBC, and random bytes are provided by the cryptolib
+--  crate; this package adapts them to the zlib crate's Byte_Array interface and
+--  the 7z archive wire format. Validated bit-exact against stock 7-Zip:
+--  decrypting a stock-encrypted pack reproduces the exact inner stream.
 
 package Zlib.Seven_Zip_AES is
 

@@ -1,9 +1,12 @@
-package body Zlib.Deflate_Tables is
+package body Zlib.Deflate_Tables
+  with SPARK_Mode => On
+is
 
    procedure Build_Fixed_Tables
      (Lit_Len_Table : out Zlib.Huffman.Decode_Table;
       Dist_Table    : out Zlib.Huffman.Decode_Table;
       Status        : out Zlib.Status_Code)
+     with SPARK_Mode => Off
    is
       Lit_Lengths  : Zlib.Huffman.Code_Length_Array (0 .. 287);
       Dist_Lengths : Zlib.Huffman.Code_Length_Array (0 .. 31);

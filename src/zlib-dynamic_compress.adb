@@ -1,6 +1,7 @@
+with Ada.Streams;
 with Interfaces;
+with CryptoLib.Checksums;
 with Zlib.Bit_Writer;
-with Zlib.Checksums;
 with Zlib.Huffman_Builder;
 with Zlib.Deflate_Tables;
 with Zlib.LZ77_Matcher;
@@ -28,10 +29,25 @@ package body Zlib.Dynamic_Compress is
    end Reverse_Bits;
 
    function U32_To_Byte
-     (Value : Interfaces.Unsigned_32; Shift : Natural) return Zlib.Byte is
+     (Value : Interfaces.Unsigned_32; Shift : Natural) return Zlib.Byte
+     with SPARK_Mode => On
+   is
    begin
       return Zlib.Byte (Interfaces.Shift_Right (Value, Shift) and 16#FF#);
    end U32_To_Byte;
+
+   function Compute_Adler32
+     (Input : Zlib.Byte_Array)
+      return Interfaces.Unsigned_32
+   is
+      State : CryptoLib.Checksums.Adler32_State;
+   begin
+      CryptoLib.Checksums.Adler32_Reset (State);
+      for B of Input loop
+         CryptoLib.Checksums.Adler32_Update (State, Ada.Streams.Stream_Element (B));
+      end loop;
+      return CryptoLib.Checksums.Adler32_Value (State);
+   end Compute_Adler32;
 
    procedure Build_Canonical
      (Lengths : Zlib.Huffman_Builder.Length_Array;
@@ -86,6 +102,7 @@ package body Zlib.Dynamic_Compress is
 
    function Last_Nonzero_Litlen
      (Lengths : Zlib.Huffman_Builder.Length_Array) return Natural
+     with SPARK_Mode => On
    is
       Last : Natural := 256;
    begin
@@ -100,6 +117,7 @@ package body Zlib.Dynamic_Compress is
 
    function Last_Nonzero_Distance
      (Lengths : Zlib.Huffman_Builder.Length_Array) return Natural
+     with SPARK_Mode => On
    is
       Last : Natural := 0;
    begin
@@ -114,6 +132,9 @@ package body Zlib.Dynamic_Compress is
 
    function Last_Nonzero_Code_Length_Order
      (Lengths : Zlib.Huffman_Builder.Length_Array) return Natural
+     with
+       SPARK_Mode => On,
+       Pre        => Lengths'First <= 0 and then Lengths'Last >= 18
    is
       Last : Natural := 3;
    begin
@@ -126,7 +147,9 @@ package body Zlib.Dynamic_Compress is
       return Natural'Max (Last, 3);
    end Last_Nonzero_Code_Length_Order;
 
-   function Length_Symbol_For (Length : Natural) return Natural is
+   function Length_Symbol_For (Length : Natural) return Natural
+     with SPARK_Mode => On
+   is
    begin
       if Length = Zlib.LZ77_Matcher.Max_Match_Length then
          return 285;
@@ -146,7 +169,9 @@ package body Zlib.Dynamic_Compress is
       return 285;
    end Length_Symbol_For;
 
-   function Distance_Symbol_For (Distance : Natural) return Natural is
+   function Distance_Symbol_For (Distance : Natural) return Natural
+     with SPARK_Mode => On
+   is
    begin
       for Symbol in Zlib.Deflate_Tables.Distance_Symbol loop
          if Distance >= Zlib.Deflate_Tables.Distance_Base (Symbol)
@@ -189,7 +214,7 @@ package body Zlib.Dynamic_Compress is
 
       W       : Zlib.Bit_Writer.Writer;
       Adler   : constant Interfaces.Unsigned_32 :=
-        Zlib.Checksums.Adler32 (Input);
+        Compute_Adler32 (Input);
       Tokens  : constant Zlib.LZ77_Matcher.Token_Array :=
         Zlib.LZ77_Matcher.Tokenize_For_Level (Input, Zlib.Default_Level);
       LL_Last : Natural;

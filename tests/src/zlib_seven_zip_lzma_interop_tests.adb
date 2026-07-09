@@ -1,8 +1,20 @@
 with AUnit.Assertions; use AUnit.Assertions;
+with Ada.Streams;
+with CryptoLib.Checksums;
 with Interfaces;       use type Interfaces.Unsigned_32;
 with Zlib;             use Zlib;
 
 package body Zlib_Seven_Zip_LZMA_Interop_Tests is
+
+   function CRC32 (Data : Byte_Array) return Interfaces.Unsigned_32 is
+      State : CryptoLib.Checksums.CRC32_State;
+   begin
+      CryptoLib.Checksums.CRC32_Reset (State);
+      for B of Data loop
+         CryptoLib.Checksums.CRC32_Update (State, Ada.Streams.Stream_Element (B));
+      end loop;
+      return CryptoLib.Checksums.CRC32_Value (State);
+   end CRC32;
 
    --  Frozen fixtures: minimal .7z archives produced by stock 7-Zip with a
    --  single LZMA (resp. LZMA2) coder over LZMA_Input (entry "inp.bin",
@@ -249,7 +261,7 @@ package body Zlib_Seven_Zip_LZMA_Interop_Tests is
         (Result'Length = 1800,
          "stock 7z ARM+LZMA chain wrong output length");
       Assert
-        (Zlib.CRC32 (Result) = 16#1423_2611#,
+        (CRC32 (Result) = 16#1423_2611#,
          "stock 7z ARM+LZMA chain payload CRC mismatch");
    end Test_Stock_ARM_LZMA_Chain;
 

@@ -346,16 +346,16 @@ package body Zlib_Inflate_Raw_Api_Tests is
 
       declare
          Output : constant Zlib.Byte_Array := Zlib.Inflate (GZip_Stream, Status);
-         pragma Unreferenced (Output);
       begin
-         Assert (Status /= Zlib.Ok, "Inflate(gzip stream) must fail");
+         Assert (Status = Zlib.Ok, "Inflate(gzip stream) must auto-detect");
+         Assert_Same (Output, Input, "Inflate(gzip stream)");
       end;
 
       declare
          Output : constant Zlib.Byte_Array := Zlib.Inflate (Raw_Stream, Status);
-         pragma Unreferenced (Output);
       begin
-         Assert (Status /= Zlib.Ok, "Inflate(raw payload) must fail");
+         Assert (Status = Zlib.Ok, "Inflate(raw payload) must auto-detect");
+         Assert_Same (Output, Input, "Inflate(raw payload)");
       end;
    end Test_Wrapper_Strictness_Matrix;
 

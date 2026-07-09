@@ -1,7 +1,7 @@
 with Ada.Streams;
 with AUnit.Assertions; use AUnit.Assertions;
+with CryptoLib.Checksums;
 with Interfaces;
-with Zlib.CRC32_Internal;
 
 package body Zlib_CRC32_Tests is
    use type Interfaces.Unsigned_32;
@@ -10,7 +10,7 @@ package body Zlib_CRC32_Tests is
    function Name (T : Test_Case) return AUnit.Message_String is
       pragma Unreferenced (T);
    begin
-      return AUnit.Format ("Zlib.CRC32_Internal");
+      return AUnit.Format ("CryptoLib.Checksums CRC32");
    end Name;
 
    function Bytes (S : String) return Ada.Streams.Stream_Element_Array is
@@ -28,11 +28,11 @@ package body Zlib_CRC32_Tests is
      (Data : Ada.Streams.Stream_Element_Array)
       return Interfaces.Unsigned_32
    is
-      State : Zlib.CRC32_Internal.CRC32_State;
+      State : CryptoLib.Checksums.CRC32_State;
    begin
-      Zlib.CRC32_Internal.Reset (State);
-      Zlib.CRC32_Internal.Update (State, Data);
-      return Zlib.CRC32_Internal.Value (State);
+      CryptoLib.Checksums.CRC32_Reset (State);
+      CryptoLib.Checksums.CRC32_Update (State, Data);
+      return CryptoLib.Checksums.CRC32_Value (State);
    end CRC32_Of;
 
    procedure Test_CRC32_Empty (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -63,14 +63,14 @@ package body Zlib_CRC32_Tests is
       pragma Unreferenced (T);
       Data       : constant Ada.Streams.Stream_Element_Array := Bytes ("streaming gzip");
       Whole      : constant Interfaces.Unsigned_32 := CRC32_Of (Data);
-      Incremental : Zlib.CRC32_Internal.CRC32_State;
+      Incremental : CryptoLib.Checksums.CRC32_State;
    begin
-      Zlib.CRC32_Internal.Reset (Incremental);
+      CryptoLib.Checksums.CRC32_Reset (Incremental);
       for I in Data'Range loop
-         Zlib.CRC32_Internal.Update (Incremental, Data (I));
+         CryptoLib.Checksums.CRC32_Update (Incremental, Data (I));
       end loop;
 
-      Assert (Zlib.CRC32_Internal.Value (Incremental) = Whole,
+      Assert (CryptoLib.Checksums.CRC32_Value (Incremental) = Whole,
               "byte-by-byte CRC32 must match whole-array update");
    end Test_Incremental_Equals_Array;
 

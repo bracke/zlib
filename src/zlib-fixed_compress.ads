@@ -5,7 +5,9 @@ package Zlib.Fixed_Compress is
    --  when profitable.
 
    procedure Fixed_Code
-     (Symbol : Natural; Code : out Natural; Length : out Natural);
+     (Symbol : Natural; Code : out Natural; Length : out Natural)
+     with Pre => Symbol <= 287,
+          SPARK_Mode => On;
    --  Return the fixed-Huffman wire code for Symbol. Code is already bit
    --  reversed for Deflate LSB-first emission.
    --  @param Symbol Symbol argument supplied to Fixed_Code

@@ -1,10 +1,10 @@
 with Ada.Directories;
 with Ada.Streams; use Ada.Streams;
 with Ada.Streams.Stream_IO; use Ada.Streams.Stream_IO;
+with CryptoLib.Checksums;
 with Interfaces;
 with AUnit.Assertions; use AUnit.Assertions;
 with Zlib;
-with Zlib.CRC32_Internal;
 with Zlib_Fixture_Data;
 
 package body Zlib_GZip_Output_Tests is
@@ -86,13 +86,13 @@ package body Zlib_GZip_Output_Tests is
      (Input : Zlib.Byte_Array)
       return Interfaces.Unsigned_32
    is
-      State : Zlib.CRC32_Internal.CRC32_State;
+      State : CryptoLib.Checksums.CRC32_State;
    begin
-      Zlib.CRC32_Internal.Reset (State);
+      CryptoLib.Checksums.CRC32_Reset (State);
       for B of Input loop
-         Zlib.CRC32_Internal.Update (State, Ada.Streams.Stream_Element (B));
+         CryptoLib.Checksums.CRC32_Update (State, Ada.Streams.Stream_Element (B));
       end loop;
-      return Zlib.CRC32_Internal.Value (State);
+      return CryptoLib.Checksums.CRC32_Value (State);
    end CRC32_Of;
 
    function ISIZE_Of
@@ -173,7 +173,8 @@ package body Zlib_GZip_Output_Tests is
       Assert (GZip_Status = Zlib.Ok, "gzip fixture compression must succeed");
       Assert (Deflate_Status = Zlib.Ok, "zlib fixture compression must succeed");
       declare
-         Dummy : constant Zlib.Byte_Array := Zlib.Inflate (GZ, Status);
+         Dummy : constant Zlib.Byte_Array :=
+           Zlib.Inflate_With_Header (GZ, Zlib.Zlib_Header, Status);
       begin
          pragma Unreferenced (Dummy);
       end;
@@ -215,14 +216,11 @@ package body Zlib_GZip_Output_Tests is
       Zlib.GZip_File (Input_Path, GZip_Path, Zlib.Dynamic, Status);
       Assert (Status = Zlib.Ok, "GZip_File must succeed");
       Zlib.Inflate_File (GZip_Path, Output_Path, Status);
-      Assert (Status /= Zlib.Ok, "Inflate_File remains zlib-only and must reject gzip");
+      Assert (Status = Zlib.Ok, "Inflate_File auto-detects gzip input");
 
       declare
-         GZ       : constant Zlib.Byte_Array := Read_Bytes (GZip_Path);
-         Inflated : constant Zlib.Byte_Array :=
-           Zlib.Inflate_With_Header (GZ, Zlib.GZip, Status);
+         Inflated : constant Zlib.Byte_Array := Read_Bytes (Output_Path);
       begin
-         Assert (Status = Zlib.Ok, "GZip_File output must inflate");
          Assert_Same (Inflated, F.Plain_Stored, "GZip_File roundtrip");
       end;
 

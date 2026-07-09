@@ -14,10 +14,17 @@ are intended for AI coding agents and other automated maintainers.
 
 ## Build and validation
 
+This repository requires the Alire GNAT 15 toolchain. The root, tests, and
+check crates depend on `gnat_native = "^15"`. Do not run plain system `gnat*`,
+`gnatprove`, or `gprbuild` commands for validation in this workspace; on this
+machine those may resolve to an older system compiler. Use `alr exec -- ...` so the enforced
+GNAT 15 toolchain is used.
+
 Preferred full validation:
 
 ```sh
 alr build
+alr exec -- gnatls --version
 alr exec -- gprbuild -P zlib.gpr
 cd tests && alr exec -- gprbuild -P tests.gpr
 cd tests && ./bin/tests
@@ -37,7 +44,11 @@ that the environment supports.
 - Do not add `goto`.
 - Preserve deterministic status codes for one-shot APIs.
 - Preserve exception-based lifecycle/data errors for streaming APIs.
-- Do not add wrapper auto-detection unless a future explicit public feature requires it.
+- Do not add new implicit wrapper behavior beyond the documented public
+  contract. Existing one-shot `Inflate`, `Inflate_With_Header` with
+  `Header => Default`, and streaming `Inflate_Init` with `Header => Default`
+  auto-detect zlib, gzip, or raw Deflate input; concrete wrapper modes remain
+  strict.
 - Do not add ZIP container support to this crate.
 - Do not introduce dependencies on system zlib, Python-generated fixtures, Git,
   `version`, or `HttpClient`.

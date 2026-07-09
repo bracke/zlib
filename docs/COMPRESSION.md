@@ -172,7 +172,7 @@ repeated runs.
 
 The compressor does not provide:
 
-- whole-stream optimal parsing or zlib-compatible compression-ratio promises;
+- whole-stream optimal parsing;
 - advanced block splitting.
 
 ## Output conformance
@@ -227,7 +227,7 @@ The streaming compressor is covered by a wrapper/mode conformance matrix. The su
 
 `Default` is tested as `Zlib_Header`. For all supported entries, fixed Ada fixtures roundtrip through the matching streaming inflate wrapper and the applicable one-shot inflate API. `Auto` is tested for deterministic byte-for-byte output when input chunking and output buffer sizes are identical.
 
-The conformance tests also assert strict wrapper boundaries: raw stored/fixed/dynamic/auto output must inflate only through `Raw_Deflate`; zlib output must fail through gzip or raw-Deflate inflate paths; and gzip output must fail through zlib/default or raw-Deflate inflate paths. `Header => Raw_Deflate` compression is supported for `Stored`, `Fixed`, `Dynamic`, and `Auto`.
+The conformance tests also assert strict wrapper boundaries: raw stored/fixed/dynamic/auto output must inflate only through `Raw_Deflate` or the default auto-detect path; zlib output must fail through gzip or raw-Deflate inflate paths; and gzip output must fail through zlib-header or raw-Deflate inflate paths while the default auto-detect path accepts it. `Header => Raw_Deflate` compression is supported for `Stored`, `Fixed`, `Dynamic`, and `Auto`.
 
 ## Streaming compression completion
 
@@ -251,8 +251,8 @@ LZMA/LZMA2/in-process stock-compatible PPMd codec stack, or new compression algo
 ZIP output is available through `ZIP`, `ZIP_File`, and `ZIP_Files`; `ZIP_Files`
 can emit multi-entry archives and explicit ZIP64 metadata.
 Broader 7z creation and extraction is available only through native in-process
-APIs; the former external bridge APIs now fail closed without invoking a local
-`7z` executable. Streaming compression
+APIs; unsupported requests fail closed without invoking a local `7z`
+executable. Streaming compression
 supports sync flush and full flush; full flush is currently byte-equivalent to
 sync flush because there is no cross-block match history to reset. Optional gzip
 metadata is available only through explicit metadata overloads and includes
@@ -304,7 +304,7 @@ framing and integrity checks. Use `Deflate`/`Deflate_File` for zlib streams and
 
 ## Raw Deflate release hardening
 
-Raw Deflate compression is release-hardened by `zlib_raw_release_tests`, `zlib_raw_cross_wrapper_conformance_tests`, the raw examples, and the raw tools. The contract remains unchanged: `Deflate_*` APIs emit zlib-wrapped streams, `GZip*` APIs emit gzip-wrapped streams, `Deflate_Raw*` APIs emit raw Deflate blocks only, `Seven_Zip_Stored*` APIs emit Copy-coder `.7z` archives including header-only directory entries and solid stored file-list archives with no-stream directory entries, `Seven_Zip_Deflate*` APIs emit Deflate `.7z` archives, `Seven_Zip_BZip2*` APIs emit BZip2 `.7z` archives, `Seven_Zip_LZMA*` APIs emit LZMA `.7z` archives, `Seven_Zip_LZMA2*` APIs emit LZMA2 `.7z` archives, `Extract_Seven_Zip*` APIs extract those supported native 7z layouts plus native PPMd empty/repeated-symbol/root-symbol/periodic-prefix, stock-7z multi-block streams with LZMA encoded headers, stock-7z no-stream empty-file entries, stock-7z BCJ+PPMd filter chains, and BCJ2 graphs with Copy, PPMd, or supported main pre-coders, `Seven_Zip_PPMd`, `Seven_Zip_PPMd_File`, and `Seven_Zip_PPMd_Files` emit native PPMd 7z archives for this crate's extractor without calling local `7z`, while `Seven_Zip_External_File` and `Extract_Seven_Zip_External_File` are compatibility placeholders that fail closed without invoking local `7z`, `ZIP`/`ZIP_File`/`ZIP_Files` emit ZIP archives, `Inflate` is zlib-wrapper-only, `Inflate_With_Header` performs explicit wrapper selection, and `Inflate_Auto` is the convenience wrapper-discriminating inflate API. `Auto` remains deterministic and block-local; the library still has no general-purpose 7z codec stack or zlib-compatible compression-ratio promise.
+Raw Deflate compression is release-hardened by `zlib_raw_release_tests`, `zlib_raw_cross_wrapper_conformance_tests`, the raw examples, and the raw tools. The contract remains unchanged: `Deflate_*` APIs emit zlib-wrapped streams, `GZip*` APIs emit gzip-wrapped streams, `Deflate_Raw*` APIs emit raw Deflate blocks only, `Seven_Zip_Stored*` APIs emit Copy-coder `.7z` archives including header-only directory entries and solid stored file-list archives with no-stream directory entries, `Seven_Zip_Deflate*` APIs emit Deflate `.7z` archives, `Seven_Zip_BZip2*` APIs emit BZip2 `.7z` archives, `Seven_Zip_LZMA*` APIs emit LZMA `.7z` archives, `Seven_Zip_LZMA2*` APIs emit LZMA2 `.7z` archives, `Seven_Zip_Filtered` emits single-entry compressed filtered `.7z` archives, `Seven_Zip_Method_Graph` emits low-level single-entry non-encrypted method-graph `.7z` containers from caller-supplied packed stream bytes, `Extract_Seven_Zip*` APIs extract those supported native 7z layouts plus native PPMd empty/repeated-symbol/root-symbol/periodic-prefix, stock-7z multi-block streams with LZMA encoded headers, stock-7z no-stream empty-file entries, stock-7z BCJ+PPMd filter chains, and BCJ2 graphs with Copy, PPMd, or supported main pre-coders, `Seven_Zip_PPMd`, `Seven_Zip_PPMd_File`, and `Seven_Zip_PPMd_Files` emit native PPMd 7z archives for this crate's extractor without calling local `7z`, `ZIP`/`ZIP_File`/`ZIP_Files` emit ZIP archives, `Inflate`, `Inflate_Auto`, `Inflate_With_Header` with `Header => Default`, and streaming `Inflate_Init` with `Header => Default` auto-detect zlib/gzip/raw input, gzip input accepts concatenated members unless `GZip_Mode => Single_Member` is requested, and concrete inflate modes remain wrapper-strict. `Auto` remains deterministic and block-local.
 
 ## Optional gzip metadata
 
@@ -332,7 +332,13 @@ The current deterministic mapping is:
 | `4 .. 7` | `Auto` with conservative lazy matching |
 | `8 .. 9` | `Auto` with bounded block-local optimal parsing |
 
-`Compression_Mode` remains the exact low-level control surface. `Compression_Level` is for callers that want a conventional effort-style API without selecting an exact Deflate block strategy. Levels now control bounded hash-chain matcher effort and the greedy/lazy/optimal strategy. The implementation still does not perform whole-stream block scoring, so outputs remain deterministic and conservative. The API deliberately makes no zlib-compatible compression-ratio promise; it only promises valid, deterministic output for each supported wrapper.
+`Compression_Mode` remains the exact low-level control surface.
+`Compression_Level` is for callers that want a conventional effort-style API
+without selecting an exact Deflate block strategy. Levels now control bounded
+hash-chain matcher effort and the greedy/lazy/optimal strategy. Internally,
+level 0 is the only level that reports matching disabled; levels 1 through 9
+enable bounded LZ77 matching. The implementation still does not perform
+whole-stream block scoring, so outputs remain deterministic and conservative.
 
 ## Bounded LZ77 matcher
 
@@ -347,17 +353,21 @@ lazy, and bounded optimal strategies, Deflate's required 32 KiB window, minimum 
 - level 3: 16 probes
 - level 4: 32 probes
 - level 5: 64 probes
-- level 6: 128 probes
-- level 7: 512 probes
-- level 8: 1024 probes
-- level 9: 4096 probes
+- level 6: 256 probes
+- level 7: 1024 probes
+- level 8: 2048 probes
+- level 9: 8192 probes
 
 The matcher is deterministic. Levels 2 and 3 use greedy matching; levels 4
 through 7 use conservative lazy matching that accepts the next-position match
-only when it is strictly longer; levels 8 and 9 use bounded optimal parsing
-over the block-local match candidates found by the configured hash-chain
-search. The matcher does not perform whole-stream buffering beyond the existing
-block buffer or wrapper policy changes. Stored mode and level 0 never use it.
+when it is strictly longer or when an equal-length next match is cheaper after
+paying for the literal. Levels 8 and 9 use bounded optimal parsing over the
+block-local match candidates found by the configured hash-chain search.
+Equal-length match candidates prefer the one with cheaper Deflate distance
+coding, then the shorter absolute distance, so high-effort searches can improve
+ratio without changing the bounded parser model. The matcher does not perform
+whole-stream buffering beyond the existing block buffer or wrapper policy
+changes. Stored mode and level 0 never use it.
 
 ## Auto block selection
 
@@ -393,11 +403,11 @@ The one-shot convenience file APIs remain available. The `*_File_Streaming` APIs
 
 Dictionary-aware zlib file streaming is available through `Inflate_File_With_Dictionary_Streaming` and `Deflate_File_With_Dictionary_Streaming`. These helpers are zlib-header-only because gzip and raw Deflate do not use the zlib FDICT wrapper mechanism.
 
-## Public checksum helpers
+## Public bound helpers
 
-`Zlib.Adler32` and `Zlib.CRC32` expose the checksum algorithms already used by the compression wrappers. `Adler32` is the zlib trailer checksum and preset-dictionary DICTID calculation. `CRC32` is the gzip trailer checksum and is also the basis for gzip FHCRC handling.
+Adler-32 trailer, preset-dictionary DICTID, gzip CRC-32, ZIP CRC-32, and 7z CRC-32 calculation are internal zlib behavior backed by `CryptoLib.Checksums`. Consumers that need standalone checksum routines should use cryptolib directly.
 
-The helpers are binary-safe and operate on `Byte_Array` input as bytes, not text. They include NUL bytes, high bytes, and line-ending bytes exactly as supplied. They are checksum utilities only; they do not select a compression mode, validate a wrapper, or prove that a compressed stream is well formed.
+`Deflate_Bound`, `GZip_Bound`, and `Deflate_Raw_Bound` provide conservative output-size bounds for the package's zlib, minimal-gzip, and raw-Deflate outputs. Use them for allocation and preflight decisions; do not treat them as predictions of the exact compressed size.
 
 ## Lazy LZ77 matching policy
 
@@ -411,11 +421,13 @@ bounded hash-chain effort:
 - levels 8 and 9 use bounded optimal parsing.
 
 The default level is 6, so default dynamic-Huffman and level-based Auto paths use
-lazy matching. Lazy matching is block-local and deterministic: at position `P`,
+lazy matching with a 256-probe bound. Lazy matching is block-local and deterministic: at position `P`,
 the compressor keeps the current match unless the best valid match at `P + 1` is
-strictly longer. Ties keep the current match. The matcher remains bounded by the
-configured chain limit and still emits only valid Deflate matches with lengths in
-3 .. 258 and distances in 1 .. 32768.
+strictly longer or is equal length and cheaper after accounting for the literal.
+Equal-length match candidates prefer cheaper distance coding before shorter
+absolute distance. The matcher remains bounded by the configured chain limit and
+still emits only valid Deflate matches with lengths in 3 .. 258 and distances in
+1 .. 32768.
 
 Stored mode and level 0 are unaffected. Fixed mode remains greedy. Lazy lookahead
 never crosses block, `Sync_Flush`, `Full_Flush`, or `Finish` boundaries because

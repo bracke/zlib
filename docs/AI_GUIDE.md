@@ -24,8 +24,6 @@ Internal packages include, but are not limited to:
 Zlib.Bit_Writer
 Zlib.Bits
 Zlib.Block_Chooser
-Zlib.Checksums
-Zlib.CRC32_Internal
 Zlib.Deflate_Tables
 Zlib.Dynamic_Compress
 Zlib.Fixed_Compress
@@ -62,24 +60,31 @@ For wrapper-specific tasks, also read:
 - `docs/STREAMING_COMPRESSION.md` for streaming compression.
 - `docs/FUZZING.md` for deterministic fuzz drivers and seeds.
 
-## Do not infer wrappers
+## Wrapper selection
 
-Wrapper choice is explicit and strict:
+Use the documented wrapper contract deliberately. `Inflate`,
+`Inflate_Auto`, `Inflate_With_Header` with `Header => Default`, and streaming
+`Inflate_Init` with `Header => Default` auto-detect zlib, gzip, or raw Deflate
+input. Concrete wrapper modes remain strict and should be used when callers
+need to reject the wrong wrapper.
 
 | Data shape | Correct public API |
 | --- | --- |
-| zlib stream in memory | `Zlib.Inflate` |
-| gzip member in memory | `Zlib.Inflate_With_Header (..., Header => Zlib.GZip, ...)` |
-| raw Deflate payload in memory | `Zlib.Inflate_Raw` |
+| zlib/gzip/raw input with documented auto-detection | `Zlib.Inflate` |
+| explicit zlib stream in memory | `Zlib.Inflate_With_Header (..., Header => Zlib.Zlib_Header, ...)` |
+| explicit gzip member in memory | `Zlib.Inflate_With_Header (..., Header => Zlib.GZip, ...)` |
+| explicit raw Deflate payload in memory | `Zlib.Inflate_Raw` |
 | zlib output in memory | `Zlib.Deflate` or explicit `Deflate_Stored`/`Deflate_Fixed`/`Deflate_Dynamic` |
 | gzip output in memory | `Zlib.GZip` |
 | raw Deflate output in memory | `Zlib.Deflate_Raw` |
 | bounded-memory zlib/gzip/raw input | `Inflate_Init` + `Translate` + `Flush` + `Close` |
 | bounded-memory zlib/gzip/raw output | `Deflate_Init` + `Compress` + `Compress_Flush` + `Compress_Close` |
 
-`Default` means exactly `Zlib_Header`; it is not auto-detection. Do not add
-fallbacks that try zlib, then gzip, then raw unless a future public feature
-explicitly changes the contract.
+One-shot `Inflate`, `Inflate_Auto`, `Inflate_With_Header` with
+`Header => Default`, and streaming `Inflate_Init` with `Header => Default`
+auto-detect zlib, gzip, or raw Deflate input. Gzip accepts concatenated members
+unless `GZip_Mode => Single_Member` is requested. Streaming compression
+`Default` remains exactly `Zlib_Header`.
 
 ## Status and exception model
 
@@ -108,13 +113,16 @@ failure has already been recorded.
 
 - Do not use `Zlib.Wrapper`, `Zlib.Raw_Inflate`, or other child packages in
   examples or consumer-facing code.
-- Do not call `Inflate` for gzip or raw Deflate input.
+- Do not use concrete wrapper modes when caller intent is auto-detection; use
+  `Inflate` or `Header => Default`. Conversely, do not use auto-detection when
+  caller intent is strict wrapper rejection.
 - Do not call `Deflate_Raw` for standalone `.z` files or Git loose objects.
 - Do not assume raw Deflate has checksum validation.
 - Do not expand ZIP support beyond the explicit `ZIP`, `ZIP_File`, and
   `ZIP_Files` writer contract without updating the public contract and release
   tests.
-- Do not compare compression ratios with system zlib as a correctness criterion.
+- Keep correctness tests focused on valid output, roundtrips, wrapper strictness,
+  and documented status behavior; use benchmark tools for ratio comparisons.
 - Do not silently ignore non-`Ok` statuses in examples, tools, or tests.
 - Do not introduce Ada reserved words as identifiers, even with different case.
 - Do not add public API without updating `src/zlib.ads`, docs, examples where
@@ -132,7 +140,7 @@ Use these examples as canonical starting points:
 | gzip multi-member input | `examples/gzip_multimember_inflate.adb` |
 | raw Deflate one-shot | `examples/raw_roundtrip.adb` |
 | dictionary compression/inflate | `examples/dictionary_roundtrip.adb` |
-| checksums | `examples/checksums.adb` |
+| checksums and output bounds | `examples/checksums.adb` |
 | file compression | `examples/deflate_dynamic_file.adb` |
 | streaming zlib roundtrip | `examples/streaming_roundtrip_zlib.adb` |
 | streaming gzip roundtrip | `examples/streaming_roundtrip_gzip.adb` |
@@ -146,6 +154,7 @@ Run the full validation path when the Ada toolchain is available:
 
 ```sh
 alr build
+alr exec -- gnatls --version
 alr exec -- gprbuild -P zlib.gpr
 cd tests && alr exec -- gprbuild -P tests.gpr
 cd tests && ./bin/tests
@@ -154,6 +163,11 @@ alr exec -- gprbuild -P tools/tools.gpr
 ./tools/bin/smoke_test
 tools/bin/check_all
 ```
+
+Use the Alire GNAT 15 toolchain only. Do not run plain system `gnat*`,
+`gnatprove`, or `gprbuild` for validation in this workspace; the system compiler
+may be older than the required `gnat_native = "^15"` toolchain. The release
+guards fail if `alr exec -- gnatls --version` is not GNATLS 15.x.
 
 If the environment lacks GNAT/GPRBuild, report that explicitly and at minimum
 run the available static checks: line-length checks, shell syntax checks,
