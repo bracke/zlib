@@ -35,6 +35,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libaunit-dev || sudo apt-get install -y libaunit22-dev || sudo apt-get install -y libaunit24-dev
+      # config/zlib_config.gpr is Alire-generated and gitignored, so a fresh clone
+      # has none. `alr build` generates it; gprbuild on its own does not, and
+      # zlib.gpr imports it.
+      - name: Build the library
+        working-directory: zlib
+        run: alr --non-interactive build
+
+      - name: Build and run the test suite
+        working-directory: zlib/tests
+        run: |
+          alr --non-interactive build
+          ./bin/tests
+
       - name: Build aggregate release checker
         working-directory: zlib
         run: alr exec -- gprbuild -P tools/tools.gpr
