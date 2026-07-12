@@ -1,5 +1,4 @@
 with "config/zlib_config.gpr";
-with "../cryptolib/cryptolib.gpr";
 project Zlib is
 
    for Library_Name use "Zlib";
