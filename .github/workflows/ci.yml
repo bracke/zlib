@@ -19,12 +19,21 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/project_tools
           path: project_tools
+      - name: Check out cryptolib sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/cryptolib
+          path: cryptolib
       - name: Set up Alire
+        # Pin the toolchain the manifests require. setup-alire@v5 defaults to
+        # alr 2.1.0, whose index carries gnat_native 15.2.1; v4's alr 2.0.2 cannot
+        # resolve it.
         uses: alire-project/setup-alire@v5
-      - name: Install Ada toolchain
+        with:
+          toolchain: gnat_native=15.2.1 gprbuild
+      - name: Install workflow dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gnat gprbuild gnatprove || sudo apt-get install -y gnat gprbuild
           sudo apt-get install -y libaunit-dev || sudo apt-get install -y libaunit22-dev || sudo apt-get install -y libaunit24-dev
       - name: Build aggregate release checker
         working-directory: zlib
