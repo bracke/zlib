@@ -152,6 +152,40 @@ package body Zlib.Zstd_Bits is
       return Result;
    end Read;
 
+   function Peek
+     (R     : Backward_Reader;
+      Data  : Byte_Array;
+      Count : Natural) return Interfaces.Unsigned_32
+   is
+      Result : Interfaces.Unsigned_32 := 0;
+      Cursor : Natural := R.Position;
+   begin
+      for Unused_Index in 1 .. Count loop
+         Result := Interfaces.Shift_Left (Result, 1);
+         if Cursor < R.Total and then Bit_At (Data, Cursor) then
+            Result := Result or 1;
+         end if;
+         Cursor := Cursor + 1;
+      end loop;
+
+      return Result;
+   end Peek;
+
+   procedure Skip
+     (R      : in out Backward_Reader;
+      Count  : Natural;
+      Status : out Status_Code) is
+   begin
+      Status := Ok;
+
+      if R.Position + Count > R.Total then
+         Status := Unexpected_End_Of_Input;
+         return;
+      end if;
+
+      R.Position := R.Position + Count;
+   end Skip;
+
    function Exhausted (R : Backward_Reader) return Boolean is
    begin
       return R.Position >= R.Total;

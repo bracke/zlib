@@ -88,6 +88,28 @@ package Zlib.Zstd_Bits is
    --  @param Status Ok, or Unexpected_End_Of_Input
    --  @return the field value
 
+   function Peek
+     (R     : Backward_Reader;
+      Data  : Byte_Array;
+      Count : Natural) return Interfaces.Unsigned_32
+     with Pre => Count <= 32;
+   --  Read Count bits without advancing. Bits past the end read as zero, which a
+   --  Huffman table lookup relies on: the last code in a stream is complete, but
+   --  the fixed-width peek around it may reach past the final bit.
+   --  @param R     the reader
+   --  @param Data  the payload
+   --  @param Count number of bits, at most 32
+   --  @return the field value
+
+   procedure Skip
+     (R      : in out Backward_Reader;
+      Count  : Natural;
+      Status : out Status_Code);
+   --  Advance by Count bits.
+   --  @param R      the reader
+   --  @param Count  number of bits
+   --  @param Status Ok, or Unexpected_End_Of_Input when that runs past the end
+
    function Exhausted (R : Backward_Reader) return Boolean;
    --  True once every payload bit has been consumed.
    --  @param R the reader

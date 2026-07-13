@@ -506,17 +506,16 @@ package body Zlib.Zstd_FSE is
                Wire := 0;
             end if;
 
+            --  Values below the ceiling fit in one bit fewer. Values at or above
+            --  the threshold are pushed up by the ceiling, which is the gap the
+            --  short encoding leaves behind.
             if Wire < Ceiling then
                Put (Natural (Wire), Bit_Width - 1);
             else
-               declare
-                  Shifted : Integer := Wire + Ceiling;
-               begin
-                  if Shifted >= 2 * Threshold then
-                     Shifted := Shifted - Threshold;
-                  end if;
-                  Put (Natural (Shifted), Bit_Width);
-               end;
+               if Wire >= Threshold then
+                  Wire := Wire + Ceiling;
+               end if;
+               Put (Natural (Wire), Bit_Width);
             end if;
 
             Remaining := Remaining - abs Count;
