@@ -5,6 +5,7 @@ with Interfaces;
 with Zlib;
 with Zlib.BZip2_CRC;
 with Zlib.BZip2_Decoder;
+with Zlib.BZip2_Encoder;
 
 with Zlib_BZip2_Fixtures;
 
@@ -18,7 +19,7 @@ package body Zlib_BZip2_Tests is
    function Name (T : Test_Case) return AUnit.Message_String is
       pragma Unreferenced (T);
    begin
-      return AUnit.Format ("Zlib.BZip2 decoder");
+      return AUnit.Format ("Zlib.BZip2 codec");
    end Name;
 
    procedure Assert_Decodes
@@ -185,6 +186,129 @@ package body Zlib_BZip2_Tests is
               "bzip2 CRC-32 of ""123456789"" must be 16#FC891918#");
    end Test_CRC_Is_Unreflected;
 
+   procedure Assert_Encodes_As
+     (Plain    : Zlib.Byte_Array;
+      Level    : Zlib.BZip2_Encoder.Level_Range;
+      Expected : Zlib.Byte_Array;
+      Label    : String);
+   --  Assert the encoder reproduces Expected byte for byte.
+
+   procedure Assert_Encodes_As
+     (Plain    : Zlib.Byte_Array;
+      Level    : Zlib.BZip2_Encoder.Level_Range;
+      Expected : Zlib.Byte_Array;
+      Label    : String)
+   is
+      Status : Zlib.Status_Code;
+      Actual : constant Zlib.Byte_Array :=
+        Zlib.BZip2_Encoder.Encode (Plain, Level, Status);
+   begin
+      Assert (Status = Zlib.Ok,
+              Label & ": status must be Ok, got "
+              & Zlib.Status_Code'Image (Status));
+      Assert (Actual'Length = Expected'Length,
+              Label & ": length must be" & Natural'Image (Expected'Length)
+              & ", got" & Natural'Image (Actual'Length));
+
+      for Index in 0 .. Natural'Min (Actual'Length, Expected'Length) - 1 loop
+         Assert
+           (Actual (Actual'First + Index) = Expected (Expected'First + Index),
+            Label & ": byte" & Natural'Image (Index)
+            & " differs from the stock bzip2 stream");
+      end loop;
+   end Assert_Encodes_As;
+
+   procedure Assert_Round_Trip
+     (Plain : Zlib.Byte_Array;
+      Level : Zlib.BZip2_Encoder.Level_Range;
+      Label : String);
+   --  Assert Plain survives an encode followed by a decode.
+
+   procedure Assert_Round_Trip
+     (Plain : Zlib.Byte_Array;
+      Level : Zlib.BZip2_Encoder.Level_Range;
+      Label : String)
+   is
+      Encode_Status : Zlib.Status_Code;
+      Coded : constant Zlib.Byte_Array :=
+        Zlib.BZip2_Encoder.Encode (Plain, Level, Encode_Status);
+   begin
+      Assert (Encode_Status = Zlib.Ok,
+              Label & ": encode must be Ok, got "
+              & Zlib.Status_Code'Image (Encode_Status));
+      Assert_Decodes (Coded, Plain, Label & " round trip");
+   end Assert_Round_Trip;
+
+   --  The encoder is bit-exact with stock bzip2, so the frozen fixtures serve as
+   --  encoder expectations too, not only decoder inputs. If a change to the
+   --  block sort, the move-to-front coder, the table-selection passes or the
+   --  Huffman length builder drifts from the original, these catch it.
+
+   procedure Test_Encodes_Like_Stock_Hello
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+   begin
+      Assert_Encodes_As
+        (Zlib_BZip2_Fixtures.Hello_Plain, 9,
+         Zlib_BZip2_Fixtures.Hello_BZ2, "hello");
+   end Test_Encodes_Like_Stock_Hello;
+
+   procedure Test_Encodes_Like_Stock_Runs
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+   begin
+      Assert_Encodes_As
+        (Zlib_BZip2_Fixtures.Runs_Plain, 9,
+         Zlib_BZip2_Fixtures.Runs_BZ2, "runs");
+   end Test_Encodes_Like_Stock_Runs;
+
+   procedure Test_Encodes_Like_Stock_Noise
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+   begin
+      --  251 symbols and six Huffman groups: this is the case that exercises the
+      --  selector refinement passes.
+      Assert_Encodes_As
+        (Zlib_BZip2_Fixtures.Noise_Plain, 9,
+         Zlib_BZip2_Fixtures.Noise_BZ2, "noise");
+   end Test_Encodes_Like_Stock_Noise;
+
+   procedure Test_Encodes_Like_Stock_Multi
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+   begin
+      --  Three blocks at level 1, so this pins the block split and the combined
+      --  CRC as well.
+      Assert_Encodes_As
+        (Zlib_BZip2_Fixtures.Multi_Plain, 1,
+         Zlib_BZip2_Fixtures.Multi_BZ2, "multi-block");
+   end Test_Encodes_Like_Stock_Multi;
+
+   procedure Test_Encodes_Empty
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Empty : constant Zlib.Byte_Array (1 .. 0) := [others => 0];
+   begin
+      Assert_Encodes_As
+        (Empty, 9, Zlib_BZip2_Fixtures.Empty_BZ2, "empty");
+   end Test_Encodes_Empty;
+
+   procedure Test_Round_Trips (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Repeat : constant Zlib.Byte_Array (1 .. 5_000) := [others => 16#41#];
+   begin
+      Assert_Round_Trip (Zlib_BZip2_Fixtures.Noise_Plain, 9, "noise");
+      Assert_Round_Trip (Zlib_BZip2_Fixtures.Multi_Plain, 1, "multi");
+      --  A single byte repeated: the block sort's worst case, and the run coder's
+      --  best one.
+      Assert_Round_Trip (Repeat, 9, "one repeated byte");
+   end Test_Round_Trips;
+
    overriding
    procedure Register_Tests (T : in out Test_Case) is
       use AUnit.Test_Cases.Registration;
@@ -209,6 +333,19 @@ package body Zlib_BZip2_Tests is
                         "rejects a corrupt block CRC");
       Register_Routine (T, Test_Rejects_Truncation'Access,
                         "rejects a truncated stream");
+
+      Register_Routine (T, Test_Encodes_Empty'Access,
+                        "encodes an empty input exactly as bzip2 does");
+      Register_Routine (T, Test_Encodes_Like_Stock_Hello'Access,
+                        "encodes bit-exactly with stock bzip2");
+      Register_Routine (T, Test_Encodes_Like_Stock_Runs'Access,
+                        "encodes long runs bit-exactly with stock bzip2");
+      Register_Routine (T, Test_Encodes_Like_Stock_Noise'Access,
+                        "encodes multi-group data bit-exactly with stock bzip2");
+      Register_Routine (T, Test_Encodes_Like_Stock_Multi'Access,
+                        "encodes a multi-block stream bit-exactly");
+      Register_Routine (T, Test_Round_Trips'Access,
+                        "round trips through encode and decode");
    end Register_Tests;
 
 end Zlib_BZip2_Tests;

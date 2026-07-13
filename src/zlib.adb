@@ -17,6 +17,7 @@ with Zlib.LZMA_Core;
 with Zlib.LZMA2_Decoder;
 with Zlib.LZMA2_Encoder;
 with Zlib.BZip2_Decoder;
+with Zlib.BZip2_Encoder;
 with Zlib.LZMA_Decoder;
 with Zlib.LZMA_Encoder;
 with Zlib.LZMA_Encoder_Selection;
@@ -52,28 +53,13 @@ package body Zlib is
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
-   use type Interfaces.C.int;
    use type Interfaces.C.unsigned;
    use type System.Address;
 
-   pragma Linker_Options ("-lbz2");
    pragma Linker_Options ("-lzstd");
 
    package SIO renames Ada.Streams.Stream_IO;
    package US renames Ada.Strings.Unbounded;
-
-   function BZ2_bzBuffToBuffCompress
-     (Dest          : System.Address;
-      Dest_Len      : access Interfaces.C.unsigned;
-      Source        : System.Address;
-      Source_Len    : Interfaces.C.unsigned;
-      Block_Size    : Interfaces.C.int;
-      Verbosity     : Interfaces.C.int;
-      Work_Factor   : Interfaces.C.int) return Interfaces.C.int
-     with Import, Convention => C, External_Name => "BZ2_bzBuffToBuffCompress";
-
-   --  Decompression is pure Ada (Zlib.BZip2_Decoder); only libbz2's compressor
-   --  is still bound here, until the native encoder lands and -lbz2 goes away.
 
    function ZSTD_compressBound
      (Src_Size : Interfaces.C.size_t) return Interfaces.C.size_t
@@ -4517,46 +4503,20 @@ package body Zlib is
          end if;
 
          declare
-            Bound : constant Natural := Plain'Length + Plain'Length / 100 + 601;
-            Output : Byte_Array (1 .. Bound);
-            Output_Len : aliased Interfaces.C.unsigned :=
-              Interfaces.C.unsigned (Bound);
-            Source_Address : constant System.Address :=
-              (if Plain'Length = 0 then
-                  System.Null_Address
-               else
-                  Plain (Plain'First)'Address);
-            Result : Interfaces.C.int;
+            Result     : Status_Code;
+            Compressed : constant Byte_Array :=
+              Zlib.BZip2_Encoder.Encode (Plain, 9, Result);
          begin
-            Result :=
-              BZ2_bzBuffToBuffCompress
-                (Dest        => Output (Output'First)'Address,
-                 Dest_Len    => Output_Len'Access,
-                 Source      => Source_Address,
-                 Source_Len  => Interfaces.C.unsigned (Plain'Length),
-                 Block_Size  => 9,
-                 Verbosity   => 0,
-                 Work_Factor => 30);
-
-            if Result /= 0 then
+            if Result /= Ok then
                Status := Unsupported_Method;
                return Empty;
             end if;
 
-            declare
-               Used : constant Natural := Natural (Output_Len);
-               Compressed : Byte_Array (1 .. Used);
-            begin
-               for I in Compressed'Range loop
-                  Compressed (I) := Output (I);
-               end loop;
-
-               Method := 12;
-               Crc32 := Compute_CRC32 (Plain);
-               Uncompressed_Size := Interfaces.Unsigned_64 (Plain'Length);
-               Status := Ok;
-               return Compressed;
-            end;
+            Method := 12;
+            Crc32 := Compute_CRC32 (Plain);
+            Uncompressed_Size := Interfaces.Unsigned_64 (Plain'Length);
+            Status := Ok;
+            return Compressed;
          end;
       end;
    exception
@@ -5314,58 +5274,22 @@ package body Zlib is
    function BZip2_Compress (Plain : Byte_Array; Status : out Status_Code)
                             return Byte_Array
    is
-      Empty : constant Byte_Array (1 .. 0) := [others => 0];
+      Empty  : constant Byte_Array (1 .. 0) := [others => 0];
+      Result : Status_Code;
    begin
       Status := Unsupported_Method;
 
-      if Interfaces.Unsigned_64 (Plain'Length) >
-        Interfaces.Unsigned_64 (Interfaces.C.unsigned'Last)
-      then
-         return Empty;
-      end if;
-
       declare
-         Bound          : constant Natural :=
-           Plain'Length + Plain'Length / 100 + 601;
-         Output         : Byte_Array (1 .. Bound);
-         Output_Len     : aliased Interfaces.C.unsigned :=
-           Interfaces.C.unsigned (Bound);
-         Empty_Source   : aliased Byte := 0;
-         Source_Address : constant System.Address :=
-           (if Plain'Length = 0 then Empty_Source'Address
-            else Plain (Plain'First)'Address);
-         Result         : Interfaces.C.int;
+         Compressed : constant Byte_Array :=
+           Zlib.BZip2_Encoder.Encode (Plain, 9, Result);
       begin
-         Result :=
-           BZ2_bzBuffToBuffCompress
-             (Dest        => Output (Output'First)'Address,
-              Dest_Len    => Output_Len'Access,
-              Source      => Source_Address,
-              Source_Len  => Interfaces.C.unsigned (Plain'Length),
-              Block_Size  => 9,
-              Verbosity   => 0,
-              Work_Factor => 30);
-
-         if Result /= 0 then
+         if Result /= Ok then
             return Empty;
          end if;
 
-         declare
-            Used       : constant Natural := Natural (Output_Len);
-            Compressed : Byte_Array (1 .. Used);
-         begin
-            for I in Compressed'Range loop
-               Compressed (I) := Output (I);
-            end loop;
-
-            Status := Ok;
-            return Compressed;
-         end;
+         Status := Ok;
+         return Compressed;
       end;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return Empty;
    end BZip2_Compress;
 
    function BZip2_Decompress
