@@ -18,6 +18,8 @@ with Zlib.LZMA2_Decoder;
 with Zlib.LZMA2_Encoder;
 with Zlib.BZip2_Decoder;
 with Zlib.BZip2_Encoder;
+with Zlib.Zstd_Decoder;
+with Zlib.Zstd_Encoder;
 with Zlib.LZMA_Decoder;
 with Zlib.LZMA_Encoder;
 with Zlib.LZMA_Encoder_Selection;
@@ -53,36 +55,13 @@ package body Zlib is
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
-   use type Interfaces.C.unsigned;
    use type System.Address;
 
-   pragma Linker_Options ("-lzstd");
+   --  Every codec is now pure Ada: Deflate, LZMA/LZMA2, PPMd7, bzip2 and zstd.
+   --  The crate links no compression library, so it carries no Linker_Options.
 
    package SIO renames Ada.Streams.Stream_IO;
    package US renames Ada.Strings.Unbounded;
-
-   function ZSTD_compressBound
-     (Src_Size : Interfaces.C.size_t) return Interfaces.C.size_t
-     with Import, Convention => C, External_Name => "ZSTD_compressBound";
-
-   function ZSTD_compress
-     (Dst          : System.Address;
-      Dst_Capacity : Interfaces.C.size_t;
-      Src          : System.Address;
-      Src_Size     : Interfaces.C.size_t;
-      Level        : Interfaces.C.int) return Interfaces.C.size_t
-     with Import, Convention => C, External_Name => "ZSTD_compress";
-
-   function ZSTD_decompress
-     (Dst             : System.Address;
-      Dst_Capacity    : Interfaces.C.size_t;
-      Src             : System.Address;
-      Compressed_Size : Interfaces.C.size_t) return Interfaces.C.size_t
-     with Import, Convention => C, External_Name => "ZSTD_decompress";
-
-   function ZSTD_isError
-     (Code : Interfaces.C.size_t) return Interfaces.C.unsigned
-     with Import, Convention => C, External_Name => "ZSTD_isError";
 
    package Bit_Source_Addresses is new
      System.Address_To_Access_Conversions (Zlib.Stream_Bits.Bit_Source);
@@ -3805,24 +3784,16 @@ package body Zlib is
                            end if;
 
                            declare
-                              Output_Count : constant Positive :=
-                                Natural'Max (1, Plain_Len);
-                              Output       : Byte_Array (1 .. Output_Count);
-                              Result_Size  : Interfaces.C.size_t;
+                              Decode_Status : Status_Code;
+                              Output        : constant Byte_Array :=
+                                Zlib.Zstd_Decoder.Decode
+                                  (Archive_Image
+                                     (Payload_First
+                                      .. Payload_First + Payload_Len - 1),
+                                   Decode_Status);
                            begin
-                              Result_Size :=
-                                ZSTD_decompress
-                                  (Dst             =>
-                                     Output (Output'First)'Address,
-                                   Dst_Capacity    =>
-                                     Interfaces.C.size_t (Plain_Len),
-                                   Src             =>
-                                     Archive_Image (Payload_First)'Address,
-                                   Compressed_Size =>
-                                     Interfaces.C.size_t (Payload_Len));
-
-                              if ZSTD_isError (Result_Size) /= 0
-                                or else Natural (Result_Size) /= Plain_Len
+                              if Decode_Status /= Ok
+                                or else Output'Length /= Plain_Len
                               then
                                  Status := Invalid_Block_Type;
                                  return Empty;
@@ -4554,46 +4525,20 @@ package body Zlib is
          end if;
 
          declare
-            Source_Size : constant Interfaces.C.size_t :=
-              Interfaces.C.size_t (Plain'Length);
-            Bound_Size  : constant Interfaces.C.size_t :=
-              ZSTD_compressBound (Source_Size);
-            Bound       : constant Natural := Natural (Bound_Size);
-            Output      : Byte_Array (1 .. Bound);
-            Source_Address : constant System.Address :=
-              (if Plain'Length = 0 then
-                  System.Null_Address
-               else
-                  Plain (Plain'First)'Address);
-            Result_Size : Interfaces.C.size_t;
+            Result     : Status_Code;
+            Compressed : constant Byte_Array :=
+              Zlib.Zstd_Encoder.Encode (Plain, Result);
          begin
-            Result_Size :=
-              ZSTD_compress
-                (Dst          => Output (Output'First)'Address,
-                 Dst_Capacity => Bound_Size,
-                 Src          => Source_Address,
-                 Src_Size     => Source_Size,
-                 Level        => 3);
-
-            if ZSTD_isError (Result_Size) /= 0 then
+            if Result /= Ok then
                Status := Unsupported_Method;
                return Empty;
             end if;
 
-            declare
-               Used       : constant Natural := Natural (Result_Size);
-               Compressed : Byte_Array (1 .. Used);
-            begin
-               for I in Compressed'Range loop
-                  Compressed (I) := Output (I);
-               end loop;
-
-               Method := 93;
-               Crc32 := Compute_CRC32 (Plain);
-               Uncompressed_Size := Interfaces.Unsigned_64 (Plain'Length);
-               Status := Ok;
-               return Compressed;
-            end;
+            Method := 93;
+            Crc32 := Compute_CRC32 (Plain);
+            Uncompressed_Size := Interfaces.Unsigned_64 (Plain'Length);
+            Status := Ok;
+            return Compressed;
          end;
       end;
    exception
