@@ -1,6 +1,7 @@
 with Zlib_Public_Tests;
 with Zlib_Public_Checksum_Tests;
 with Zlib_CRC32_Tests;
+with Zlib_BZip2_Tests;
 with Zlib_Bits_Tests;
 with Zlib_Bit_Writer_Tests;
 with Zlib_LZ77_Matcher_Tests;
@@ -93,6 +94,7 @@ package body Zlib_Suite is
       Result.Add_Test (new Zlib_Public_Tests.Test_Case);
       Result.Add_Test (new Zlib_Public_Checksum_Tests.Test_Case);
       Result.Add_Test (new Zlib_CRC32_Tests.Test_Case);
+      Result.Add_Test (new Zlib_BZip2_Tests.Test_Case);
 
       --  Bit readers/writers, wrapper parsing, Huffman, and sliding window.
       Result.Add_Test (new Zlib_Bits_Tests.Test_Case);

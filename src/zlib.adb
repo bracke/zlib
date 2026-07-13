@@ -16,6 +16,7 @@ with Zlib.LZ77_Matcher;
 with Zlib.LZMA_Core;
 with Zlib.LZMA2_Decoder;
 with Zlib.LZMA2_Encoder;
+with Zlib.BZip2_Decoder;
 with Zlib.LZMA_Decoder;
 with Zlib.LZMA_Encoder;
 with Zlib.LZMA_Encoder_Selection;
@@ -71,44 +72,8 @@ package body Zlib is
       Work_Factor   : Interfaces.C.int) return Interfaces.C.int
      with Import, Convention => C, External_Name => "BZ2_bzBuffToBuffCompress";
 
-   function BZ2_bzBuffToBuffDecompress
-     (Dest        : System.Address;
-      Dest_Len    : access Interfaces.C.unsigned;
-      Source      : System.Address;
-      Source_Len  : Interfaces.C.unsigned;
-      Small       : Interfaces.C.int;
-      Verbosity   : Interfaces.C.int) return Interfaces.C.int
-     with Import, Convention => C, External_Name => "BZ2_bzBuffToBuffDecompress";
-
-   type BZ_Stream is record
-      Next_In        : System.Address := System.Null_Address;
-      Avail_In       : Interfaces.C.unsigned := 0;
-      Total_In_Lo32  : Interfaces.C.unsigned := 0;
-      Total_In_Hi32  : Interfaces.C.unsigned := 0;
-      Next_Out       : System.Address := System.Null_Address;
-      Avail_Out      : Interfaces.C.unsigned := 0;
-      Total_Out_Lo32 : Interfaces.C.unsigned := 0;
-      Total_Out_Hi32 : Interfaces.C.unsigned := 0;
-      State          : System.Address := System.Null_Address;
-      BZAlloc        : System.Address := System.Null_Address;
-      BZFree         : System.Address := System.Null_Address;
-      Opaque         : System.Address := System.Null_Address;
-   end record
-     with Convention => C;
-
-   function BZ2_bzDecompressInit
-     (Strm      : access BZ_Stream;
-      Verbosity : Interfaces.C.int;
-      Small     : Interfaces.C.int) return Interfaces.C.int
-     with Import, Convention => C, External_Name => "BZ2_bzDecompressInit";
-
-   function BZ2_bzDecompress
-     (Strm : access BZ_Stream) return Interfaces.C.int
-     with Import, Convention => C, External_Name => "BZ2_bzDecompress";
-
-   function BZ2_bzDecompressEnd
-     (Strm : access BZ_Stream) return Interfaces.C.int
-     with Import, Convention => C, External_Name => "BZ2_bzDecompressEnd";
+   --  Decompression is pure Ada (Zlib.BZip2_Decoder); only libbz2's compressor
+   --  is still bound here, until the native encoder lands and -lbz2 goes away.
 
    function ZSTD_compressBound
      (Src_Size : Interfaces.C.size_t) return Interfaces.C.size_t
@@ -3674,26 +3639,16 @@ package body Zlib is
                            end if;
 
                            declare
-                              Output_Count : constant Positive :=
-                                Natural'Max (1, Plain_Len);
-                              Output       : Byte_Array (1 .. Output_Count);
-                              Output_Len   : aliased Interfaces.C.unsigned :=
-                                Interfaces.C.unsigned (Plain_Len);
-                              Result       : Interfaces.C.int;
+                              Decode_Status : Status_Code;
+                              Output        : constant Byte_Array :=
+                                Zlib.BZip2_Decoder.Decode
+                                  (Archive_Image
+                                     (Payload_First
+                                      .. Payload_First + Payload_Len - 1),
+                                   Decode_Status);
                            begin
-                              Result :=
-                                BZ2_bzBuffToBuffDecompress
-                                  (Dest       => Output (Output'First)'Address,
-                                   Dest_Len   => Output_Len'Access,
-                                   Source     =>
-                                     Archive_Image (Payload_First)'Address,
-                                   Source_Len =>
-                                     Interfaces.C.unsigned (Payload_Len),
-                                   Small      => 0,
-                                   Verbosity  => 0);
-
-                              if Result /= 0
-                                or else Natural (Output_Len) /= Plain_Len
+                              if Decode_Status /= Ok
+                                or else Output'Length /= Plain_Len
                               then
                                  Status := Invalid_Block_Type;
                                  return Empty;
@@ -3712,7 +3667,7 @@ package body Zlib is
                                  Plain : Byte_Array (1 .. Plain_Len);
                               begin
                                  for I in Plain'Range loop
-                                    Plain (I) := Output (I);
+                                    Plain (I) := Output (Output'First + I - 1);
                                  end loop;
 
                                  if Compute_CRC32 (Plain) /= Crc then
@@ -3900,7 +3855,7 @@ package body Zlib is
                                  Plain : Byte_Array (1 .. Plain_Len);
                               begin
                                  for I in Plain'Range loop
-                                    Plain (I) := Output (I);
+                                    Plain (I) := Output (Output'First + I - 1);
                                  end loop;
 
                                  if Compute_CRC32 (Plain) /= Crc then
@@ -5418,9 +5373,8 @@ package body Zlib is
       Plain_Len : Natural;
       Status    : out Status_Code) return Byte_Array
    is
-      Empty : constant Byte_Array (1 .. 0) := [others => 0];
-      BZ_OK : constant Interfaces.C.int := 0;
-      BZ_STREAM_END : constant Interfaces.C.int := 4;
+      Empty  : constant Byte_Array (1 .. 0) := [others => 0];
+      Result : Status_Code;
    begin
       Status := Unsupported_Method;
 
@@ -5430,91 +5384,17 @@ package body Zlib is
       end if;
 
       declare
-         Output_Count : constant Positive := Natural'Max (1, Plain_Len);
-         Output       : Byte_Array (1 .. Output_Count);
-         Stream       : aliased BZ_Stream;
-         Result       : Interfaces.C.int := BZ_OK;
-         Finished     : Boolean := False;
+         Plain : constant Byte_Array :=
+           Zlib.BZip2_Decoder.Decode (Payload, Result);
       begin
-         Stream.Next_In := Payload (Payload'First)'Address;
-         Stream.Avail_In := Interfaces.C.unsigned (Payload'Length);
-         Stream.Next_Out := Output (Output'First)'Address;
-         Stream.Avail_Out := Interfaces.C.unsigned (Output_Count);
-
-         Result := BZ2_bzDecompressInit (Stream'Access, 0, 0);
-         if Result /= BZ_OK then
-            Status := Invalid_Block_Type;
+         if Result /= Ok or else Plain'Length /= Plain_Len then
+            Status := (if Result = Ok then Unsupported_Method else Result);
             return Empty;
          end if;
 
-         while not Finished loop
-            Result := BZ2_bzDecompress (Stream'Access);
-
-            if Result = BZ_STREAM_END then
-               Finished := True;
-            elsif Result /= BZ_OK then
-               declare
-                  Ignored : constant Interfaces.C.int :=
-                    BZ2_bzDecompressEnd (Stream'Access);
-                  pragma Unreferenced (Ignored);
-               begin
-                  Status := Invalid_Block_Type;
-                  return Empty;
-               end;
-            elsif Stream.Avail_Out = 0 then
-               declare
-                  Ignored : constant Interfaces.C.int :=
-                    BZ2_bzDecompressEnd (Stream'Access);
-                  pragma Unreferenced (Ignored);
-               begin
-                  Status := Invalid_Block_Type;
-                  return Empty;
-               end;
-            end if;
-         end loop;
-
-         if Stream.Avail_In /= 0
-           or else Natural (Stream.Total_Out_Lo32) /= Plain_Len
-           or else Stream.Total_Out_Hi32 /= 0
-         then
-            declare
-               Ignored : constant Interfaces.C.int :=
-                 BZ2_bzDecompressEnd (Stream'Access);
-               pragma Unreferenced (Ignored);
-            begin
-               Status := Unsupported_Method;
-               return Empty;
-            end;
-         end if;
-
-         declare
-            Ignored : constant Interfaces.C.int :=
-              BZ2_bzDecompressEnd (Stream'Access);
-            pragma Unreferenced (Ignored);
-         begin
-            null;
-         end;
-
-         if Plain_Len = 0 then
-            Status := Ok;
-            return Empty;
-         end if;
-
-         declare
-            Plain : Byte_Array (1 .. Plain_Len);
-         begin
-            for I in Plain'Range loop
-               Plain (I) := Output (I);
-            end loop;
-
-            Status := Ok;
-            return Plain;
-         end;
+         Status := Ok;
+         return Plain;
       end;
-   exception
-      when others =>
-         Status := Unsupported_Method;
-         return Empty;
    end BZip2_Decompress;
 
    function LZMA2_Encode is new
