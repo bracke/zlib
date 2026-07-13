@@ -25,13 +25,17 @@ package Zlib.Zstd_Tables is
       2, 3, 2, 1, 1, 1, 1, 1,
       -1, -1, -1, -1];
 
+   --  Note the tail: SEVEN low-probability codes, 46 .. 52, not five. They are
+   --  laid down from the top of the table, so one too few or too many shifts
+   --  every high match-length code onto the wrong state -- which decodes long
+   --  matches as short ones and quietly truncates the output.
    Match_Default : constant Count_Array (0 .. Max_Match_Code) :=
      [1, 4, 3, 2, 2, 2, 2, 2,
       2, 1, 1, 1, 1, 1, 1, 1,
       1, 1, 1, 1, 1, 1, 1, 1,
       1, 1, 1, 1, 1, 1, 1, 1,
       1, 1, 1, 1, 1, 1, 1, 1,
-      1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, -1, -1,
       -1, -1, -1, -1, -1];
 
    Offset_Default : constant Count_Array (0 .. Max_Offset_Code) :=
