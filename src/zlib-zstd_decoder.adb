@@ -418,6 +418,7 @@ package body Zlib.Zstd_Decoder is
                         return;
                      end if;
 
+
                      --  Overlapping copies are allowed and common; copy one byte
                      --  at a time so a match can repeat what it just produced.
                      --  The byte is lifted out first: reading the vector inside

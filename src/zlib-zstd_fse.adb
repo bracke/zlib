@@ -233,6 +233,20 @@ package body Zlib.Zstd_FSE is
       State := Base + Natural (Raw);
    end Advance;
 
+   procedure Advance_Padded
+     (Table : Decode_Table;
+      R     : in out Bits.Backward_Reader;
+      Data  : Byte_Array;
+      State : in out Natural)
+   is
+      Width : constant Natural := Table.Entries (State).Bits;
+      Base  : constant Natural := Table.Entries (State).Next_State;
+      Raw   : constant Interfaces.Unsigned_32 :=
+        Bits.Read_Padded (R, Data, Width);
+   begin
+      State := Base + Natural (Raw);
+   end Advance_Padded;
+
    procedure Build_Encode
      (Counts : Tables.Count_Array;
       Log    : Natural;

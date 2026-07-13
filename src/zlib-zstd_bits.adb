@@ -186,6 +186,29 @@ package body Zlib.Zstd_Bits is
       R.Position := R.Position + Count;
    end Skip;
 
+   function Read_Padded
+     (R     : in out Backward_Reader;
+      Data  : Byte_Array;
+      Count : Natural) return Interfaces.Unsigned_32
+   is
+      Result : Interfaces.Unsigned_32 := 0;
+   begin
+      for Unused_Index in 1 .. Count loop
+         Result := Interfaces.Shift_Left (Result, 1);
+         if R.Position < R.Total and then Bit_At (Data, R.Position) then
+            Result := Result or 1;
+         end if;
+         R.Position := R.Position + 1;
+      end loop;
+
+      return Result;
+   end Read_Padded;
+
+   function Over_Consumed (R : Backward_Reader) return Boolean is
+   begin
+      return R.Position > R.Total;
+   end Over_Consumed;
+
    function Exhausted (R : Backward_Reader) return Boolean is
    begin
       return R.Position >= R.Total;

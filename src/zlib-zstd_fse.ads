@@ -52,6 +52,18 @@ package Zlib.Zstd_FSE is
    --  @param Table  the resulting table
    --  @param Status Ok, or Invalid_Huffman_Code when the counts are inconsistent
 
+   procedure Advance_Padded
+     (Table : Decode_Table;
+      R     : in out Zlib.Zstd_Bits.Backward_Reader;
+      Data  : Byte_Array;
+      State : in out Natural);
+   --  Step the state on, allowing the read to run past the end of the payload.
+   --  The caller detects the end with Over_Consumed afterwards; see Read_Padded.
+   --  @param Table the decode table
+   --  @param R     the payload reader
+   --  @param Data  the payload
+   --  @param State the state, updated
+
    procedure Build_Encode
      (Counts : Zlib.Zstd_Tables.Count_Array;
       Log    : Natural;

@@ -110,6 +110,30 @@ package Zlib.Zstd_Bits is
    --  @param Count  number of bits
    --  @param Status Ok, or Unexpected_End_Of_Input when that runs past the end
 
+   function Read_Padded
+     (R     : in out Backward_Reader;
+      Data  : Byte_Array;
+      Count : Natural) return Interfaces.Unsigned_32
+     with Pre => Count <= 32;
+   --  Read Count bits, taking zeroes past the end rather than failing, and
+   --  always advancing.
+   --
+   --  An FSE stream does not store how many symbols it holds: the decoder finds
+   --  out by running past the end. The last state transition is allowed to read
+   --  bits that are not there, and it is that OVER-consumption -- not the
+   --  absence of bits -- that marks the end. Stopping as soon as the bits run out
+   --  loses the final symbol.
+   --
+   --  @param R     the reader, advanced by Count bits even beyond the end
+   --  @param Data  the payload
+   --  @param Count number of bits, at most 32
+   --  @return the field value, zero-filled past the end
+
+   function Over_Consumed (R : Backward_Reader) return Boolean;
+   --  True once a read has gone past the end of the payload.
+   --  @param R the reader
+   --  @return whether the stream has been over-read
+
    function Exhausted (R : Backward_Reader) return Boolean;
    --  True once every payload bit has been consumed.
    --  @param R the reader

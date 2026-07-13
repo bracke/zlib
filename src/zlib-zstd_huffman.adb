@@ -224,11 +224,16 @@ package body Zlib.Zstd_Huffman is
                      return;
                   end if;
 
-                  --  The two states take turns. The count is not stored: the
-                  --  stream simply runs out, and when it does BOTH states still
-                  --  hold an undecoded symbol, so two more are emitted. Checking
-                  --  exhaustion before the transition, not after, is what makes
-                  --  the count come out right.
+                  --  The two states take turns, and the count is not stored
+                  --  anywhere: the decoder learns it by running off the end.
+                  --
+                  --  The transition is allowed to read bits that are not there,
+                  --  taking zeroes, and it is that OVER-consumption -- not the
+                  --  mere absence of bits -- that ends the stream. Stopping as
+                  --  soon as the bits run out drops the final symbol, which
+                  --  shifts every symbol of the same weight onto its neighbour's
+                  --  code and corrupts the literals in a way nothing else
+                  --  reports.
                   Count := 0;
                   loop
                      if Count > Max_Symbol - 1 then
@@ -239,29 +244,23 @@ package body Zlib.Zstd_Huffman is
                      Weights (Count) := FSE.Symbol (Decode, State_1);
                      Count := Count + 1;
 
-                     if Stream_Bits.Exhausted (R) then
+                     FSE.Advance_Padded (Decode, R, Stream, State_1);
+
+                     if Stream_Bits.Over_Consumed (R) then
                         Weights (Count) := FSE.Symbol (Decode, State_2);
                         Count := Count + 1;
                         exit;
                      end if;
 
-                     FSE.Advance (Decode, R, Stream, State_1, Status);
-                     if Status /= Ok then
-                        return;
-                     end if;
-
                      Weights (Count) := FSE.Symbol (Decode, State_2);
                      Count := Count + 1;
 
-                     if Stream_Bits.Exhausted (R) then
+                     FSE.Advance_Padded (Decode, R, Stream, State_2);
+
+                     if Stream_Bits.Over_Consumed (R) then
                         Weights (Count) := FSE.Symbol (Decode, State_1);
                         Count := Count + 1;
                         exit;
-                     end if;
-
-                     FSE.Advance (Decode, R, Stream, State_2, Status);
-                     if Status /= Ok then
-                        return;
                      end if;
                   end loop;
 
