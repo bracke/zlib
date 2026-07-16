@@ -31,6 +31,12 @@ jobs:
         uses: alire-project/setup-alire@v5
         with:
           toolchain: gnat_native=15.2.1 gprbuild
+      - name: Install GNATprove
+        # The aggregate release checker runs "gnatprove -P zlib.gpr --level=4". gnatprove
+        # is a regular Alire crate, not a toolchain component, and apt has no package.
+        run: |
+          alr install gnatprove
+          echo "$HOME/.alire/bin" >> "$GITHUB_PATH"
       - name: Install workflow dependencies
         run: |
           sudo apt-get update
