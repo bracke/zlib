@@ -278,6 +278,7 @@ Raw compression and wrapper separation are covered by these suites:
 - `zlib_raw_cross_wrapper_conformance_tests`
 - `zlib_raw_release_tests`
 - `zlib_deflate_raw_bridge_tests`
+- `zlib_zstd_tests`
 
 Standard test command:
 
