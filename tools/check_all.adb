@@ -6,6 +6,7 @@ with Ada.Text_IO;
 with GNAT.OS_Lib;
 
 with Project_Tools.Ada_Source;
+with Project_Tools.Alire_Manifests;
 with Project_Tools.AUnit_Checks;
 with Project_Tools.Processes;
 with Project_Tools.Release_Checks;
@@ -65,6 +66,27 @@ begin
      (Checks, "tests/alire.toml", "gnat_native = ""^15""");
    Project_Tools.Release_Checks.Require_Text
      (Checks, "check_zlib/alire.toml", "gnat_native = ""^15""");
+
+   --  Publish-ready manifest set: alire.release.toml is the pin-free manifest
+   --  that gets published; alire.build.toml is that same manifest plus the local
+   --  cryptolib pin so the release configuration can be built from the workspace.
+   --  The development alire.toml keeps its own cryptolib pin for day-to-day work.
+   Project_Tools.Release_Checks.Require_File (Checks, "alire.release.toml");
+   Project_Tools.Release_Checks.Require_File (Checks, "alire.build.toml");
+   Project_Tools.Release_Checks.Require_Text
+     (Checks, "alire.release.toml", "gnat_native = ""^15""");
+   Project_Tools.Release_Checks.Require_Text
+     (Checks, "alire.build.toml", "gnat_native = ""^15""");
+   Project_Tools.Alire_Manifests.Require_Workspace_Pin
+     (Root & "/alire.toml", "cryptolib", "../cryptolib");
+   Project_Tools.Alire_Manifests.Require_No_Local_Pins
+     (Root & "/alire.release.toml");
+   Project_Tools.Alire_Manifests.Require_Release_Dependency
+     (Root & "/alire.release.toml", "cryptolib");
+   Project_Tools.Alire_Manifests.Require_Build_Overlay
+     (Root & "/alire.build.toml",
+      Root & "/alire.release.toml",
+      [1 => To_Unbounded_String ("cryptolib = { path = ""../cryptolib"" }")]);
 
    Project_Tools.Release_Checks.Require_File (Checks, "zlib.gpr");
    Project_Tools.Release_Checks.Require_File (Checks, "tests/tests.gpr");
