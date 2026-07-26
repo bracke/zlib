@@ -312,6 +312,7 @@ package Zlib is
    --  @param Input_Path compressed bzip2 input path
    --  @param Max_Input_Bytes maximum compressed bytes to read
    --  @param Consumer callback that receives decoded bytes
+   --  @param Continue callback flag; set False to stop delivery
    --  @param Decoded_Size number of decoded bytes delivered
    --  @param Status set to Ok on success or a deterministic failure code
 
@@ -330,6 +331,7 @@ package Zlib is
    --  @param Input_Path compressed zstd input path
    --  @param Max_Input_Bytes maximum compressed bytes to read
    --  @param Consumer callback that receives decoded bytes
+   --  @param Continue callback flag; set False to stop delivery
    --  @param Decoded_Size number of decoded bytes delivered
    --  @param Status set to Ok on success or a deterministic failure code
 
@@ -348,6 +350,7 @@ package Zlib is
    --  @param Input_Path compressed XZ input path
    --  @param Max_Input_Bytes maximum compressed bytes to read
    --  @param Consumer callback that receives decoded bytes
+   --  @param Continue callback flag; set False to stop delivery
    --  @param Decoded_Size number of decoded bytes delivered
    --  @param Status set to Ok on success or a deterministic failure code
 

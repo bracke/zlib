@@ -98,7 +98,10 @@ begin
       Spec_Pattern           => "zlib_*_tests.ads",
       Suite_Path             => Root & "/tests/src/zlib_suite.adb",
       Documentation_Path     => Root & "/docs/TESTING.md",
-      Documented_Stem_Prefix => "- `zlib_");
+      Documented_Stem_Prefix => "- `zlib_",
+      Suite_Add_Prefix       =>
+        "Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new ",
+      Suite_Add_Suffix       => ".Test_Case))");
    Project_Tools.Release_Checks.Require_GPR_Main_Inventory
      (Project_File                 => Root & "/tools/tools.gpr",
       Documentation_File           => Root & "/tools/README.md",
@@ -660,10 +663,9 @@ begin
        new String'("-P"), new String'("examples/examples.gpr")]);
    Run
      ("tools.gpr",
-      Root,
+      Root & "/tools",
       Alr,
-      [new String'("exec"), new String'("--"), new String'("gprbuild"),
-       new String'("-P"), new String'("tools/tools.gpr")]);
+      [new String'("build"), new String'("--"), new String'("-f")]);
    Run ("check_zlib build", Root & "/check_zlib", Alr, [1 => new String'("build")]);
    Run ("check_zlib", Root & "/check_zlib", "./bin/check_zlib", []);
    Run ("smoke test", Root, "./tools/bin/smoke_test", []);
