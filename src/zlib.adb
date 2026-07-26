@@ -4848,17 +4848,32 @@ package body Zlib is
            Natural (Backward_Size_Field + 1) * 4;
          Index_First : constant Natural := Footer_First - Index_Size;
       begin
-         if Header_Flags (Header_Flags'First) /= 0
-           or else Check_Id not in 0 | 1
-           or else Compute_CRC32 (Header_Flags) /= Header_CRC
-           or else Input (Footer_First + 10) /= Byte (Character'Pos ('Y'))
+         if Header_Flags (Header_Flags'First) /= 0 then
+            return Empty;
+         end if;
+
+         if Check_Id not in 0 | 1 then
+            Status := Unsupported_Method;
+            return Empty;
+         end if;
+
+         if Compute_CRC32 (Header_Flags) /= Header_CRC then
+            Status := Invalid_Checksum;
+            return Empty;
+         end if;
+
+         if Input (Footer_First + 10) /= Byte (Character'Pos ('Y'))
            or else Input (Footer_First + 11) /= Byte (Character'Pos ('Z'))
            or else Input (Footer_First + 8) /= Header_Flags (Header_Flags'First)
            or else Input (Footer_First + 9) /= Header_Flags (Header_Flags'First + 1)
            or else Index_First <= Input'First + 12
            or else Index_First > Footer_First - 4
-           or else Compute_CRC32 (Input (Footer_First + 4 .. Footer_First + 9)) /= Footer_CRC
          then
+            return Empty;
+         end if;
+
+         if Compute_CRC32 (Input (Footer_First + 4 .. Footer_First + 9)) /= Footer_CRC then
+            Status := Invalid_Checksum;
             return Empty;
          end if;
 
