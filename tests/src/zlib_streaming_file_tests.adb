@@ -4,8 +4,6 @@ with Ada.Streams;
 with Ada.Streams.Stream_IO;
 with AUnit.Assertions; use AUnit.Assertions;
 with Zlib;
-with Zlib.BZip2_Encoder;
-with Zlib.Zstd_Encoder;
 
 package body Zlib_Streaming_File_Tests is
    use type Zlib.Byte;
@@ -520,6 +518,7 @@ package body Zlib_Streaming_File_Tests is
    is
       pragma Unreferenced (T);
       Input       : constant Zlib.Byte_Array := Binary_Data;
+      Plain_Path  : constant String := "zlib_streaming_consumer.plain";
       Bz_Path     : constant String := "zlib_streaming_consumer.bz2";
       Zst_Path    : constant String := "zlib_streaming_consumer.zst";
       Xz_Path     : constant String := "zlib_streaming_consumer.xz";
@@ -558,30 +557,21 @@ package body Zlib_Streaming_File_Tests is
             Label & " payload");
       end Check_Output;
 
-      Bz_Data : constant Zlib.Byte_Array :=
-        Zlib.BZip2_Encoder.Encode (Input, Status => Status);
    begin
-      Assert (Status = Zlib.Ok, "bzip2 fixture encode");
-
+      Delete_If_Exists (Plain_Path);
       Delete_If_Exists (Bz_Path);
       Delete_If_Exists (Zst_Path);
       Delete_If_Exists (Xz_Path);
-      Write_Bytes (Bz_Path, Bz_Data);
+      Write_Bytes (Plain_Path, Input);
 
-      declare
-         Zst_Data : constant Zlib.Byte_Array :=
-           Zlib.Zstd_Encoder.Encode (Input, Status);
-      begin
-         Assert (Status = Zlib.Ok, "zstd fixture encode");
-         Write_Bytes (Zst_Path, Zst_Data);
-      end;
+      Zlib.BZip2_File (Plain_Path, Bz_Path, 1_024, Status);
+      Assert (Status = Zlib.Ok, "bzip2 file encode");
 
-      declare
-         Xz_Data : constant Zlib.Byte_Array := Zlib.XZ_LZMA2 (Input, Status);
-      begin
-         Assert (Status = Zlib.Ok, "xz fixture encode");
-         Write_Bytes (Xz_Path, Xz_Data);
-      end;
+      Zlib.Zstd_File (Plain_Path, Zst_Path, 1_024, Status);
+      Assert (Status = Zlib.Ok, "zstd file encode");
+
+      Zlib.XZ_LZMA2_File (Plain_Path, Xz_Path, 1_024, Status);
+      Assert (Status = Zlib.Ok, "xz file encode");
 
       Reset_Output;
       Zlib.BZip2_File_To_Consumer
@@ -605,6 +595,12 @@ package body Zlib_Streaming_File_Tests is
         (Status = Zlib.Input_File_Error and then Decoded = 0,
          "bzip2 file-to-consumer rejects input over cap");
 
+      Zlib.Zstd_File (Plain_Path, Zst_Path, 1, Status);
+      Assert
+        (Status = Zlib.Input_File_Error,
+         "zstd file encoder rejects input over cap");
+
+      Delete_If_Exists (Plain_Path);
       Delete_If_Exists (Bz_Path);
       Delete_If_Exists (Zst_Path);
       Delete_If_Exists (Xz_Path);

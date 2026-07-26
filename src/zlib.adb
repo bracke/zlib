@@ -3349,6 +3349,9 @@ package body Zlib is
    type Standalone_Decoder is access function
      (Input : Byte_Array; Status : out Status_Code) return Byte_Array;
 
+   type Standalone_Encoder is access function
+     (Input : Byte_Array; Status : out Status_Code) return Byte_Array;
+
    procedure Decode_File_To_Consumer
      (Input_Path      : String;
       Max_Input_Bytes : Natural;
@@ -3454,6 +3457,106 @@ package body Zlib is
          Decoded_Size    => Decoded_Size,
          Status          => Status);
    end XZ_File_To_Consumer;
+
+   function Encode_BZip2
+     (Input : Byte_Array; Status : out Status_Code) return Byte_Array is
+   begin
+      return Zlib.BZip2_Encoder.Encode (Input, Status => Status);
+   end Encode_BZip2;
+
+   function Encode_Zstd
+     (Input : Byte_Array; Status : out Status_Code) return Byte_Array is
+   begin
+      return Zlib.Zstd_Encoder.Encode (Input, Status);
+   end Encode_Zstd;
+
+   function Encode_XZ_LZMA2
+     (Input : Byte_Array; Status : out Status_Code) return Byte_Array is
+   begin
+      return XZ_LZMA2 (Input, Status);
+   end Encode_XZ_LZMA2;
+
+   procedure Write_File
+     (Path : String; Data : Byte_Array; Status : out Status_Code);
+
+   procedure Encode_File
+     (Input_Path      : String;
+      Output_Path     : String;
+      Max_Input_Bytes : Natural;
+      Encoder         : not null Standalone_Encoder;
+      Status          : out Status_Code)
+   is
+      Read_Status   : Status_Code := Ok;
+      Input         : constant Byte_Array :=
+        Read_File_Bounded (Input_Path, Max_Input_Bytes, Read_Status);
+      Encode_Status : Status_Code := Ok;
+   begin
+      Status := Read_Status;
+      if Read_Status /= Ok then
+         return;
+      end if;
+
+      declare
+         Encoded : constant Byte_Array := Encoder.all (Input, Encode_Status);
+         Write_Status : Status_Code := Ok;
+      begin
+         Status := Encode_Status;
+         if Encode_Status /= Ok then
+            return;
+         end if;
+
+         Write_File (Output_Path, Encoded, Write_Status);
+         Status := Write_Status;
+      end;
+
+   exception
+      when Storage_Error =>
+         Status := Output_File_Error;
+      when others =>
+         Status := Output_File_Error;
+   end Encode_File;
+
+   procedure BZip2_File
+     (Input_Path      : String;
+      Output_Path     : String;
+      Max_Input_Bytes : Natural;
+      Status          : out Status_Code) is
+   begin
+      Encode_File
+        (Input_Path      => Input_Path,
+         Output_Path     => Output_Path,
+         Max_Input_Bytes => Max_Input_Bytes,
+         Encoder         => Encode_BZip2'Access,
+         Status          => Status);
+   end BZip2_File;
+
+   procedure Zstd_File
+     (Input_Path      : String;
+      Output_Path     : String;
+      Max_Input_Bytes : Natural;
+      Status          : out Status_Code) is
+   begin
+      Encode_File
+        (Input_Path      => Input_Path,
+         Output_Path     => Output_Path,
+         Max_Input_Bytes => Max_Input_Bytes,
+         Encoder         => Encode_Zstd'Access,
+         Status          => Status);
+   end Zstd_File;
+
+   procedure XZ_LZMA2_File
+     (Input_Path      : String;
+      Output_Path     : String;
+      Max_Input_Bytes : Natural;
+      Status          : out Status_Code) is
+   begin
+      Encode_File
+        (Input_Path      => Input_Path,
+         Output_Path     => Output_Path,
+         Max_Input_Bytes => Max_Input_Bytes,
+         Encoder         => Encode_XZ_LZMA2'Access,
+         Status          => Status);
+   end XZ_LZMA2_File;
 
    procedure Write_File
      (Path : String; Data : Byte_Array; Status : out Status_Code)

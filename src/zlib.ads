@@ -351,6 +351,53 @@ package Zlib is
    --  @param Decoded_Size number of decoded bytes delivered
    --  @param Status set to Ok on success or a deterministic failure code
 
+   procedure BZip2_File
+     (Input_Path      : String;
+      Output_Path     : String;
+      Max_Input_Bytes : Natural;
+      Status          : out Status_Code);
+   --  Encode Input_Path as a complete bzip2 stream at Output_Path.
+   --  Max_Input_Bytes bounds the plain input file image accepted by this
+   --  helper. The current native bzip2 encoder remains complete-stream
+   --  internally, but this facade centralizes bounded file handling and
+   --  output publication for callers that should not depend on child
+   --  encoder packages.
+   --  @param Input_Path plain input path
+   --  @param Output_Path path that receives bzip2 output
+   --  @param Max_Input_Bytes maximum plain bytes to read
+   --  @param Status set to Ok on success or a deterministic failure code
+
+   procedure Zstd_File
+     (Input_Path      : String;
+      Output_Path     : String;
+      Max_Input_Bytes : Natural;
+      Status          : out Status_Code);
+   --  Encode Input_Path as a complete zstd frame at Output_Path.
+   --  Max_Input_Bytes bounds the plain input file image accepted by this
+   --  helper. The current native zstd encoder remains complete-stream
+   --  internally, but this facade centralizes bounded file handling and
+   --  output publication for callers that should not depend on child
+   --  encoder packages.
+   --  @param Input_Path plain input path
+   --  @param Output_Path path that receives zstd output
+   --  @param Max_Input_Bytes maximum plain bytes to read
+   --  @param Status set to Ok on success or a deterministic failure code
+
+   procedure XZ_LZMA2_File
+     (Input_Path      : String;
+      Output_Path     : String;
+      Max_Input_Bytes : Natural;
+      Status          : out Status_Code);
+   --  Encode Input_Path as the supported native XZ/LZMA2 subset at
+   --  Output_Path. Max_Input_Bytes bounds the plain input file image accepted
+   --  by this helper. The current native XZ encoder remains complete-stream
+   --  internally, but this facade centralizes bounded file handling and
+   --  output publication for callers.
+   --  @param Input_Path plain input path
+   --  @param Output_Path path that receives XZ output
+   --  @param Max_Input_Bytes maximum plain bytes to read
+   --  @param Status set to Ok on success or a deterministic failure code
+
    function Inflate_With_Header
      (Input     : Byte_Array;
       Header    : Header_Type;
