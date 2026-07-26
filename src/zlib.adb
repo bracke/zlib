@@ -5156,9 +5156,50 @@ package body Zlib is
       return Empty;
    exception
       when others =>
-         Status := Unsupported_Method;
-         return Empty;
+      Status := Unsupported_Method;
+      return Empty;
    end Compress_ZIP_External_File;
+
+   procedure Compress_ZIP_External_File_To_File
+     (Input_Path        : String;
+      Output_Path       : String;
+      Method_Name       : String;
+      Method            : out Interfaces.Unsigned_16;
+      Crc32             : out Interfaces.Unsigned_32;
+      Uncompressed_Size : out Interfaces.Unsigned_64;
+      Compressed_Size   : out Interfaces.Unsigned_64;
+      Status            : out Status_Code)
+   is
+      Output : File_Type;
+      Payload : constant Byte_Array :=
+        Compress_ZIP_External_File
+          (Input_Path, Method_Name, Method, Crc32, Uncompressed_Size, Status);
+      Data : Stream_Element_Array (1 .. Stream_Element_Offset (Payload'Length));
+   begin
+      Compressed_Size := 0;
+      if Status /= Ok then
+         return;
+      end if;
+
+      for Index in Payload'Range loop
+         Data (Stream_Element_Offset (Index - Payload'First + 1)) :=
+           Stream_Element (Payload (Index));
+      end loop;
+
+      Create (Output, Out_File, Output_Path);
+      if Payload'Length > 0 then
+         Write (Output, Data);
+      end if;
+      Close (Output);
+      Compressed_Size := Interfaces.Unsigned_64 (Payload'Length);
+   exception
+      when others =>
+         if Is_Open (Output) then
+            Close (Output);
+         end if;
+         Status := Output_File_Error;
+         Compressed_Size := 0;
+   end Compress_ZIP_External_File_To_File;
 
    function Seven_Zip_Output_File_Writable (Output_Path : String) return Boolean;
    function Seven_Zip_Input_Path_Readable (Input_Path : String) return Boolean;

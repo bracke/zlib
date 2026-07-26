@@ -119,6 +119,30 @@ package body Zlib_ZIP_External_Codec_Tests is
          raise;
    end Write_File;
 
+   function Read_File (Path : String) return Zlib.Byte_Array is
+      File : Ada.Streams.Stream_IO.File_Type;
+      Size : constant Natural := Natural (Ada.Directories.Size (Path));
+      Raw  : Ada.Streams.Stream_Element_Array
+        (1 .. Ada.Streams.Stream_Element_Offset (Size));
+      Last : Ada.Streams.Stream_Element_Offset := 0;
+   begin
+      Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path);
+      Ada.Streams.Stream_IO.Read (File, Raw, Last);
+      Ada.Streams.Stream_IO.Close (File);
+
+      return Result : Zlib.Byte_Array (1 .. Natural (Last)) do
+         for I in Result'Range loop
+            Result (I) := Zlib.Byte (Raw (Ada.Streams.Stream_Element_Offset (I)));
+         end loop;
+      end return;
+   exception
+      when others =>
+         if Ada.Streams.Stream_IO.Is_Open (File) then
+            Ada.Streams.Stream_IO.Close (File);
+         end if;
+         raise;
+   end Read_File;
+
    function Archive_With_External_Payload
      (Payload         : Zlib.Byte_Array;
       Method          : Interfaces.Unsigned_16;
@@ -258,6 +282,54 @@ package body Zlib_ZIP_External_Codec_Tests is
         ("BZip2", 12, Repeated_Data (192, 3),
          "ZIP BZip2 payloads are created in-process");
    end Test_ZIP_BZip2_Created;
+
+   procedure Test_ZIP_External_File_Output_Created
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Plain             : constant Zlib.Byte_Array := Repeated_Data (192, 5);
+      Input_Path        : constant String := "zlib-zip-external-file-input.bin";
+      Output_Path       : constant String := "zlib-zip-external-file-payload.bin";
+      Method            : Interfaces.Unsigned_16;
+      Crc32             : Interfaces.Unsigned_32;
+      Uncompressed_Size : Interfaces.Unsigned_64;
+      Compressed_Size   : Interfaces.Unsigned_64;
+      Status            : Zlib.Status_Code;
+   begin
+      Write_File (Input_Path, Plain);
+      Zlib.Compress_ZIP_External_File_To_File
+        (Input_Path, Output_Path, "BZip2", Method, Crc32, Uncompressed_Size,
+         Compressed_Size, Status);
+      Assert (Status = Zlib.Ok, "file-output compression status");
+      Assert (Method = 12, "file-output compression method");
+      Assert
+        (Uncompressed_Size = Interfaces.Unsigned_64 (Plain'Length),
+         "file-output uncompressed size");
+
+      declare
+         Payload : constant Zlib.Byte_Array := Read_File (Output_Path);
+         Archive : constant Zlib.Byte_Array :=
+           Archive_With_External_Payload
+             (Payload, Method, Crc32, Uncompressed_Size, "payload.bin");
+         Decoded : constant Zlib.Byte_Array :=
+           Zlib.Extract_ZIP_External_Entry
+             (Archive, "payload.bin", "", Status);
+      begin
+         Assert
+           (Compressed_Size = Interfaces.Unsigned_64 (Payload'Length),
+            "file-output compressed size");
+         Assert (Status = Zlib.Ok, "file-output extraction status");
+         Assert_Bytes_Equal (Decoded, Plain, "file-output payload roundtrip");
+      end;
+
+      Delete_If_Exists (Input_Path);
+      Delete_If_Exists (Output_Path);
+   exception
+      when others =>
+         Delete_If_Exists (Input_Path);
+         Delete_If_Exists (Output_Path);
+         raise;
+   end Test_ZIP_External_File_Output_Created;
 
    procedure Test_ZIP_BZip2_Extracted
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -504,6 +576,9 @@ package body Zlib_ZIP_External_Codec_Tests is
       Registration.Register_Routine
         (T, Test_ZIP_BZip2_Created'Access,
          "ZIP BZip2 payloads are created in-process");
+      Registration.Register_Routine
+        (T, Test_ZIP_External_File_Output_Created'Access,
+         "ZIP external payloads can be created directly to a file");
       Registration.Register_Routine
         (T, Test_ZIP_BZip2_Extracted'Access,
          "ZIP BZip2 payloads are extracted in-process");

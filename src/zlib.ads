@@ -1383,6 +1383,28 @@ package Zlib is
    --  @param Status set to Ok on success, otherwise a deterministic failure code
    --  @return compressed ZIP member payload when Status is Ok
 
+   procedure Compress_ZIP_External_File_To_File
+     (Input_Path        : String;
+      Output_Path       : String;
+      Method_Name       : String;
+      Method            : out Interfaces.Unsigned_16;
+      Crc32             : out Interfaces.Unsigned_32;
+      Uncompressed_Size : out Interfaces.Unsigned_64;
+      Compressed_Size   : out Interfaces.Unsigned_64;
+      Status            : out Status_Code);
+   --  Compress Input_Path as one ZIP entry and write only the compressed
+   --  member payload to Output_Path. This is the file-backed equivalent of
+   --  Compress_ZIP_External_File for callers that must not retain the
+   --  compressed payload as an application-level carrier.
+   --  @param Input_Path source file to compress
+   --  @param Output_Path destination file for the compressed ZIP member payload
+   --  @param Method_Name ZIP method name
+   --  @param Method parsed ZIP compression method id
+   --  @param Crc32 parsed ZIP CRC32 for the uncompressed payload
+   --  @param Uncompressed_Size parsed uncompressed payload size
+   --  @param Compressed_Size written compressed payload size
+   --  @param Status set to Ok on success, otherwise a deterministic failure code
+
    procedure Seven_Zip_PPMd_File
      (Input_Path  : String;
       Output_Path : String;
