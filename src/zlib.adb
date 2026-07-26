@@ -120,6 +120,23 @@ package body Zlib is
       return CryptoLib.Checksums.CRC32_Value (State);
    end Compute_CRC32;
 
+   function Compute_XZ_CRC64 (Input : Byte_Array) return Interfaces.Unsigned_64 is
+      Poly : constant Interfaces.Unsigned_64 := 16#C96C_5795_D787_0F42#;
+      CRC  : Interfaces.Unsigned_64 := Interfaces.Unsigned_64'Last;
+   begin
+      for B of Input loop
+         CRC := CRC xor Interfaces.Unsigned_64 (B);
+         for Bit in 1 .. 8 loop
+            if (CRC and 1) = 1 then
+               CRC := Interfaces.Shift_Right (CRC, 1) xor Poly;
+            else
+               CRC := Interfaces.Shift_Right (CRC, 1);
+            end if;
+         end loop;
+      end loop;
+      return CRC xor Interfaces.Unsigned_64'Last;
+   end Compute_XZ_CRC64;
+
    function Saturating_Compression_Bound
      (Input_Length : Natural;
       Wrapper_Size : Natural) return Natural
@@ -4739,6 +4756,21 @@ package body Zlib is
         or Interfaces.Shift_Left (Interfaces.Unsigned_32 (Input (Pos + 3)), 24);
    end U32_LE_At;
 
+   function U64_LE_At (Input : Byte_Array; Pos : Natural) return Interfaces.Unsigned_64 is
+   begin
+      if Pos < Input'First or else Pos + 7 > Input'Last then
+         return 0;
+      end if;
+      return Interfaces.Unsigned_64 (Input (Pos))
+        or Interfaces.Shift_Left (Interfaces.Unsigned_64 (Input (Pos + 1)), 8)
+        or Interfaces.Shift_Left (Interfaces.Unsigned_64 (Input (Pos + 2)), 16)
+        or Interfaces.Shift_Left (Interfaces.Unsigned_64 (Input (Pos + 3)), 24)
+        or Interfaces.Shift_Left (Interfaces.Unsigned_64 (Input (Pos + 4)), 32)
+        or Interfaces.Shift_Left (Interfaces.Unsigned_64 (Input (Pos + 5)), 40)
+        or Interfaces.Shift_Left (Interfaces.Unsigned_64 (Input (Pos + 6)), 48)
+        or Interfaces.Shift_Left (Interfaces.Unsigned_64 (Input (Pos + 7)), 56);
+   end U64_LE_At;
+
    function Slice
      (Input : Byte_Array;
       First : Natural;
@@ -4852,7 +4884,7 @@ package body Zlib is
             return Empty;
          end if;
 
-         if Check_Id not in 0 | 1 then
+         if Check_Id not in 0 | 1 | 4 then
             Status := Unsupported_Method;
             return Empty;
          end if;
@@ -4920,7 +4952,12 @@ package body Zlib is
                Block_First : constant Natural := Input'First + 12;
                Header_Size : constant Natural := Natural (Input (Block_First) + 1) * 4;
                Header_CRC_Pos : constant Natural := Block_First + Header_Size;
-               Check_Size : constant Natural := (if Check_Id = 1 then 4 else 0);
+               Check_Size : constant Natural :=
+                 (case Check_Id is
+                     when 0 => 0,
+                     when 1 => 4,
+                     when 4 => 8,
+                     when others => 0);
                Compressed_Size : constant Natural :=
                  Natural (Unpadded_Size) - Header_Size - 4 - Check_Size;
                Payload_First : constant Natural := Header_CRC_Pos + 4;
@@ -4968,6 +5005,11 @@ package body Zlib is
                      return Empty;
                   elsif Check_Id = 1
                     and then Compute_CRC32 (Plain) /= U32_LE_At (Input, Check_Pos)
+                  then
+                     Status := Invalid_Checksum;
+                     return Empty;
+                  elsif Check_Id = 4
+                    and then Compute_XZ_CRC64 (Plain) /= U64_LE_At (Input, Check_Pos)
                   then
                      Status := Invalid_Checksum;
                      return Empty;
