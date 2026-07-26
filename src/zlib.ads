@@ -288,6 +288,15 @@ package Zlib is
    --  @param Status set to Ok on success or a deterministic failure code
    --  @return inflated bytes when Status is Ok; otherwise invalid partial data
 
+   function XZ
+     (Input : Byte_Array; Status : out Status_Code) return Byte_Array;
+   --  Decode one complete XZ stream for the supported native subset:
+   --  one stream, one block, one LZMA2 filter, no check or CRC32 check.
+   --  Other XZ layouts fail closed with Unsupported_Method or Invalid_Header.
+   --  @param Input complete XZ stream
+   --  @param Status set to Ok on success or a deterministic failure code
+   --  @return decoded bytes when Status is Ok; otherwise empty array
+
    function Inflate_With_Header
      (Input     : Byte_Array;
       Header    : Header_Type;
@@ -630,6 +639,15 @@ package Zlib is
    --  @param Mode Stored, Fixed, Dynamic, or Auto for raw output
    --  @param Status set to Ok on success
    --  @return raw Deflate stream when Status is Ok; otherwise empty array
+
+   function XZ_LZMA2
+     (Input : Byte_Array; Status : out Status_Code) return Byte_Array;
+   --  Encode bytes as a single-stream, single-block XZ file with one LZMA2
+   --  filter and CRC32 stream check. This is the fixture/public counterpart
+   --  to XZ's supported native decode subset.
+   --  @param Input uncompressed bytes
+   --  @param Status set to Ok on success or a deterministic failure code
+   --  @return XZ stream when Status is Ok; otherwise empty array
 
    function Deflate_Raw_Bound (Input_Length : Natural) return Natural
      with SPARK_Mode => On;

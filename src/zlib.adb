@@ -16,6 +16,7 @@ with Zlib.LZ77_Matcher;
 with Zlib.LZMA_Core;
 with Zlib.LZMA2_Decoder;
 with Zlib.LZMA2_Encoder;
+with Zlib.LZMA2_Framing;
 with Zlib.BZip2_Decoder;
 with Zlib.BZip2_Encoder;
 with Zlib.Zstd_Decoder;
@@ -4723,6 +4724,319 @@ package body Zlib is
          Output.Append (Byte (Character'Pos (Ch)));
       end loop;
    end Append_ASCII;
+
+   function XZ_LZMA2_Encode is new
+     Zlib.LZMA2_Encoder (LZMA_Encode_Selected);
+
+   function U32_LE_At (Input : Byte_Array; Pos : Natural) return Interfaces.Unsigned_32 is
+   begin
+      if Pos < Input'First or else Pos + 3 > Input'Last then
+         return 0;
+      end if;
+      return Interfaces.Unsigned_32 (Input (Pos))
+        or Interfaces.Shift_Left (Interfaces.Unsigned_32 (Input (Pos + 1)), 8)
+        or Interfaces.Shift_Left (Interfaces.Unsigned_32 (Input (Pos + 2)), 16)
+        or Interfaces.Shift_Left (Interfaces.Unsigned_32 (Input (Pos + 3)), 24);
+   end U32_LE_At;
+
+   function Slice
+     (Input : Byte_Array;
+      First : Natural;
+      Count : Natural) return Byte_Array
+   is
+   begin
+      if Count = 0 then
+         declare
+            Empty : constant Byte_Array (1 .. 0) := [others => 0];
+         begin
+            return Empty;
+         end;
+      end if;
+
+      declare
+         Result : Byte_Array (1 .. Count);
+      begin
+         for Offset in 0 .. Count - 1 loop
+            Result (Offset + 1) := Input (First + Offset);
+         end loop;
+         return Result;
+      end;
+   end Slice;
+
+   procedure Append_Padding_4 (Output : in out Byte_Vectors.Vector) is
+   begin
+      while Natural (Output.Length) mod 4 /= 0 loop
+         Output.Append (0);
+      end loop;
+   end Append_Padding_4;
+
+   procedure Append_VLI
+     (Output : in out Byte_Vectors.Vector;
+      Value  : Interfaces.Unsigned_64)
+   is
+      Current : Interfaces.Unsigned_64 := Value;
+   begin
+      loop
+         declare
+            B : Byte := Byte (Current and 16#7F#);
+         begin
+            Current := Interfaces.Shift_Right (Current, 7);
+            if Current /= 0 then
+               B := B or 16#80#;
+            end if;
+            Output.Append (B);
+            exit when Current = 0;
+         end;
+      end loop;
+   end Append_VLI;
+
+   function Read_VLI
+     (Input : Byte_Array;
+      Pos   : in out Natural;
+      Last  : Natural;
+      Value : out Interfaces.Unsigned_64) return Boolean
+   is
+      Shift  : Natural := 0;
+      Result : Interfaces.Unsigned_64 := 0;
+   begin
+      Value := 0;
+      while Pos <= Last and then Shift <= 63 loop
+         declare
+            B : constant Byte := Input (Pos);
+            Low : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (B and 16#7F#);
+         begin
+            Result := Result or Interfaces.Shift_Left (Low, Shift);
+            Pos := Pos + 1;
+            if (B and 16#80#) = 0 then
+               Value := Result;
+               return True;
+            end if;
+            Shift := Shift + 7;
+         end;
+      end loop;
+      return False;
+   end Read_VLI;
+
+   function XZ
+     (Input : Byte_Array; Status : out Status_Code) return Byte_Array
+   is
+      Empty : constant Byte_Array (1 .. 0) := [others => 0];
+   begin
+      Status := Invalid_Header;
+      if Input'Length < 32
+        or else Input (Input'First) /= 16#FD#
+        or else Input (Input'First + 1) /= 16#37#
+        or else Input (Input'First + 2) /= 16#7A#
+        or else Input (Input'First + 3) /= 16#58#
+        or else Input (Input'First + 4) /= 16#5A#
+        or else Input (Input'First + 5) /= 16#00#
+      then
+         return Empty;
+      end if;
+
+      declare
+         Header_Flags : constant Byte_Array := Input (Input'First + 6 .. Input'First + 7);
+         Check_Id : constant Byte := Header_Flags (Header_Flags'First + 1) and 16#0F#;
+         Header_CRC : constant Interfaces.Unsigned_32 :=
+           U32_LE_At (Input, Input'First + 8);
+         Footer_First : constant Natural := Input'Last - 11;
+         Footer_CRC : constant Interfaces.Unsigned_32 := U32_LE_At (Input, Footer_First);
+         Backward_Size_Field : constant Interfaces.Unsigned_32 :=
+           U32_LE_At (Input, Footer_First + 4);
+         Index_Size : constant Natural :=
+           Natural (Backward_Size_Field + 1) * 4;
+         Index_First : constant Natural := Footer_First - Index_Size;
+      begin
+         if Header_Flags (Header_Flags'First) /= 0
+           or else Check_Id not in 0 | 1
+           or else Compute_CRC32 (Header_Flags) /= Header_CRC
+           or else Input (Footer_First + 10) /= Byte (Character'Pos ('Y'))
+           or else Input (Footer_First + 11) /= Byte (Character'Pos ('Z'))
+           or else Input (Footer_First + 8) /= Header_Flags (Header_Flags'First)
+           or else Input (Footer_First + 9) /= Header_Flags (Header_Flags'First + 1)
+           or else Index_First <= Input'First + 12
+           or else Index_First > Footer_First - 4
+           or else Compute_CRC32 (Input (Footer_First + 4 .. Footer_First + 9)) /= Footer_CRC
+         then
+            return Empty;
+         end if;
+
+         declare
+            Index_Last : constant Natural := Footer_First - 1;
+            Index_CRC_Pos : constant Natural := Index_Last - 3;
+            Index_Pos : Natural := Index_First;
+            Record_Count : Interfaces.Unsigned_64;
+            Unpadded_Size : Interfaces.Unsigned_64;
+            Uncompressed_Size : Interfaces.Unsigned_64;
+         begin
+            if Input (Index_Pos) /= 0
+              or else Compute_CRC32 (Input (Index_First .. Index_CRC_Pos - 1)) /=
+                U32_LE_At (Input, Index_CRC_Pos)
+            then
+               Status := Invalid_Checksum;
+               return Empty;
+            end if;
+            Index_Pos := Index_Pos + 1;
+            if not Read_VLI (Input, Index_Pos, Index_CRC_Pos - 1, Record_Count)
+              or else Record_Count /= 1
+              or else not Read_VLI (Input, Index_Pos, Index_CRC_Pos - 1, Unpadded_Size)
+              or else not Read_VLI (Input, Index_Pos, Index_CRC_Pos - 1, Uncompressed_Size)
+            then
+               Status := Invalid_Header;
+               return Empty;
+            end if;
+            while Index_Pos < Index_CRC_Pos loop
+               if Input (Index_Pos) /= 0 then
+                  Status := Invalid_Header;
+                  return Empty;
+               end if;
+               Index_Pos := Index_Pos + 1;
+            end loop;
+
+            if Uncompressed_Size > Interfaces.Unsigned_64 (Natural'Last)
+              or else Unpadded_Size > Interfaces.Unsigned_64 (Natural'Last)
+            then
+               Status := Unsupported_Method;
+               return Empty;
+            end if;
+
+            declare
+               Block_First : constant Natural := Input'First + 12;
+               Header_Size : constant Natural := Natural (Input (Block_First) + 1) * 4;
+               Header_CRC_Pos : constant Natural := Block_First + Header_Size;
+               Check_Size : constant Natural := (if Check_Id = 1 then 4 else 0);
+               Compressed_Size : constant Natural :=
+                 Natural (Unpadded_Size) - Header_Size - 4 - Check_Size;
+               Payload_First : constant Natural := Header_CRC_Pos + 4;
+               Check_Pos : constant Natural := Payload_First + Compressed_Size;
+            begin
+               if Header_Size < 8
+                 or else Header_CRC_Pos + 3 >= Index_First
+                 or else Natural (Unpadded_Size) < Header_Size + 4 + Check_Size
+                 or else Check_Pos + Check_Size > Index_First
+                 or else Compute_CRC32 (Input (Block_First .. Header_CRC_Pos - 1)) /=
+                   U32_LE_At (Input, Header_CRC_Pos)
+                 or else Input (Block_First + 1) /= 0
+                 or else Input (Block_First + 2) /= 16#21#
+                 or else Input (Block_First + 3) /= 1
+                 or else Input (Block_First + 4) /=
+                   Zlib.LZMA2_Framing.Default_Props
+               then
+                  Status := Unsupported_Method;
+                  return Empty;
+               end if;
+
+               for Pos in Block_First + 5 .. Header_CRC_Pos - 1 loop
+                  if Input (Pos) /= 0 then
+                     Status := Invalid_Header;
+                     return Empty;
+                  end if;
+               end loop;
+               for Pos in Check_Pos + Check_Size .. Index_First - 1 loop
+                  if Input (Pos) /= 0 then
+                     Status := Invalid_Header;
+                     return Empty;
+                  end if;
+               end loop;
+
+               declare
+                  Local_Status : Status_Code := Ok;
+                  Plain : constant Byte_Array :=
+                    Zlib.LZMA2_Decoder.Decode
+                      (Slice (Input, Payload_First, Compressed_Size),
+                       Natural (Uncompressed_Size),
+                       Local_Status);
+               begin
+                  if Local_Status /= Ok then
+                     Status := Local_Status;
+                     return Empty;
+                  elsif Check_Id = 1
+                    and then Compute_CRC32 (Plain) /= U32_LE_At (Input, Check_Pos)
+                  then
+                     Status := Invalid_Checksum;
+                     return Empty;
+                  end if;
+                  Status := Ok;
+                  return Plain;
+               end;
+            end;
+         end;
+      end;
+   exception
+      when Constraint_Error | Storage_Error =>
+         Status := Unsupported_Method;
+         return Empty;
+   end XZ;
+
+   function XZ_LZMA2
+     (Input : Byte_Array; Status : out Status_Code) return Byte_Array
+   is
+      Output : Byte_Vectors.Vector;
+      Block_Header : Byte_Vectors.Vector;
+      Index : Byte_Vectors.Vector;
+      LZMA2 : constant Byte_Array := XZ_LZMA2_Encode (Input);
+      Check : constant Interfaces.Unsigned_32 := Compute_CRC32 (Input);
+      Unpadded_Size : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (8 + 4 + LZMA2'Length + 4);
+   begin
+      Status := Ok;
+      Output.Append (16#FD#);
+      Output.Append (16#37#);
+      Output.Append (16#7A#);
+      Output.Append (16#58#);
+      Output.Append (16#5A#);
+      Output.Append (16#00#);
+      Output.Append (0);
+      Output.Append (1);
+      Append_U32_LE (Output, Compute_CRC32 ([1 => 0, 2 => 1]));
+
+      Block_Header.Append (1);
+      Block_Header.Append (0);
+      Block_Header.Append (16#21#);
+      Block_Header.Append (1);
+      Block_Header.Append (Zlib.LZMA2_Framing.Default_Props);
+      Append_Padding_4 (Block_Header);
+      Append_Bytes (Output, To_Byte_Array (Block_Header));
+      Append_U32_LE (Output, Compute_CRC32 (To_Byte_Array (Block_Header)));
+      Append_Bytes (Output, LZMA2);
+      Append_U32_LE (Output, Check);
+      Append_Padding_4 (Output);
+
+      Index.Append (0);
+      Append_VLI (Index, 1);
+      Append_VLI (Index, Unpadded_Size);
+      Append_VLI (Index, Interfaces.Unsigned_64 (Input'Length));
+      Append_Padding_4 (Index);
+      Append_Bytes (Output, To_Byte_Array (Index));
+      Append_U32_LE (Output, Compute_CRC32 (To_Byte_Array (Index)));
+
+      declare
+         Index_Total_Size : constant Interfaces.Unsigned_32 :=
+           Interfaces.Unsigned_32 (Natural (Index.Length) + 4);
+         Backward_Size : constant Interfaces.Unsigned_32 :=
+           Index_Total_Size / 4 - 1;
+         Footer : Byte_Vectors.Vector;
+      begin
+         Append_U32_LE (Footer, Backward_Size);
+         Footer.Append (0);
+         Footer.Append (1);
+         Append_U32_LE (Output, Compute_CRC32 (To_Byte_Array (Footer)));
+         Append_Bytes (Output, To_Byte_Array (Footer));
+         Output.Append (Byte (Character'Pos ('Y')));
+         Output.Append (Byte (Character'Pos ('Z')));
+      end;
+
+      return To_Byte_Array (Output);
+   exception
+      when Constraint_Error | Storage_Error =>
+         Status := Unsupported_Method;
+         declare
+            Empty : constant Byte_Array (1 .. 0) := [others => 0];
+         begin
+            return Empty;
+         end;
+   end XZ_LZMA2;
 
    function Safe_ZIP_Entry_Name (Entry_Name : String) return Boolean is
       Segment_Length : Natural := 0;
