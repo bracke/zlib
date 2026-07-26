@@ -297,6 +297,60 @@ package Zlib is
    --  @param Status set to Ok on success or a deterministic failure code
    --  @return decoded bytes when Status is Ok; otherwise empty array
 
+   procedure BZip2_File_To_Consumer
+     (Input_Path      : String;
+      Max_Input_Bytes : Natural;
+      Consumer        : not null access procedure
+        (Bytes    : Byte_Array;
+         Continue : in out Boolean);
+      Decoded_Size    : out Interfaces.Unsigned_64;
+      Status          : out Status_Code);
+   --  Decode a complete bzip2 file and deliver decoded bytes to Consumer.
+   --  Max_Input_Bytes bounds the compressed file image accepted by this helper.
+   --  The current native bzip2 decoder remains complete-stream internally, but
+   --  this facade centralizes bounded file handling and callback delivery.
+   --  @param Input_Path compressed bzip2 input path
+   --  @param Max_Input_Bytes maximum compressed bytes to read
+   --  @param Consumer callback that receives decoded bytes
+   --  @param Decoded_Size number of decoded bytes delivered
+   --  @param Status set to Ok on success or a deterministic failure code
+
+   procedure Zstd_File_To_Consumer
+     (Input_Path      : String;
+      Max_Input_Bytes : Natural;
+      Consumer        : not null access procedure
+        (Bytes    : Byte_Array;
+         Continue : in out Boolean);
+      Decoded_Size    : out Interfaces.Unsigned_64;
+      Status          : out Status_Code);
+   --  Decode a complete zstd file and deliver decoded bytes to Consumer.
+   --  Max_Input_Bytes bounds the compressed file image accepted by this helper.
+   --  The current native zstd decoder remains complete-stream internally, but
+   --  this facade centralizes bounded file handling and callback delivery.
+   --  @param Input_Path compressed zstd input path
+   --  @param Max_Input_Bytes maximum compressed bytes to read
+   --  @param Consumer callback that receives decoded bytes
+   --  @param Decoded_Size number of decoded bytes delivered
+   --  @param Status set to Ok on success or a deterministic failure code
+
+   procedure XZ_File_To_Consumer
+     (Input_Path      : String;
+      Max_Input_Bytes : Natural;
+      Consumer        : not null access procedure
+        (Bytes    : Byte_Array;
+         Continue : in out Boolean);
+      Decoded_Size    : out Interfaces.Unsigned_64;
+      Status          : out Status_Code);
+   --  Decode a complete XZ file and deliver decoded bytes to Consumer.
+   --  Max_Input_Bytes bounds the compressed file image accepted by this helper.
+   --  The current native XZ decoder remains complete-stream internally, but
+   --  this facade centralizes bounded file handling and callback delivery.
+   --  @param Input_Path compressed XZ input path
+   --  @param Max_Input_Bytes maximum compressed bytes to read
+   --  @param Consumer callback that receives decoded bytes
+   --  @param Decoded_Size number of decoded bytes delivered
+   --  @param Status set to Ok on success or a deterministic failure code
+
    function Inflate_With_Header
      (Input     : Byte_Array;
       Header    : Header_Type;

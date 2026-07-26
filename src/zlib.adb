@@ -57,6 +57,7 @@ package body Zlib is
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
+   use type Ada.Directories.File_Size;
    use type System.Address;
 
    --  Every codec is now pure Ada: Deflate, LZMA/LZMA2, PPMd7, bzip2 and zstd.
@@ -3315,6 +3316,144 @@ package body Zlib is
             return Empty;
          end;
    end Read_File;
+
+   function Read_File_Bounded
+     (Path      : String;
+      Max_Bytes : Natural;
+      Status    : out Status_Code) return Byte_Array
+   is
+   begin
+      if not Ada.Directories.Exists (Path)
+        or else Ada.Directories.Size (Path) > Ada.Directories.File_Size (Max_Bytes)
+      then
+         Status := Input_File_Error;
+         declare
+            Empty : constant Byte_Array (1 .. 0) := [others => 0];
+         begin
+            return Empty;
+         end;
+      end if;
+
+      return Read_File (Path, Status);
+
+   exception
+      when others =>
+         Status := Input_File_Error;
+         declare
+            Empty : constant Byte_Array (1 .. 0) := [others => 0];
+         begin
+            return Empty;
+         end;
+   end Read_File_Bounded;
+
+   type Standalone_Decoder is access function
+     (Input : Byte_Array; Status : out Status_Code) return Byte_Array;
+
+   procedure Decode_File_To_Consumer
+     (Input_Path      : String;
+      Max_Input_Bytes : Natural;
+      Decoder         : not null Standalone_Decoder;
+      Consumer        : not null access procedure
+        (Bytes    : Byte_Array;
+         Continue : in out Boolean);
+      Decoded_Size    : out Interfaces.Unsigned_64;
+      Status          : out Status_Code)
+   is
+      Read_Status : Status_Code := Ok;
+      Input       : constant Byte_Array :=
+        Read_File_Bounded (Input_Path, Max_Input_Bytes, Read_Status);
+      Decode_Status : Status_Code := Ok;
+      Continue      : Boolean := True;
+   begin
+      Decoded_Size := 0;
+      Status := Read_Status;
+
+      if Read_Status /= Ok then
+         return;
+      end if;
+
+      declare
+         Decoded : constant Byte_Array := Decoder.all (Input, Decode_Status);
+      begin
+         Status := Decode_Status;
+         if Decode_Status /= Ok then
+            return;
+         end if;
+
+         if Decoded'Length > 0 then
+            Consumer.all (Decoded, Continue);
+            Decoded_Size := Interfaces.Unsigned_64 (Decoded'Length);
+         end if;
+      end;
+
+   exception
+      when Storage_Error =>
+         Status := Output_File_Error;
+         Decoded_Size := 0;
+      when others =>
+         Status := Input_File_Error;
+         Decoded_Size := 0;
+   end Decode_File_To_Consumer;
+
+   function Decode_XZ
+     (Input : Byte_Array; Status : out Status_Code) return Byte_Array is
+   begin
+      return XZ (Input, Status);
+   end Decode_XZ;
+
+   procedure BZip2_File_To_Consumer
+     (Input_Path      : String;
+      Max_Input_Bytes : Natural;
+      Consumer        : not null access procedure
+        (Bytes    : Byte_Array;
+         Continue : in out Boolean);
+      Decoded_Size    : out Interfaces.Unsigned_64;
+      Status          : out Status_Code) is
+   begin
+      Decode_File_To_Consumer
+        (Input_Path      => Input_Path,
+         Max_Input_Bytes => Max_Input_Bytes,
+         Decoder         => Zlib.BZip2_Decoder.Decode'Access,
+         Consumer        => Consumer,
+         Decoded_Size    => Decoded_Size,
+         Status          => Status);
+   end BZip2_File_To_Consumer;
+
+   procedure Zstd_File_To_Consumer
+     (Input_Path      : String;
+      Max_Input_Bytes : Natural;
+      Consumer        : not null access procedure
+        (Bytes    : Byte_Array;
+         Continue : in out Boolean);
+      Decoded_Size    : out Interfaces.Unsigned_64;
+      Status          : out Status_Code) is
+   begin
+      Decode_File_To_Consumer
+        (Input_Path      => Input_Path,
+         Max_Input_Bytes => Max_Input_Bytes,
+         Decoder         => Zlib.Zstd_Decoder.Decode'Access,
+         Consumer        => Consumer,
+         Decoded_Size    => Decoded_Size,
+         Status          => Status);
+   end Zstd_File_To_Consumer;
+
+   procedure XZ_File_To_Consumer
+     (Input_Path      : String;
+      Max_Input_Bytes : Natural;
+      Consumer        : not null access procedure
+        (Bytes    : Byte_Array;
+         Continue : in out Boolean);
+      Decoded_Size    : out Interfaces.Unsigned_64;
+      Status          : out Status_Code) is
+   begin
+      Decode_File_To_Consumer
+        (Input_Path      => Input_Path,
+         Max_Input_Bytes => Max_Input_Bytes,
+         Decoder         => Decode_XZ'Access,
+         Consumer        => Consumer,
+         Decoded_Size    => Decoded_Size,
+         Status          => Status);
+   end XZ_File_To_Consumer;
 
    procedure Write_File
      (Path : String; Data : Byte_Array; Status : out Status_Code)

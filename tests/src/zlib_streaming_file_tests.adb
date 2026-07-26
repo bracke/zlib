@@ -1,12 +1,16 @@
 with Ada.Directories;
+with Interfaces;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
 with AUnit.Assertions; use AUnit.Assertions;
 with Zlib;
+with Zlib.BZip2_Encoder;
+with Zlib.Zstd_Encoder;
 
 package body Zlib_Streaming_File_Tests is
    use type Zlib.Byte;
    use type Zlib.Status_Code;
+   use type Interfaces.Unsigned_64;
 
    package SIO renames Ada.Streams.Stream_IO;
 
@@ -511,6 +515,101 @@ package body Zlib_Streaming_File_Tests is
       Delete_If_Exists (Out_Path);
    end Test_Streaming_File_Invalid_Input;
 
+   procedure Test_Standalone_Codec_File_To_Consumer
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Input       : constant Zlib.Byte_Array := Binary_Data;
+      Bz_Path     : constant String := "zlib_streaming_consumer.bz2";
+      Zst_Path    : constant String := "zlib_streaming_consumer.zst";
+      Xz_Path     : constant String := "zlib_streaming_consumer.xz";
+      Status      : Zlib.Status_Code;
+      Decoded     : Interfaces.Unsigned_64;
+      Output      : Zlib.Byte_Array (1 .. 64) := [others => 0];
+      Output_Last : Natural := 0;
+
+      procedure Reset_Output is
+      begin
+         Output := [others => 0];
+         Output_Last := 0;
+      end Reset_Output;
+
+      procedure Capture
+        (Bytes    : Zlib.Byte_Array;
+         Continue : in out Boolean)
+      is
+      begin
+         for B of Bytes loop
+            Output_Last := Output_Last + 1;
+            Output (Output_Last) := B;
+         end loop;
+         Continue := True;
+      end Capture;
+
+      procedure Check_Output (Label : String) is
+      begin
+         Assert (Status = Zlib.Ok, Label & " status");
+         Assert
+           (Decoded = Interfaces.Unsigned_64 (Input'Length),
+            Label & " decoded size");
+         Assert_Equal
+           (Output (Output'First .. Output'First + Input'Length - 1),
+            Input,
+            Label & " payload");
+      end Check_Output;
+
+      Bz_Data : constant Zlib.Byte_Array :=
+        Zlib.BZip2_Encoder.Encode (Input, Status => Status);
+   begin
+      Assert (Status = Zlib.Ok, "bzip2 fixture encode");
+
+      Delete_If_Exists (Bz_Path);
+      Delete_If_Exists (Zst_Path);
+      Delete_If_Exists (Xz_Path);
+      Write_Bytes (Bz_Path, Bz_Data);
+
+      declare
+         Zst_Data : constant Zlib.Byte_Array :=
+           Zlib.Zstd_Encoder.Encode (Input, Status);
+      begin
+         Assert (Status = Zlib.Ok, "zstd fixture encode");
+         Write_Bytes (Zst_Path, Zst_Data);
+      end;
+
+      declare
+         Xz_Data : constant Zlib.Byte_Array := Zlib.XZ_LZMA2 (Input, Status);
+      begin
+         Assert (Status = Zlib.Ok, "xz fixture encode");
+         Write_Bytes (Xz_Path, Xz_Data);
+      end;
+
+      Reset_Output;
+      Zlib.BZip2_File_To_Consumer
+        (Bz_Path, 1_024, Capture'Access, Decoded, Status);
+      Check_Output ("bzip2 file-to-consumer");
+
+      Reset_Output;
+      Zlib.Zstd_File_To_Consumer
+        (Zst_Path, 1_024, Capture'Access, Decoded, Status);
+      Check_Output ("zstd file-to-consumer");
+
+      Reset_Output;
+      Zlib.XZ_File_To_Consumer
+        (Xz_Path, 1_024, Capture'Access, Decoded, Status);
+      Check_Output ("xz file-to-consumer");
+
+      Reset_Output;
+      Zlib.BZip2_File_To_Consumer
+        (Bz_Path, 1, Capture'Access, Decoded, Status);
+      Assert
+        (Status = Zlib.Input_File_Error and then Decoded = 0,
+         "bzip2 file-to-consumer rejects input over cap");
+
+      Delete_If_Exists (Bz_Path);
+      Delete_If_Exists (Zst_Path);
+      Delete_If_Exists (Xz_Path);
+   end Test_Standalone_Codec_File_To_Consumer;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
@@ -570,6 +669,11 @@ package body Zlib_Streaming_File_Tests is
         (T,
          Test_Streaming_File_Invalid_Input'Access,
          "Inflate_File_Streaming invalid input returns non-Ok status");
+
+      Registration.Register_Routine
+        (T,
+         Test_Standalone_Codec_File_To_Consumer'Access,
+         "standalone codec file-to-consumer helpers decode and enforce input caps");
    end Register_Tests;
 
 end Zlib_Streaming_File_Tests;
