@@ -34,6 +34,7 @@ with Zlib.Archive_Directory_Extraction;
 with Zlib.Seven_Zip_BCJ2_Writing;
 with Zlib.Seven_Zip_Codec_Packing;
 with Zlib.Seven_Zip_Codec_Writing;
+with Zlib.Seven_Zip_Coders;
 with Zlib.Seven_Zip_Filters;
 with Zlib.Seven_Zip_Container;
 with Zlib.Seven_Zip_Encrypted_Writing;
@@ -3859,8 +3860,190 @@ package body Zlib is
    exception
       when others =>
          Status := Unsupported_Method;
-         return Empty;
+      return Empty;
    end Extract_ZIP_Native_Zstd_Entry;
+
+   function Extract_ZIP_Native_PPMd_Entry
+     (Archive_Image : Byte_Array;
+      Entry_Name    : String;
+      Status        : out Status_Code) return Byte_Array
+   is
+      Empty : constant Byte_Array (1 .. 0) := [others => 0];
+      Pos   : Natural := Archive_Image'First;
+      Found_PPMd_Name : Boolean := False;
+   begin
+      Status := Unsupported_Method;
+
+      if Entry_Name'Length = 0 or else Archive_Image'Length < 46 then
+         return Empty;
+      end if;
+
+      while Pos <= Archive_Image'Last - 45 loop
+         if ZIP_U32_At (Archive_Image, Pos) = 16#0201_4B50# then
+            declare
+               Flags            : constant Interfaces.Unsigned_16 :=
+                 ZIP_U16_At (Archive_Image, Pos + 8);
+               Method           : constant Interfaces.Unsigned_16 :=
+                 ZIP_U16_At (Archive_Image, Pos + 10);
+               Crc              : constant Interfaces.Unsigned_32 :=
+                 ZIP_U32_At (Archive_Image, Pos + 16);
+               Compressed_32    : constant Interfaces.Unsigned_32 :=
+                 ZIP_U32_At (Archive_Image, Pos + 20);
+               Uncompressed_32  : constant Interfaces.Unsigned_32 :=
+                 ZIP_U32_At (Archive_Image, Pos + 24);
+               Name_Len         : constant Natural :=
+                 Natural (ZIP_U16_At (Archive_Image, Pos + 28));
+               Extra_Len        : constant Natural :=
+                 Natural (ZIP_U16_At (Archive_Image, Pos + 30));
+               Comment_Len      : constant Natural :=
+                 Natural (ZIP_U16_At (Archive_Image, Pos + 32));
+               Local_Offset_32  : constant Interfaces.Unsigned_32 :=
+                 ZIP_U32_At (Archive_Image, Pos + 42);
+               Name_First       : constant Natural := Pos + 46;
+               Record_After     : constant Natural :=
+                 Name_First + Name_Len + Extra_Len + Comment_Len;
+            begin
+               if Record_After - 1 > Archive_Image'Last then
+                  Status := Unexpected_End_Of_Input;
+                  return Empty;
+               end if;
+
+               if ZIP_Name_Equals
+                 (Archive_Image, Name_First, Name_Len, Entry_Name)
+               then
+                  if Method /= 98 then
+                     return Empty;
+                  end if;
+
+                  Found_PPMd_Name := True;
+                  if (Flags and 1) /= 0 then
+                     Status := Unsupported_Method;
+                     return Empty;
+                  end if;
+
+                  declare
+                     Compressed   : Interfaces.Unsigned_64 := 0;
+                     Uncompressed : Interfaces.Unsigned_64 := 0;
+                     Local_Offset : Interfaces.Unsigned_64 := 0;
+                  begin
+                     if not Resolve_ZIP64_Central_Fields
+                       (Archive_Image,
+                        Name_First + Name_Len,
+                        Extra_Len,
+                        Compressed_32,
+                        Uncompressed_32,
+                        Local_Offset_32,
+                        Compressed,
+                        Uncompressed,
+                        Local_Offset)
+                       or else Compressed >
+                         Interfaces.Unsigned_64 (Natural'Last)
+                       or else Uncompressed >
+                         Interfaces.Unsigned_64 (Natural'Last)
+                       or else Local_Offset > Interfaces.Unsigned_64 (Natural'Last)
+                     then
+                        Status := Unsupported_Method;
+                        return Empty;
+                     end if;
+
+                     declare
+                        Local : constant Natural :=
+                          Archive_Image'First + Natural (Local_Offset);
+                     begin
+                        if Local < Archive_Image'First
+                          or else Local + 29 > Archive_Image'Last
+                          or else ZIP_U32_At (Archive_Image, Local) /=
+                            16#0403_4B50#
+                          or else ZIP_U16_At (Archive_Image, Local + 8) /= 98
+                        then
+                           Status := Unexpected_End_Of_Input;
+                           return Empty;
+                        end if;
+
+                        declare
+                           Local_Name_Len  : constant Natural :=
+                             Natural (ZIP_U16_At (Archive_Image, Local + 26));
+                           Local_Extra_Len : constant Natural :=
+                             Natural (ZIP_U16_At (Archive_Image, Local + 28));
+                           Payload_First   : constant Natural :=
+                             Local + 30 + Local_Name_Len + Local_Extra_Len;
+                           Payload_Len     : constant Natural :=
+                             Natural (Compressed);
+                           Plain_Len       : constant Natural :=
+                             Natural (Uncompressed);
+                        begin
+                           if Payload_Len = 0
+                             or else Payload_First > Archive_Image'Last
+                             or else Payload_Len - 1 >
+                               Archive_Image'Last - Payload_First
+                           then
+                              Status := Unexpected_End_Of_Input;
+                              return Empty;
+                           end if;
+
+                           declare
+                              Decode_Status : Status_Code;
+                              Output        : constant Byte_Array :=
+                                Zlib.PPMd7.Decompress
+                                  (Archive_Image
+                                     (Payload_First
+                                      .. Payload_First + Payload_Len - 1),
+                                   Plain_Len,
+                                   Zlib.Seven_Zip_Coders.PPMd_Default_Order,
+                                   Zlib.Seven_Zip_Coders.PPMd_Default_Memory,
+                                   Decode_Status);
+                           begin
+                              if Decode_Status /= Ok
+                                or else Output'Length /= Plain_Len
+                              then
+                                 Status := Invalid_Block_Type;
+                                 return Empty;
+                              end if;
+
+                              if Plain_Len = 0 then
+                                 if Crc /= 0 then
+                                    Status := Invalid_Checksum;
+                                 else
+                                    Status := Ok;
+                                 end if;
+                                 return Empty;
+                              end if;
+
+                              declare
+                                 Plain : Byte_Array (1 .. Plain_Len);
+                              begin
+                                 for I in Plain'Range loop
+                                    Plain (I) := Output (Output'First + I - 1);
+                                 end loop;
+
+                                 if Compute_CRC32 (Plain) /= Crc then
+                                    Status := Invalid_Checksum;
+                                    return Empty;
+                                 end if;
+
+                                 Status := Ok;
+                                 return Plain;
+                              end;
+                           end;
+                        end;
+                     end;
+                  end;
+               end if;
+
+               Pos := Record_After;
+            end;
+         else
+            Pos := Pos + 1;
+         end if;
+      end loop;
+
+      Status := (if Found_PPMd_Name then Invalid_Block_Type else Unsupported_Method);
+      return Empty;
+   exception
+      when others =>
+         Status := Unsupported_Method;
+         return Empty;
+   end Extract_ZIP_Native_PPMd_Entry;
 
    LZMA_Default_Props   : constant Byte := Zlib.LZMA_Core.Default_Props;
    LZMA_Default_Dict    : constant Interfaces.Unsigned_32 := Zlib.LZMA_Core.Default_Dict;
@@ -4087,6 +4270,17 @@ package body Zlib is
             Native_Status : Status_Code := Unsupported_Method;
             Native_Result : constant Byte_Array :=
               Extract_ZIP_Native_Zstd_Entry
+                (Archive_Image, Entry_Name, Native_Status);
+         begin
+            if Native_Status /= Unsupported_Method then
+               Status := Native_Status;
+               return Native_Result;
+            end if;
+         end;
+         declare
+            Native_Status : Status_Code := Unsupported_Method;
+            Native_Result : constant Byte_Array :=
+              Extract_ZIP_Native_PPMd_Entry
                 (Archive_Image, Entry_Name, Native_Status);
          begin
             if Native_Status /= Unsupported_Method then
@@ -4629,8 +4823,56 @@ package body Zlib is
    exception
       when others =>
          Status := Unsupported_Method;
-         return Empty;
+      return Empty;
    end Compress_ZIP_Native_LZMA_File;
+
+   function Compress_ZIP_Native_PPMd_File
+     (Input_Path        : String;
+      Method            : out Interfaces.Unsigned_16;
+      Crc32             : out Interfaces.Unsigned_32;
+      Uncompressed_Size : out Interfaces.Unsigned_64;
+      Status            : out Status_Code) return Byte_Array
+   is
+      Empty       : constant Byte_Array (1 .. 0) := [others => 0];
+      Read_Status : Status_Code := Ok;
+   begin
+      Method := 0;
+      Crc32 := 0;
+      Uncompressed_Size := 0;
+      Status := Unsupported_Method;
+
+      if not Ada.Directories.Exists (Input_Path) then
+         Status := Input_File_Error;
+         return Empty;
+      end if;
+
+      declare
+         Plain : constant Byte_Array := Read_File (Input_Path, Read_Status);
+      begin
+         if Read_Status /= Ok then
+            Status := Read_Status;
+            return Empty;
+         end if;
+
+         declare
+            Compressed : constant Byte_Array :=
+              Zlib.PPMd7.Compress
+                (Plain,
+                 Zlib.Seven_Zip_Coders.PPMd_Default_Order,
+                 Zlib.Seven_Zip_Coders.PPMd_Default_Memory);
+         begin
+            Method := 98;
+            Crc32 := Compute_CRC32 (Plain);
+            Uncompressed_Size := Interfaces.Unsigned_64 (Plain'Length);
+            Status := Ok;
+            return Compressed;
+         end;
+      end;
+   exception
+      when others =>
+         Status := Unsupported_Method;
+         return Empty;
+   end Compress_ZIP_Native_PPMd_File;
 
    function Compress_ZIP_External_File
      (Input_Path        : String;
@@ -4659,6 +4901,10 @@ package body Zlib is
       elsif Expected = 14 then
          return
            Compress_ZIP_Native_LZMA_File
+             (Input_Path, Method, Crc32, Uncompressed_Size, Status);
+      elsif Expected = 98 then
+         return
+           Compress_ZIP_Native_PPMd_File
              (Input_Path, Method, Crc32, Uncompressed_Size, Status);
       end if;
 

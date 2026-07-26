@@ -1227,10 +1227,10 @@ package Zlib is
    --  Return True for ZIP compression method ids handled by the non-Deflate
    --  ZIP codec bridge: bzip2 (12), LZMA (14), Zstandard (20/93), and PPMd
    --  (98). BZip2 ZIP creation and unencrypted extraction, ZIP-LZMA
-   --  normal-distance creation/extraction, and Zstandard ZIP creation and
-   --  unencrypted extraction, including ZIP64 size metadata, are handled
-   --  in-process. Encrypted entries and ZIP PPMd are recognized by this
-   --  bridge but fail closed with Unsupported_Method.
+   --  normal-distance creation/extraction, Zstandard ZIP creation and
+   --  unencrypted extraction, and the default-parameter PPMd bridge subset,
+   --  including ZIP64 size metadata, are handled in-process. Encrypted
+   --  entries fail closed with Unsupported_Method.
    --  @param Method ZIP compression method id
    --  @return True when Extract_ZIP_External_Entry can attempt this method
 
@@ -1252,10 +1252,10 @@ package Zlib is
    --  Extract one ZIP entry for ZIP methods that are outside Deflate. BZip2
    --  entries are decoded in-process when they are not encrypted and use
    --  classic or ZIP64 size metadata. ZIP-LZMA entries emitted by this
-   --  library and Zstandard entries are also decoded in-process when they are
-   --  not encrypted and use classic or ZIP64 size metadata. Other LZMA
-   --  streams, ZIP PPMd, and encrypted entries fail closed with
-   --  Unsupported_Method.
+   --  library, Zstandard entries, and default-parameter ZIP PPMd entries are
+   --  also decoded in-process when they are not encrypted and use classic or
+   --  ZIP64 size metadata. Other LZMA streams and encrypted entries fail
+   --  closed with Unsupported_Method.
    --  @param Archive_Image complete logical ZIP archive image
    --  @param Entry_Name archive entry path to extract
    --  @param Password optional ZIP password for encrypted entries
@@ -1270,10 +1270,10 @@ package Zlib is
       Uncompressed_Size : out Interfaces.Unsigned_64;
       Status            : out Status_Code) return Byte_Array;
    --  Compress Input_Path as one ZIP entry and return only the compressed
-   --  member payload. BZip2, ZIP-LZMA normal-distance streams, and Zstandard
-   --  are compressed in-process. ZIP PPMd and unsupported method names fail
-   --  closed with Unsupported_Method. Method_Name is the ZIP method name, for
-   --  example BZip2.
+   --  member payload. BZip2, ZIP-LZMA normal-distance streams, Zstandard, and
+   --  default-parameter PPMd are compressed in-process. Unsupported method
+   --  names fail closed with Unsupported_Method. Method_Name is the ZIP method
+   --  name, for example BZip2.
    --  @param Input_Path source file to compress
    --  @param Method_Name ZIP method name
    --  @param Method parsed ZIP compression method id

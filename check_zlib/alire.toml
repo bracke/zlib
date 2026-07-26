@@ -21,3 +21,9 @@ project_tools = "*"
 
 [[pins]]
 project_tools = { path = "../../project_tools" }
+
+# Build dependencies in the development profile (-Og) too, not the default
+# release (-O3), so roots that share these crates share object files rather
+# than forcing each other into full rebuilds.
+[build-profiles]
+"*" = "development"

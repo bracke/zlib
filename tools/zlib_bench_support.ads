@@ -52,7 +52,6 @@ package Zlib_Bench_Support is
    --  @param Seconds Seconds argument supplied to Throughput_MiB_S
    --  @return result produced by Throughput_MiB_S
 
-
    function Read_File (Path : String; Status : out Zlib.Status_Code) return Zlib.Byte_Array;
    --  Return the Read File result.
    --  @param Path Path argument supplied to Read_File
@@ -64,7 +63,6 @@ package Zlib_Bench_Support is
    --  @param Pattern Pattern argument supplied to Synthetic_Data
    --  @param Size Size argument supplied to Synthetic_Data
    --  @return result produced by Synthetic_Data
-
 
    function Parse_Wrapper (Value : String; Ok : out Boolean) return Wrapper_Kind;
    --  Return the Parse Wrapper result.
@@ -102,7 +100,6 @@ package Zlib_Bench_Support is
    --  @param Ok Ok argument supplied to Parse_Pattern
    --  @return result produced by Parse_Pattern
 
-
    function Starts_With (Text, Prefix : String) return Boolean;
    --  Return the Starts With result.
    --  @param Text Text argument supplied to Starts_With
@@ -115,7 +112,6 @@ package Zlib_Bench_Support is
    --  @param Prefix Prefix argument supplied to Option_Value
    --  @return result produced by Option_Value
 
-
    function Streaming_Compress
      (Input        : Zlib.Byte_Array;
       Config       : Compression_Config;
@@ -126,7 +122,6 @@ package Zlib_Bench_Support is
    --  @param Config Config argument supplied to Streaming_Compress
    --  @param Status Status argument supplied to Streaming_Compress
    --  @return result produced by Streaming_Compress
-
 
    function Streaming_Inflate
      (Input        : Zlib.Byte_Array;

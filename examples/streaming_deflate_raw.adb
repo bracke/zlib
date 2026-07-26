@@ -7,7 +7,7 @@ procedure Streaming_Deflate_Raw is
    use type Zlib.Status_Code;
 
    Input  : constant Zlib.Byte_Array := Example_Raw_Support.Plain;
-   Raw    : Zlib.Byte_Array :=
+   Raw : constant Zlib.Byte_Array :=
      Example_Raw_Support.Streaming_Compress (Input, Zlib.Raw_Deflate, Zlib.Auto);
    Status : Zlib.Status_Code;
    Check  : constant Zlib.Byte_Array :=

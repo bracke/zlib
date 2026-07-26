@@ -5,7 +5,6 @@ with Ada.Text_IO;
 with Zlib;
 
 procedure Streaming_Roundtrip_Gzip is
-   use type Ada.Streams.Stream_Element_Offset;
    use type Zlib.Byte;
    use type Zlib.Status_Code;
    package Byte_Vectors is new Ada.Containers.Vectors

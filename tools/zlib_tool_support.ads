@@ -10,7 +10,6 @@ package Zlib_Tool_Support is
    --  @param Status Status argument supplied to Read_File
    --  @return result produced by Read_File
 
-
    procedure Write_File
      (Path   : String;
       Data   : Zlib.Byte_Array;
@@ -19,7 +18,6 @@ package Zlib_Tool_Support is
    --  @param Path Path argument supplied to Write_File
    --  @param Data Data argument supplied to Write_File
    --  @param Status Status argument supplied to Write_File
-
 
    function Mode_From_Option
      (Option : String;
@@ -30,7 +28,6 @@ package Zlib_Tool_Support is
    --  @param Status Status argument supplied to Mode_From_Option
    --  @return result produced by Mode_From_Option
 
-
    function Level_From_Option
      (Option : String;
       Status : out Zlib.Status_Code)
@@ -39,7 +36,6 @@ package Zlib_Tool_Support is
    --  @param Option Option argument supplied to Level_From_Option
    --  @param Status Status argument supplied to Level_From_Option
    --  @return result produced by Level_From_Option
-
 
    function Streaming_Compress
      (Input  : Zlib.Byte_Array;
@@ -51,7 +47,6 @@ package Zlib_Tool_Support is
    --  @param Header Header argument supplied to Streaming_Compress
    --  @param Mode Mode argument supplied to Streaming_Compress
    --  @return result produced by Streaming_Compress
-
 
    function Streaming_Compress
      (Input  : Zlib.Byte_Array;

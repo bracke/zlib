@@ -1,7 +1,8 @@
-with "../zlib.gpr";
+with "config/zlib_examples_config.gpr";
+
 project Examples is
-   for Source_Dirs use (".");
-   for Object_Dir use "obj";
+   for Source_Dirs use (".", "config");
+   for Object_Dir use "obj/" & Zlib_Examples_Config.Build_Profile;
    for Exec_Dir use "obj";
    for Create_Missing_Dirs use "True";
    for Main use
@@ -40,6 +41,8 @@ project Examples is
       "checksums.adb");
 
    package Compiler is
-      for Default_Switches ("Ada") use ("-gnat2022", "-gnatyM120", "-gnatX", "-gnata");
+      for Default_Switches ("Ada") use
+        Zlib_Examples_Config.Ada_Compiler_Switches
+        & ("-gnat2022", "-gnatyM120", "-gnatX", "-gnata");
    end Compiler;
 end Examples;

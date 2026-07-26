@@ -3,7 +3,6 @@ with Ada.Text_IO;
 with Zlib; use Zlib;
 
 procedure GZip_Multimember_Inflate is
-   use type Zlib.Status_Code;
 
    First_Input : constant Zlib.Byte_Array :=
      [1 => Zlib.Byte (Character'Pos ('o')),

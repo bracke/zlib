@@ -4,7 +4,6 @@ with Interfaces;
 with Zlib.Fuzzing;
 
 procedure fuzz_mutation is
-   use type Interfaces.Unsigned_32;
 
    function Arg_Natural
      (Index   : Positive;

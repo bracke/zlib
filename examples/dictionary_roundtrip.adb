@@ -3,7 +3,6 @@ with Ada.Text_IO;
 with Zlib; use Zlib;
 
 procedure Dictionary_Roundtrip is
-   use type Zlib.Status_Code;
 
    Dictionary : constant Zlib.Byte_Array :=
      [1  => Zlib.Byte (Character'Pos ('p')),

@@ -428,17 +428,14 @@ procedure Seven_Zip_Interop_Check is
       Archive_Path : String)
    is
       Status       : Zlib.Status_Code;
-         Archive_Data : Zlib.Byte_Array :=
+      Filter       : constant Zlib.Seven_Zip_Filter_Method :=
         (case Case_Name is
-            when BCJ_LZMA =>
-               Zlib.Seven_Zip_Filtered
-                 (Data, Entry_Name, Zlib.Seven_Zip_Filter_X86_BCJ, Zlib.Seven_Zip_Codec_LZMA, Status),
-            when Delta_LZMA =>
-               Zlib.Seven_Zip_Filtered
-                 (Data, Entry_Name, Zlib.Seven_Zip_Filter_Delta, Zlib.Seven_Zip_Codec_LZMA, Status),
-            when RISCV_LZMA =>
-               Zlib.Seven_Zip_Filtered
-                 (Data, Entry_Name, Zlib.Seven_Zip_Filter_RISCV_BCJ, Zlib.Seven_Zip_Codec_LZMA, Status));
+            when BCJ_LZMA   => Zlib.Seven_Zip_Filter_X86_BCJ,
+            when Delta_LZMA => Zlib.Seven_Zip_Filter_Delta,
+            when RISCV_LZMA => Zlib.Seven_Zip_Filter_RISCV_BCJ);
+      Archive_Data : constant Zlib.Byte_Array :=
+        Zlib.Seven_Zip_Filtered
+          (Data, Entry_Name, Filter, Zlib.Seven_Zip_Codec_LZMA, Status);
    begin
       Note_Check;
       Check_Status (Status, "write native filtered " & Filter_Name (Case_Name) & " archive");
@@ -743,7 +740,7 @@ procedure Seven_Zip_Interop_Check is
       Extract_Dir  : constant String := Case_Dir & "/extract";
       Header_Dir   : constant String := Case_Dir & "/extract_mhe";
       Status       : Zlib.Status_Code;
-      Archive      : Zlib.Byte_Array :=
+      Archive      : constant Zlib.Byte_Array :=
         Zlib.Seven_Zip_LZMA_Encrypted (Payload (Text_Corpus), Entry_Name, Password, Status);
    begin
       Note_Check;
@@ -824,7 +821,7 @@ procedure Seven_Zip_Interop_Check is
       declare
          Archive_Status : Zlib.Status_Code;
          Archive        : constant Zlib.Byte_Array := Zlib_Tool_Support.Read_File (Archive_Path, Archive_Status);
-         Out_B          : Zlib.Byte_Array := Zlib.Extract_Seven_Zip (Archive, Entry_Name, Password, Status);
+         Out_B          : constant Zlib.Byte_Array := Zlib.Extract_Seven_Zip (Archive, Entry_Name, Password, Status);
       begin
          Check_Status (Archive_Status, "read stock encrypted archive");
          Check_Status (Status, "extract stock encrypted archive");
@@ -836,7 +833,7 @@ procedure Seven_Zip_Interop_Check is
       declare
          Archive_Status : Zlib.Status_Code;
          Archive        : constant Zlib.Byte_Array := Zlib_Tool_Support.Read_File (Header_Path, Archive_Status);
-         Out_B          : Zlib.Byte_Array := Zlib.Extract_Seven_Zip (Archive, Entry_Name, Password, Status);
+         Out_B          : constant Zlib.Byte_Array := Zlib.Extract_Seven_Zip (Archive, Entry_Name, Password, Status);
       begin
          Check_Status (Archive_Status, "read stock encrypted-header archive");
          Check_Status (Status, "extract stock encrypted-header archive");
@@ -971,51 +968,51 @@ begin
          Skip ("7z RISCV method not available; RISC-V stock interop not run");
       end if;
 
-   for Corpus in Corpus_Case loop
-      declare
-         Data : constant Zlib.Byte_Array := Payload (Corpus);
-      begin
-         for Method in Archive_Method loop
-            Check_Our_To_7z (Method, Corpus, Data);
-            Check_7z_To_Our (Method, Corpus, Data);
-         end loop;
-      end;
-   end loop;
-
-   for Corpus in Corpus_Case loop
-      if Corpus /= Empty_Corpus then
+      for Corpus in Corpus_Case loop
          declare
-            Data : constant Zlib.Byte_Array :=
-              (if Corpus = Code_Corpus then RISCV_Payload else Payload (Corpus));
+            Data : constant Zlib.Byte_Array := Payload (Corpus);
          begin
-            for Case_Name in Filter_Case loop
-               if Case_Name /= RISCV_LZMA or else RISCV_Supported then
-                  Check_Filter_Our_To_7z (Case_Name, Corpus, Data);
-                  Check_Filter_7z_To_Our (Case_Name, Corpus, Data);
-               else
-                  Skips := Skips + 2;
-               end if;
+            for Method in Archive_Method loop
+               Check_Our_To_7z (Method, Corpus, Data);
+               Check_7z_To_Our (Method, Corpus, Data);
             end loop;
          end;
-      end if;
-   end loop;
+      end loop;
 
-   for Method in Solid_Method loop
-      Check_Solid_Our_To_7z (Method);
-      Check_Solid_7z_To_Our (Method);
-   end loop;
+      for Corpus in Corpus_Case loop
+         if Corpus /= Empty_Corpus then
+            declare
+               Data : constant Zlib.Byte_Array :=
+                 (if Corpus = Code_Corpus then RISCV_Payload else Payload (Corpus));
+            begin
+               for Case_Name in Filter_Case loop
+                  if Case_Name /= RISCV_LZMA or else RISCV_Supported then
+                     Check_Filter_Our_To_7z (Case_Name, Corpus, Data);
+                     Check_Filter_7z_To_Our (Case_Name, Corpus, Data);
+                  else
+                     Skips := Skips + 2;
+                  end if;
+               end loop;
+            end;
+         end if;
+      end loop;
 
-   for Method in Archive_Method loop
-      Check_File_List_Our_To_7z (Method);
-      Check_File_List_7z_To_Our (Method);
-   end loop;
+      for Method in Solid_Method loop
+         Check_Solid_Our_To_7z (Method);
+         Check_Solid_7z_To_Our (Method);
+      end loop;
 
-   Check_Encrypted_Our_To_7z;
-   Check_Encrypted_7z_To_Our;
-   Check_Volumes_Our_To_7z;
-   Check_Volumes_7z_To_Our;
-   Check_BCJ2_Our_To_7z;
-   Check_BCJ2_7z_To_Our;
+      for Method in Archive_Method loop
+         Check_File_List_Our_To_7z (Method);
+         Check_File_List_7z_To_Our (Method);
+      end loop;
+
+      Check_Encrypted_Our_To_7z;
+      Check_Encrypted_7z_To_Our;
+      Check_Volumes_Our_To_7z;
+      Check_Volumes_7z_To_Our;
+      Check_BCJ2_Our_To_7z;
+      Check_BCJ2_7z_To_Our;
    end;
 
    if Failures = 0 then

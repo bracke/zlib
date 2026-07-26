@@ -11,7 +11,6 @@ procedure Zlib_Bench_Matrix is
    package CLI renames Ada.Command_Line;
    package TIO renames Ada.Text_IO;
    use Ada.Strings.Unbounded;
-   use type Zlib.Byte_Array;
    use Zlib_Bench_Support;
 
    Size         : Natural := 1_048_576;
@@ -123,7 +122,7 @@ procedure Zlib_Bench_Matrix is
 
             if Verify then
                declare
-                  Inflate_Config : Zlib_Bench_Support.Inflate_Config :=
+                  Inflate_Config : constant Zlib_Bench_Support.Inflate_Config :=
                     (Wrapper      => Wrapper,
                      Input_Chunk  => Input_Chunk,
                      Output_Chunk => Output_Chunk,

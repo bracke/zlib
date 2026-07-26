@@ -3,8 +3,6 @@ with Ada.Containers.Vectors;
 with Ada.Streams; use Ada.Streams;
 
 package body Example_Raw_Support is
-   use type Ada.Streams.Stream_Element_Offset;
-   use type Zlib.Byte;
 
    package Byte_Vectors is new Ada.Containers.Vectors
      (Index_Type   => Natural,

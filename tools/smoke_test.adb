@@ -1,10 +1,8 @@
 with Ada.Command_Line;
 with Ada.Text_IO;
-with Interfaces;
 with Zlib;
 
 procedure Smoke_Test is
-   use type Zlib.Byte;
    use type Zlib.Byte_Array;
    use type Zlib.Status_Code;
 
@@ -155,13 +153,15 @@ procedure Smoke_Test is
             Back : constant Zlib.Byte_Array :=
               Zlib.Inflate_With_Header (Raw, Zlib.Zlib_Header, Status);
          begin
-            Check (Status /= Zlib.Ok, "zlib header accepted raw Deflate input");
+            Check (Status /= Zlib.Ok and then Back /= Plain,
+                   "zlib header accepted raw Deflate input");
          end;
          declare
             Back : constant Zlib.Byte_Array :=
               Zlib.Inflate_With_Header (Raw, Zlib.GZip, Status);
          begin
-            Check (Status /= Zlib.Ok, "gzip header accepted raw Deflate input");
+            Check (Status /= Zlib.Ok and then Back /= Plain,
+                   "gzip header accepted raw Deflate input");
          end;
       end;
 
@@ -173,13 +173,15 @@ procedure Smoke_Test is
             Back : constant Zlib.Byte_Array :=
               Zlib.Inflate_With_Header (Zdata, Zlib.Raw_Deflate, Status);
          begin
-            Check (Status /= Zlib.Ok, "raw header accepted zlib-wrapped input");
+            Check (Status /= Zlib.Ok and then Back /= Plain,
+                   "raw header accepted zlib-wrapped input");
          end;
          declare
             Back : constant Zlib.Byte_Array :=
               Zlib.Inflate_With_Header (Gz, Zlib.Zlib_Header, Status);
          begin
-            Check (Status /= Zlib.Ok, "zlib header accepted gzip-wrapped input");
+            Check (Status /= Zlib.Ok and then Back /= Plain,
+                   "zlib header accepted gzip-wrapped input");
          end;
       end;
    end Check_Wrapper_Strictness;

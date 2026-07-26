@@ -55,8 +55,8 @@ jobs:
           ./bin/tests
 
       - name: Build aggregate release checker
-        working-directory: zlib
-        run: alr exec -- gprbuild -P tools/tools.gpr
+        working-directory: zlib/tools
+        run: alr --non-interactive build
       - name: Run aggregate release checker
         working-directory: zlib
         run: tools/bin/check_all

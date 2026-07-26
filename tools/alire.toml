@@ -1,0 +1,69 @@
+name = "zlib_tools"
+description = "Command-line tools, benchmarks, and fuzzers for the zlib crate"
+version = "0.1.0-dev"
+
+authors = ["Bent Bracke"]
+maintainers = ["Bent Bracke <bent@bracke.dk>"]
+maintainers-logins = ["bracke"]
+licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
+website = ""
+tags = ["zlib", "compression", "ada"]
+project-files = ["tools.gpr"]
+
+executables = [
+   "zlib_inflate_file",
+   "zlib_deflate_stored_file",
+   "zlib_deflate_fixed_file",
+   "zlib_deflate_dynamic_file",
+   "zlib_compress_file",
+   "gzip_file",
+   "gzip_metadata_file",
+   "zlib_streaming_roundtrip",
+   "gzip_streaming_roundtrip",
+   "raw_deflate_file",
+   "raw_inflate_file",
+   "raw_roundtrip",
+   "raw_vs_zlib_vs_gzip",
+   "zlib_bench_inflate",
+   "zlib_bench_deflate",
+   "zlib_bench_gzip",
+   "zlib_bench_raw",
+   "zlib_bench_matrix",
+   "smoke_test",
+   "seven_zip_interop_check",
+   "check_all",
+   "fuzz_inflate",
+   "fuzz_streaming_inflate",
+   "fuzz_compress_roundtrip",
+   "fuzz_compress_levels",
+   "fuzz_wrapper_mix",
+   "fuzz_dictionary",
+   "fuzz_gzip_metadata",
+   "fuzz_mutation",
+   "fuzz_flush",
+   "fuzz_lifecycle",
+   "fuzz_tiny_buffers",
+]
+
+[[depends-on]]
+gnat_native = "^15"
+
+[[depends-on]]
+zlib = "*"
+
+[[depends-on]]
+project_tools = "*"
+
+[[pins]]
+zlib = { path = ".." }
+project_tools = { path = "../../project_tools" }
+
+# Pins are root-only in Alire: this root builds zlib, so it must pin cryptolib.
+[[pins]]
+cryptolib = { path = "../../cryptolib" }
+
+# Build dependencies in the development profile (-Og) too, not the default
+# release (-O3), so this root and the parent share zlib object files rather
+# than forcing each other into full rebuilds.
+[build-profiles]
+"*" = "development"

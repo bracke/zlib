@@ -1,0 +1,66 @@
+name = "zlib_examples"
+description = "Worked examples for the zlib crate"
+version = "0.1.0-dev"
+
+authors = ["Bent Bracke"]
+maintainers = ["Bent Bracke <bent@bracke.dk>"]
+maintainers-logins = ["bracke"]
+licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
+website = ""
+tags = ["zlib", "compression", "ada"]
+project-files = ["examples.gpr"]
+
+executables = [
+   "quickstart",
+   "inflate_file",
+   "inflate_with_header",
+   "inflate_raw",
+   "deflate_stored_file",
+   "deflate_fixed_file",
+   "deflate_dynamic_file",
+   "deflate_raw_file",
+   "deflate_raw_file_to_stream",
+   "inflate_raw_file",
+   "gzip_file",
+   "deflate_file_streaming",
+   "inflate_file_streaming",
+   "gzip_file_streaming",
+   "deflate_raw_file_streaming",
+   "inflate_raw_file_streaming",
+   "streaming_inflate_zlib",
+   "streaming_inflate_gzip",
+   "streaming_deflate_zlib",
+   "streaming_deflate_gzip",
+   "streaming_roundtrip_zlib",
+   "streaming_roundtrip_gzip",
+   "streaming_deflate_raw",
+   "raw_roundtrip",
+   "raw_vs_zlib_vs_gzip",
+   "roundtrip_stored",
+   "roundtrip_fixed",
+   "roundtrip_dynamic",
+   "gzip_with_metadata",
+   "gzip_multimember_inflate",
+   "compress_with_level",
+   "dictionary_roundtrip",
+   "checksums",
+]
+
+[[depends-on]]
+gnat_native = "^15"
+
+[[depends-on]]
+zlib = "*"
+
+[[pins]]
+zlib = { path = ".." }
+
+# Pins are root-only in Alire: this root builds zlib, so it must pin cryptolib.
+[[pins]]
+cryptolib = { path = "../../cryptolib" }
+
+# Build dependencies in the development profile (-Og) too, not the default
+# release (-O3), so this root and the parent share zlib object files rather
+# than forcing each other into full rebuilds.
+[build-profiles]
+"*" = "development"

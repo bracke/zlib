@@ -1,0 +1,6 @@
+dependency:project_tools=0.1.0=c3258f263e87dfd5141ce0af8cbac0d79d64065ab3a692080c1503486f82c789
+dependency:zlib=0.1.0=cfe25f976ea9a02c3db3d9c0009fe4636bf70cbb3d235595867b8a75cffe69fe
+external:LIBRARY_TYPE=default
+external:ZLIB_TOOLS_LIBRARY_TYPE=default
+profile:zlib_tools=DEVELOPMENT
+switches:zlib_tools=-Og,-fdata-sections,-ffunction-sections,-g,-gnatVa,-gnatW8,-gnatw.X,-gnatwa,-gnaty-d,-gnaty3,-gnatyA,-gnatyB,-gnatyI,-gnatyO,-gnatyS,-gnatya,-gnatyb,-gnatyc,-gnatye,-gnatyf,-gnatyh,-gnatyi,-gnatyk,-gnatyl,-gnatym,-gnatyn,-gnatyp,-gnatyr,-gnatyt,-gnatyu,-gnatyx

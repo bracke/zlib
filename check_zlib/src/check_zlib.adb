@@ -14,31 +14,31 @@ procedure Check_Zlib is
    use Ada.Text_IO;
    use GNAT.OS_Lib;
 
-   Build_Args : constant Argument_List := (1 => new String'("build"));
-   Test_Args : constant Argument_List := (1 => new String'("test"));
+   Build_Args : constant Argument_List := [1 => new String'("build")];
+   Test_Args : constant Argument_List := [1 => new String'("test")];
    Gnatprove_Args : constant Argument_List :=
-     (1 => new String'("exec"),
+     [1 => new String'("exec"),
       2 => new String'("--"),
       3 => new String'("gnatprove"),
       4 => new String'("-P"),
       5 => new String'("zlib.gpr"),
-      6 => new String'("--level=4"));
+      6 => new String'("--level=4")];
    Gprbuild_Zlib_Args : constant Argument_List :=
-     (1 => new String'("exec"), 2 => new String'("--"), 3 => new String'("gprbuild"),
-      4 => new String'("-P"), 5 => new String'("zlib.gpr"));
+     [1 => new String'("exec"), 2 => new String'("--"), 3 => new String'("gprbuild"),
+      4 => new String'("-P"), 5 => new String'("zlib.gpr")];
    Gprbuild_Tests_Args : constant Argument_List :=
-     (1 => new String'("exec"), 2 => new String'("--"), 3 => new String'("gprbuild"),
-      4 => new String'("-P"), 5 => new String'("tests.gpr"));
+     [1 => new String'("exec"), 2 => new String'("--"), 3 => new String'("gprbuild"),
+      4 => new String'("-P"), 5 => new String'("tests.gpr")];
    Gprbuild_Examples_Args : constant Argument_List :=
-     (1 => new String'("exec"), 2 => new String'("--"), 3 => new String'("gprbuild"),
-      4 => new String'("-P"), 5 => new String'("examples/examples.gpr"));
+     [1 => new String'("exec"), 2 => new String'("--"), 3 => new String'("gprbuild"),
+      4 => new String'("-P"), 5 => new String'("examples.gpr")];
    Gprbuild_Tools_Args : constant Argument_List :=
-     (1 => new String'("exec"), 2 => new String'("--"), 3 => new String'("gprbuild"),
-      4 => new String'("-P"), 5 => new String'("tools/tools.gpr"));
+     [1 => new String'("exec"), 2 => new String'("--"), 3 => new String'("gprbuild"),
+      4 => new String'("-P"), 5 => new String'("tools.gpr")];
    Tests_Run_Args : constant Argument_List :=
-     (1 => new String'("exec"), 2 => new String'("--"), 3 => new String'("./bin/tests"));
+     [1 => new String'("exec"), 2 => new String'("--"), 3 => new String'("./bin/tests")];
    Smoke_Test_Args : constant Argument_List :=
-     (1 => new String'("exec"), 2 => new String'("--"), 3 => new String'("./tools/bin/smoke_test"));
+     [1 => new String'("exec"), 2 => new String'("--"), 3 => new String'("./tools/bin/smoke_test")];
 
    function Root_Directory return String is
       Root : constant String :=
@@ -57,7 +57,6 @@ procedure Check_Zlib is
    end Root_Directory;
 
    Root : constant String := Root_Directory;
-
 
    function Alr_Path return String is
    begin
@@ -134,9 +133,9 @@ procedure Check_Zlib is
       Search    : Ada.Directories.Search_Type;
       Dir_Entry : Ada.Directories.Directory_Entry_Type;
       Filter    : constant Ada.Directories.Filter_Type :=
-        (Ada.Directories.Ordinary_File => True,
+        [Ada.Directories.Ordinary_File => True,
          Ada.Directories.Directory     => False,
-         Ada.Directories.Special_File  => False);
+         Ada.Directories.Special_File  => False];
    begin
       Ada.Directories.Start_Search
         (Search    => Search,
@@ -169,9 +168,9 @@ procedure Check_Zlib is
       Search    : Ada.Directories.Search_Type;
       Dir_Entry : Ada.Directories.Directory_Entry_Type;
       Filter    : constant Ada.Directories.Filter_Type :=
-        (Ada.Directories.Ordinary_File => True,
+        [Ada.Directories.Ordinary_File => True,
          Ada.Directories.Directory     => False,
-         Ada.Directories.Special_File  => False);
+         Ada.Directories.Special_File  => False];
    begin
       Project_Tools.Files.Require_Contains
         (Root & "/src/zlib.ads",
@@ -269,7 +268,10 @@ begin
    Require_Text ("docs/SPARK.md", "Looks_Like_Zlib_Header");
    Require_Text ("docs/TESTING.md", "Documentation is part of the release surface");
    Require_Text ("tools/check_all.adb", "check_zlib");
-   Require_Text ("tools/tools.gpr", "project_tools.gpr");
+   --  tools/ is its own Alire crate now: the project_tools dependency is
+   --  declared in its manifest, and Alire writes the with into the generated
+   --  config gpr. Assert on the manifest, which is where the truth moved.
+   Require_Text ("tools/alire.toml", "project_tools");
    Require_Text ("tests/alire.toml", "project_tools");
    Require_Text ("alire.toml", "type = ""test""");
 
@@ -291,8 +293,11 @@ begin
    Run_Command ("tests.gpr", Root & "/tests", Gprbuild_Tests_Args);
    Run_Command ("AUnit tests", Root & "/tests", Tests_Run_Args);
    Run_Command ("alr test", Root, Test_Args);
-   Run_Command ("examples.gpr", Root, Gprbuild_Examples_Args);
-   Run_Command ("tools.gpr", Root, Gprbuild_Tools_Args);
+   --  examples/ and tools/ are their own Alire crates: their project files with
+   --  "config/<crate>_config.gpr", which resolves only inside that crate's own
+   --  Alire context. Run from the crate directory, as the tests entry above does.
+   Run_Command ("examples.gpr", Root & "/examples", Gprbuild_Examples_Args);
+   Run_Command ("tools.gpr", Root & "/tools", Gprbuild_Tools_Args);
    Run_Command ("smoke test", Root, Smoke_Test_Args);
 
    Put_Line ("zlib release check passed.");

@@ -1,4 +1,3 @@
-with Zlib;
 with Ada.Directories;
 with Ada.Streams; use Ada.Streams;
 with Ada.Streams.Stream_IO;
@@ -6,7 +5,6 @@ with Ada.Containers.Vectors;
 
 package body Zlib_Tool_Support is
    package SIO renames Ada.Streams.Stream_IO;
-   use type Ada.Streams.Stream_Element_Offset;
 
    package Byte_Vectors is new Ada.Containers.Vectors
      (Index_Type   => Natural,
@@ -175,7 +173,6 @@ package body Zlib_Tool_Support is
          return Zlib.Auto;
       end if;
    end Mode_From_Option;
-
 
    function Level_From_Option
      (Option : String;

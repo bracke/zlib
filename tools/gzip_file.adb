@@ -4,7 +4,6 @@ with Zlib; use Zlib;
 with Zlib_Tool_Support;
 
 procedure Gzip_File is
-   use type Zlib.Status_Code;
 
    Status : Zlib.Status_Code;
    Mode   : Zlib.Compression_Mode := Zlib.Auto;

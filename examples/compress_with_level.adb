@@ -3,7 +3,6 @@ with Ada.Text_IO;
 with Zlib; use Zlib;
 
 procedure Compress_With_Level is
-   use type Zlib.Status_Code;
 
    Input : constant Zlib.Byte_Array :=
      [1  => Zlib.Byte (Character'Pos ('l')),

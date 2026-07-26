@@ -5,7 +5,6 @@ package Example_Raw_Support is
    --  Return the Plain result.
    --  @return result produced by Plain
 
-
    function Streaming_Compress
      (Input  : Zlib.Byte_Array;
       Header : Zlib.Header_Type;
@@ -17,7 +16,6 @@ package Example_Raw_Support is
    --  @param Mode Mode argument supplied to Streaming_Compress
    --  @return result produced by Streaming_Compress
 
-
    function Streaming_Inflate
      (Input  : Zlib.Byte_Array;
       Header : Zlib.Header_Type)
@@ -26,7 +24,6 @@ package Example_Raw_Support is
    --  @param Input Input argument supplied to Streaming_Inflate
    --  @param Header Header argument supplied to Streaming_Inflate
    --  @return result produced by Streaming_Inflate
-
 
    function Equal
      (Left  : Zlib.Byte_Array;

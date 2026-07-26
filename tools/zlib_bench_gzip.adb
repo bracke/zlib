@@ -9,7 +9,6 @@ procedure Zlib_Bench_Gzip is
    package CLI renames Ada.Command_Line;
    package TIO renames Ada.Text_IO;
    use Ada.Strings.Unbounded;
-   use type Zlib.Byte_Array;
    use Zlib_Bench_Support;
 
    Config       : Compression_Config := (Wrapper => Wrapper_Gzip, others => <>);
@@ -286,7 +285,7 @@ begin
 
             if Config.Verify then
                declare
-                  Inflate_Config : Zlib_Bench_Support.Inflate_Config :=
+                  Inflate_Config : constant Zlib_Bench_Support.Inflate_Config :=
                     (Wrapper      => Config.Wrapper,
                      Input_Chunk  => Config.Input_Chunk,
                      Output_Chunk => Config.Output_Chunk,
