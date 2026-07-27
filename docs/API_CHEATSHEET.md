@@ -137,6 +137,10 @@ output.
 File helpers report file failures through `Input_File_Error` and
 `Output_File_Error`.
 
+Any one-shot operation reports `Insufficient_Memory` when the decoded result
+does not fit in available memory. This says nothing about the input; do not
+confuse it with `Unexpected_End_Of_Input`.
+
 ## Streaming inflate lifecycle
 
 Use this order:

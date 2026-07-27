@@ -29,7 +29,7 @@ alr exec -- gprbuild -P zlib.gpr
 cd tests && alr exec -- gprbuild -P tests.gpr
 cd tests && ./bin/tests
 alr exec -- gprbuild -P examples/examples.gpr
-alr exec -- gprbuild -P tools/tools.gpr
+cd tools && alr build
 ./tools/bin/smoke_test
 tools/bin/check_all
 ```

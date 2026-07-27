@@ -309,7 +309,7 @@ alr test
 cd tests && alr exec -- gprbuild -P tests.gpr
 cd tests && ./bin/tests
 alr exec -- gprbuild -P examples/examples.gpr
-alr exec -- gprbuild -P tools/tools.gpr
+cd tools && alr build
 cd check_zlib && alr build && ./bin/check_zlib && cd ..
 ./tools/bin/smoke_test
 ./tools/bin/seven_zip_interop_check
@@ -561,7 +561,7 @@ Useful validation commands:
 
 ```sh
 alr exec -- gprbuild -P examples/examples.gpr
-alr exec -- gprbuild -P tools/tools.gpr
+cd tools && alr build
 cd check_zlib && alr build && ./bin/check_zlib && cd ..
 ./tools/bin/smoke_test
 tools/bin/check_all

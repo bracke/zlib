@@ -61,8 +61,13 @@ package Zlib is
       --  Input ended before the selected stream or wrapper was complete.
       Input_File_Error,
       --  Input file could not be opened, read, or represented as bytes.
-      Output_File_Error);
+      Output_File_Error,
       --  Output file could not be created or written.
+      Insufficient_Memory);
+      --  Not enough memory to hold an intermediate or final result. The input
+      --  is not implicated: a well-formed stream or archive reports this when
+      --  its decoded payload does not fit, so it must not be read as
+      --  Unexpected_End_Of_Input, which means the input really was truncated.
    --  Deterministic result code returned by public operations.
 
    type Compression_Mode is

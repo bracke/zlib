@@ -67,6 +67,7 @@ The expected suite categories are:
 - `zlib_huffman_builder_tests`
 - `zlib_huffman_tests`
 - `zlib_inflate_dynamic_tests`
+- `zlib_insufficient_memory_tests`
 - `zlib_inflate_fixed_tests`
 - `zlib_inflate_raw_api_tests`
 - `zlib_inflate_with_header_tests`

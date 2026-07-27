@@ -19,15 +19,25 @@ package body Zlib.Archive_Directory_Extraction is
       Status          : out Status_Code)
    is
       Read_Status : Status_Code := Ok;
-      Image       : constant Byte_Array := Read_File (Archive_Path, Read_Status);
    begin
-      if Read_Status /= Ok then
-         Status := Read_Status;
-         return;
-      end if;
+      --  Reading the archive is done inside the handled sequence of
+      --  statements, not in this subprogram's declarative part: a handler does
+      --  not cover its own declarative part, so an exception raised while
+      --  building the image would escape with Status left unset, breaking the
+      --  documented status-code contract.
+      declare
+         Image : constant Byte_Array := Read_File (Archive_Path, Read_Status);
+      begin
+         if Read_Status /= Ok then
+            Status := Read_Status;
+            return;
+         end if;
 
-      Extract_Image (Image, Destination_Dir, Password, Status);
+         Extract_Image (Image, Destination_Dir, Password, Status);
+      end;
    exception
+      when Storage_Error =>
+         Status := Insufficient_Memory;
       when others =>
          Status := Unsupported_Method;
    end Extract_File_To_Directory;
@@ -60,65 +70,73 @@ package body Zlib.Archive_Directory_Extraction is
       Status            : out Status_Code)
    is
       List_Status : Status_Code := Ok;
-      Entries     : constant Archive_Entry_Array :=
-        (if Is_Seven_Zip
-         then List_Seven_Zip (Archive_Image, Password, List_Status)
-         else List_ZIP (Archive_Image, List_Status));
    begin
       Status := Unsupported_Method;
 
-      if List_Status /= Ok then
-         Status := List_Status;
-         return;
-      end if;
+      --  Listing runs inside the handled statements for the same reason as in
+      --  Extract_File_To_Directory: an exception in a declarative part escapes
+      --  past this subprogram's handler with Status left unset.
+      declare
+         Entries : constant Archive_Entry_Array :=
+           (if Is_Seven_Zip
+            then List_Seven_Zip (Archive_Image, Password, List_Status)
+            else List_ZIP (Archive_Image, List_Status));
+      begin
+         if List_Status /= Ok then
+            Status := List_Status;
+            return;
+         end if;
 
-      for E of Entries loop
-         declare
-            Name : constant String := US.To_String (E.Name);
-            Rel  : constant String :=
-              (if Name'Length > 0 and then Name (Name'Last) = '/'
-               then Name (Name'First .. Name'Last - 1) else Name);
-         begin
-            if Rel'Length = 0 or else not Safe_Entry_Name (Rel) then
-               Status := Unsupported_Method;
-               return;
-            end if;
-
+         for E of Entries loop
             declare
-               Target : constant String := Destination_Dir & "/" & Rel;
+               Name : constant String := US.To_String (E.Name);
+               Rel  : constant String :=
+                 (if Name'Length > 0 and then Name (Name'Last) = '/'
+                  then Name (Name'First .. Name'Last - 1) else Name);
             begin
-               if E.Is_Directory then
-                  Ada.Directories.Create_Path (Target);
-               else
-                  Ada.Directories.Create_Path
-                    (Ada.Directories.Containing_Directory (Target));
-                  declare
-                     Extract_Status : Status_Code := Ok;
-                     Data           : constant Byte_Array :=
-                       (if Is_Seven_Zip
-                        then Extract_Seven_Zip
-                          (Archive_Image, Name, Password, Extract_Status)
-                        else Extract_ZIP (Archive_Image, Name, Extract_Status));
-                     Write_Status   : Status_Code := Ok;
-                  begin
-                     if Extract_Status /= Ok then
-                        Status := Extract_Status;
-                        return;
-                     end if;
-
-                     Write_File (Target, Data, Write_Status);
-                     if Write_Status /= Ok then
-                        Status := Write_Status;
-                        return;
-                     end if;
-                  end;
+               if Rel'Length = 0 or else not Safe_Entry_Name (Rel) then
+                  Status := Unsupported_Method;
+                  return;
                end if;
-            end;
-         end;
-      end loop;
 
-      Status := Ok;
+               declare
+                  Target : constant String := Destination_Dir & "/" & Rel;
+               begin
+                  if E.Is_Directory then
+                     Ada.Directories.Create_Path (Target);
+                  else
+                     Ada.Directories.Create_Path
+                       (Ada.Directories.Containing_Directory (Target));
+                     declare
+                        Extract_Status : Status_Code := Ok;
+                        Data           : constant Byte_Array :=
+                          (if Is_Seven_Zip
+                           then Extract_Seven_Zip
+                             (Archive_Image, Name, Password, Extract_Status)
+                           else Extract_ZIP (Archive_Image, Name, Extract_Status));
+                        Write_Status   : Status_Code := Ok;
+                     begin
+                        if Extract_Status /= Ok then
+                           Status := Extract_Status;
+                           return;
+                        end if;
+
+                        Write_File (Target, Data, Write_Status);
+                        if Write_Status /= Ok then
+                           Status := Write_Status;
+                           return;
+                        end if;
+                     end;
+                  end if;
+               end;
+            end;
+         end loop;
+
+         Status := Ok;
+      end;
    exception
+      when Storage_Error =>
+         Status := Insufficient_Memory;
       when others =>
          Status := Unsupported_Method;
    end Extract_To_Directory;

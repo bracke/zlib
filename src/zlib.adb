@@ -2984,6 +2984,9 @@ package body Zlib is
 
          when Output_File_Error             =>
             return "output file error";
+
+         when Insufficient_Memory           =>
+            return "insufficient memory for the decoded result";
       end case;
    end Status_Image;
 
@@ -3134,6 +3137,17 @@ package body Zlib is
 
       when Status_Error =>
          Status := Unexpected_End_Of_Input;
+         if Is_Open (Filter) then
+            Close (Filter, Ignore_Error => True);
+         end if;
+         return Empty_Result;
+
+      --  Running out of room for the decoded result says nothing about the
+      --  input, so it must not be reported as a truncated stream. Empty_Result
+      --  is returned rather than To_Byte_Array (Output) because materializing
+      --  Output is exactly what failed.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
          if Is_Open (Filter) then
             Close (Filter, Ignore_Error => True);
          end if;

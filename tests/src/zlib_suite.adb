@@ -23,6 +23,7 @@ with Zlib_GZip_Output_Tests;
 with Zlib_GZip_Metadata_Tests;
 with Zlib_GZip_Broader_Compat_Tests;
 with Zlib_GZip_Multimember_Tests;
+with Zlib_Insufficient_Memory_Tests;
 with Zlib_Streaming_GZip_Metadata_Tests;
 with Zlib_Huffman_Builder_Tests;
 with Zlib_File_Tests;
@@ -126,6 +127,7 @@ package body Zlib_Suite is
       Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_GZip_Metadata_Tests.Test_Case));
       Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_GZip_Broader_Compat_Tests.Test_Case));
       Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_GZip_Multimember_Tests.Test_Case));
+      Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_Insufficient_Memory_Tests.Test_Case));
       Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_File_Tests.Test_Case));
       Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_Streaming_File_Tests.Test_Case));
       Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_Malformed_Tests.Test_Case));
