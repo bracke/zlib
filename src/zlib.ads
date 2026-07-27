@@ -682,6 +682,12 @@ package Zlib is
       Status      : out Status_Code);
    --  Encode a file as a deterministic minimal gzip stream using broad
    --  compression Level.
+   --
+   --  With no header metadata to emit, this streams the input through
+   --  GZip_File_Streaming instead of reading it into memory, so the input size
+   --  is not bounded by the calling task's stack. The emitted bytes are
+   --  unchanged. Requesting metadata takes the buffered path; see the
+   --  metadata-bearing overloads below.
    --  @param Input_Path path to the uncompressed input file
    --  @param Output_Path path that receives the gzip stream
    --  @param Level broad compression-effort policy
@@ -694,7 +700,9 @@ package Zlib is
       Metadata    : GZip_Metadata;
       Status      : out Status_Code);
    --  Encode a file as a gzip stream using broad compression Level and
-   --  optional header metadata.
+   --  optional header metadata. Metadata is emitted through the buffered path,
+   --  which reads the whole input into memory; No_GZip_Metadata streams
+   --  instead and emits the same bytes.
    --  @param Input_Path path to the uncompressed input file
    --  @param Output_Path path that receives the gzip stream
    --  @param Level broad compression-effort policy
@@ -706,7 +714,9 @@ package Zlib is
       Output_Path : String;
       Mode        : Compression_Mode := Auto;
       Status      : out Status_Code);
-   --  Encode a file as a deterministic minimal gzip stream using Mode.
+   --  Encode a file as a deterministic minimal gzip stream using Mode. With no
+   --  header metadata to emit this streams rather than buffering the input; see
+   --  the Level-based overload above.
    --  @param Input_Path path to the uncompressed input file
    --  @param Output_Path path that receives the gzip stream
    --  @param Mode compression mode or Auto policy
@@ -719,6 +729,9 @@ package Zlib is
       Metadata    : GZip_Metadata;
       Status      : out Status_Code);
    --  Encode a file as a gzip stream using Mode and optional header metadata.
+   --  Metadata is emitted through the buffered path, which reads the whole
+   --  input into memory; No_GZip_Metadata streams instead and emits the same
+   --  bytes.
    --  @param Input_Path path to the uncompressed input file
    --  @param Output_Path path that receives the gzip stream
    --  @param Mode compression mode or Auto policy

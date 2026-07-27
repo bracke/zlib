@@ -24,6 +24,14 @@ package body Zlib_Insufficient_Memory_Tests is
    --  archive or the decompressed member could not fit.
    Extract_Stack : constant := 1024 * 1024;
 
+   --  The streaming compressor has a fixed working-set cost of its own, so the
+   --  task is sized above that and the input is made larger than the task
+   --  instead: at 8 MB of input in a 4 MB task, buffering cannot fit whatever
+   --  the fixed cost happens to be.
+   Compress_Payload : constant := 8 * 1024 * 1024;
+   Compress_Chunk   : constant := 64 * 1024;
+   Compress_Stack   : constant := 4 * 1024 * 1024;
+
    type Byte_Array_Access is access Zlib.Byte_Array;
 
    procedure Free is new Ada.Unchecked_Deallocation
@@ -189,6 +197,77 @@ package body Zlib_Insufficient_Memory_Tests is
       Ada.Directories.Delete_Tree (Work);
    end Test_Extraction_Is_Not_Bounded_By_The_Stack;
 
+   --  GZip_File delegates to the streaming encoder when there is no header
+   --  metadata to emit, so compressing a file must not be bounded by the
+   --  calling task's stack either. The emitted bytes must not change.
+   procedure Test_GZip_File_Streams_When_No_Metadata
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Ada.Directories.File_Size;
+
+      Work    : constant String :=
+        Ada.Directories.Current_Directory & "/obj/gzip_streaming_check";
+      Source  : constant String := Work & "/input.bin";
+      Via_One : constant String := Work & "/one_shot.gz";
+      Via_Str : constant String := Work & "/streaming.gz";
+
+      Outcome : Zlib.Status_Code := Zlib.Ok;
+      Escaped : Boolean := False;
+   begin
+      if Ada.Directories.Exists (Work) then
+         Ada.Directories.Delete_Tree (Work);
+      end if;
+      Ada.Directories.Create_Path (Work);
+
+      --  Written in chunks so that preparing the fixture does not itself need
+      --  a stack the size of the input.
+      declare
+         Output : SIO.File_Type;
+         Chunk  : constant Ada.Streams.Stream_Element_Array
+           (1 .. Compress_Chunk) := [others => 66];
+      begin
+         SIO.Create (Output, SIO.Out_File, Source);
+         for I in 1 .. Compress_Payload / Compress_Chunk loop
+            SIO.Write (Output, Chunk);
+         end loop;
+         SIO.Close (Output);
+      end;
+
+      declare
+         task Runner with Storage_Size => Compress_Stack;
+
+         task body Runner is
+         begin
+            Zlib.GZip_File (Source, Via_One, Zlib.Auto, Outcome);
+         exception
+            when others =>
+               Escaped := True;
+         end Runner;
+      begin
+         null;
+      end;
+
+      Assert (not Escaped, "GZip_File must not raise out of a status API");
+      Assert
+        (Outcome = Zlib.Ok,
+         "GZip_File given"
+         & Natural'Image (Compress_Payload / 1024 / 1024)
+         & " MB of input in a"
+         & Natural'Image (Compress_Stack / 1024 / 1024)
+         & " MB task must stream, got " & Zlib.Status_Image (Outcome));
+
+      --  The explicit streaming API is the reference: delegation must not
+      --  change the emitted output.
+      Zlib.GZip_File_Streaming (Source, Via_Str, Zlib.Auto, Outcome);
+      Assert (Outcome = Zlib.Ok, "reference streaming encode must succeed");
+      Assert
+        (Ada.Directories.Size (Via_One) = Ada.Directories.Size (Via_Str),
+         "delegated output must match the streaming encoder");
+
+      Ada.Directories.Delete_Tree (Work);
+   end Test_GZip_File_Streams_When_No_Metadata;
+
    overriding procedure Register_Tests
      (T : in out Test_Case) is
    begin
@@ -198,6 +277,9 @@ package body Zlib_Insufficient_Memory_Tests is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Test_Extraction_Is_Not_Bounded_By_The_Stack'Access,
          "archive extraction streams and is not bounded by the caller's stack");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Test_GZip_File_Streams_When_No_Metadata'Access,
+         "GZip_File streams when no gzip metadata is requested");
    end Register_Tests;
 
 end Zlib_Insufficient_Memory_Tests;

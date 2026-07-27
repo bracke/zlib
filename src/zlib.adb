@@ -10748,23 +10748,40 @@ package body Zlib is
    is
       Input_Status  : Status_Code;
       Output_Status : Status_Code;
-      Input         : constant Byte_Array :=
-        Read_File (Input_Path, Input_Status);
    begin
-      if Input_Status /= Ok then
-         Status := Input_Status;
+      --  With nothing to add to the header, the streaming encoder emits the
+      --  same deterministic minimal gzip stream byte for byte, so prefer it:
+      --  it keeps working memory independent of the input size instead of
+      --  reading the whole file. Requested metadata still needs the buffered
+      --  path, because the streaming encoder emits a minimal header only.
+      if Metadata = No_GZip_Metadata then
+         GZip_File_Streaming
+           (Input_Path  => Input_Path,
+            Output_Path => Output_Path,
+            Mode        => Mode_For_Level (Level),
+            Status      => Status);
          return;
       end if;
 
       declare
-         Output : constant Byte_Array := GZip (Input, Level, Metadata, Status);
+         Input : constant Byte_Array := Read_File (Input_Path, Input_Status);
       begin
-         if Status /= Ok then
+         if Input_Status /= Ok then
+            Status := Input_Status;
             return;
          end if;
 
-         Write_File (Output_Path, Output, Output_Status);
-         Status := Output_Status;
+         declare
+            Output : constant Byte_Array :=
+              GZip (Input, Level, Metadata, Status);
+         begin
+            if Status /= Ok then
+               return;
+            end if;
+
+            Write_File (Output_Path, Output, Output_Status);
+            Status := Output_Status;
+         end;
       end;
    end GZip_File;
 
@@ -10791,23 +10808,38 @@ package body Zlib is
    is
       Input_Status  : Status_Code;
       Output_Status : Status_Code;
-      Input         : constant Byte_Array :=
-        Read_File (Input_Path, Input_Status);
    begin
-      if Input_Status /= Ok then
-         Status := Input_Status;
+      --  See the Level-based overload above: with no metadata to emit, the
+      --  streaming encoder produces the same bytes without reading the whole
+      --  input into memory.
+      if Metadata = No_GZip_Metadata then
+         GZip_File_Streaming
+           (Input_Path  => Input_Path,
+            Output_Path => Output_Path,
+            Mode        => Mode,
+            Status      => Status);
          return;
       end if;
 
       declare
-         Output : constant Byte_Array := GZip (Input, Mode, Metadata, Status);
+         Input : constant Byte_Array := Read_File (Input_Path, Input_Status);
       begin
-         if Status /= Ok then
+         if Input_Status /= Ok then
+            Status := Input_Status;
             return;
          end if;
 
-         Write_File (Output_Path, Output, Output_Status);
-         Status := Output_Status;
+         declare
+            Output : constant Byte_Array :=
+              GZip (Input, Mode, Metadata, Status);
+         begin
+            if Status /= Ok then
+               return;
+            end if;
+
+            Write_File (Output_Path, Output, Output_Status);
+            Status := Output_Status;
+         end;
       end;
    end GZip_File;
 
