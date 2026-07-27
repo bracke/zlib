@@ -5442,9 +5442,15 @@ package body Zlib is
             Index_Last : constant Natural := Footer_First - 1;
             Index_CRC_Pos : constant Natural := Index_Last - 3;
             Index_Pos : Natural := Index_First;
+            Block_Pos : Natural := Input'First + 12;
             Record_Count : Interfaces.Unsigned_64;
-            Unpadded_Size : Interfaces.Unsigned_64;
-            Uncompressed_Size : Interfaces.Unsigned_64;
+            Output : Byte_Vectors.Vector;
+            Check_Size : constant Natural :=
+              (case Check_Id is
+                  when 0 => 0,
+                  when 1 => 4,
+                  when 4 => 8,
+                  when others => 0);
          begin
             if Input (Index_Pos) /= 0
               or else Compute_CRC32 (Input (Index_First .. Index_CRC_Pos - 1)) /=
@@ -5455,13 +5461,105 @@ package body Zlib is
             end if;
             Index_Pos := Index_Pos + 1;
             if not Read_VLI (Input, Index_Pos, Index_CRC_Pos - 1, Record_Count)
-              or else Record_Count /= 1
-              or else not Read_VLI (Input, Index_Pos, Index_CRC_Pos - 1, Unpadded_Size)
-              or else not Read_VLI (Input, Index_Pos, Index_CRC_Pos - 1, Uncompressed_Size)
+              or else Record_Count > Interfaces.Unsigned_64 (Natural'Last)
             then
                Status := Invalid_Header;
                return Empty;
             end if;
+
+            for Entry_Index in 1 .. Natural (Record_Count) loop
+               declare
+                  Unpadded_Size : Interfaces.Unsigned_64;
+                  Uncompressed_Size : Interfaces.Unsigned_64;
+               begin
+                  if not Read_VLI (Input, Index_Pos, Index_CRC_Pos - 1, Unpadded_Size)
+                    or else not Read_VLI
+                      (Input, Index_Pos, Index_CRC_Pos - 1, Uncompressed_Size)
+                  then
+                     Status := Invalid_Header;
+                     return Empty;
+                  elsif Uncompressed_Size > Interfaces.Unsigned_64 (Natural'Last)
+                    or else Unpadded_Size > Interfaces.Unsigned_64 (Natural'Last)
+                    or else Block_Pos >= Index_First
+                  then
+                     Status := Unsupported_Method;
+                     return Empty;
+                  end if;
+
+                  declare
+                     Header_Size : constant Natural :=
+                       Natural (Input (Block_Pos) + 1) * 4;
+                     Header_CRC_Pos : constant Natural := Block_Pos + Header_Size;
+                  begin
+                     if Header_Size < 8
+                       or else Header_CRC_Pos + 3 >= Index_First
+                       or else Natural (Unpadded_Size) < Header_Size + 4 + Check_Size
+                       or else Compute_CRC32 (Input (Block_Pos .. Header_CRC_Pos - 1)) /=
+                         U32_LE_At (Input, Header_CRC_Pos)
+                       or else Input (Block_Pos + 1) /= 0
+                       or else Input (Block_Pos + 2) /= 16#21#
+                       or else Input (Block_Pos + 3) /= 1
+                       or else Input (Block_Pos + 4) /=
+                         Zlib.LZMA2_Framing.Default_Props
+                     then
+                        Status := Unsupported_Method;
+                        return Empty;
+                     end if;
+
+                     for Pos in Block_Pos + 5 .. Header_CRC_Pos - 1 loop
+                        if Input (Pos) /= 0 then
+                           Status := Invalid_Header;
+                           return Empty;
+                        end if;
+                     end loop;
+
+                     declare
+                        Compressed_Size : constant Natural :=
+                          Natural (Unpadded_Size) - Header_Size - 4 - Check_Size;
+                        Payload_First : constant Natural := Header_CRC_Pos + 4;
+                        Check_Pos : constant Natural := Payload_First + Compressed_Size;
+                        Padded_Size : constant Natural :=
+                          ((Natural (Unpadded_Size) + 3) / 4) * 4;
+                        Local_Status : Status_Code := Ok;
+                        Plain : constant Byte_Array :=
+                          Zlib.LZMA2_Decoder.Decode
+                            (Slice (Input, Payload_First, Compressed_Size),
+                             Natural (Uncompressed_Size),
+                             Local_Status);
+                     begin
+                        if Check_Pos + Check_Size > Index_First
+                          or else Block_Pos + Padded_Size > Index_First
+                        then
+                           Status := Invalid_Header;
+                           return Empty;
+                        elsif Local_Status /= Ok then
+                           Status := Local_Status;
+                           return Empty;
+                        elsif Check_Id = 1
+                          and then Compute_CRC32 (Plain) /= U32_LE_At (Input, Check_Pos)
+                        then
+                           Status := Invalid_Checksum;
+                           return Empty;
+                        elsif Check_Id = 4
+                          and then Compute_XZ_CRC64 (Plain) /= U64_LE_At (Input, Check_Pos)
+                        then
+                           Status := Invalid_Checksum;
+                           return Empty;
+                        end if;
+
+                        for Pos in Check_Pos + Check_Size .. Block_Pos + Padded_Size - 1 loop
+                           if Input (Pos) /= 0 then
+                              Status := Invalid_Header;
+                              return Empty;
+                           end if;
+                        end loop;
+                        Append_Bytes (Output, Plain);
+                        Block_Pos := Block_Pos + Padded_Size;
+                     end;
+                  end;
+               end;
+            end loop;
+
             while Index_Pos < Index_CRC_Pos loop
                if Input (Index_Pos) /= 0 then
                   Status := Invalid_Header;
@@ -5470,83 +5568,13 @@ package body Zlib is
                Index_Pos := Index_Pos + 1;
             end loop;
 
-            if Uncompressed_Size > Interfaces.Unsigned_64 (Natural'Last)
-              or else Unpadded_Size > Interfaces.Unsigned_64 (Natural'Last)
-            then
-               Status := Unsupported_Method;
+            if Block_Pos /= Index_First then
+               Status := Invalid_Header;
                return Empty;
             end if;
 
-            declare
-               Block_First : constant Natural := Input'First + 12;
-               Header_Size : constant Natural := Natural (Input (Block_First) + 1) * 4;
-               Header_CRC_Pos : constant Natural := Block_First + Header_Size;
-               Check_Size : constant Natural :=
-                 (case Check_Id is
-                     when 0 => 0,
-                     when 1 => 4,
-                     when 4 => 8,
-                     when others => 0);
-               Compressed_Size : constant Natural :=
-                 Natural (Unpadded_Size) - Header_Size - 4 - Check_Size;
-               Payload_First : constant Natural := Header_CRC_Pos + 4;
-               Check_Pos : constant Natural := Payload_First + Compressed_Size;
-            begin
-               if Header_Size < 8
-                 or else Header_CRC_Pos + 3 >= Index_First
-                 or else Natural (Unpadded_Size) < Header_Size + 4 + Check_Size
-                 or else Check_Pos + Check_Size > Index_First
-                 or else Compute_CRC32 (Input (Block_First .. Header_CRC_Pos - 1)) /=
-                   U32_LE_At (Input, Header_CRC_Pos)
-                 or else Input (Block_First + 1) /= 0
-                 or else Input (Block_First + 2) /= 16#21#
-                 or else Input (Block_First + 3) /= 1
-                 or else Input (Block_First + 4) /=
-                   Zlib.LZMA2_Framing.Default_Props
-               then
-                  Status := Unsupported_Method;
-                  return Empty;
-               end if;
-
-               for Pos in Block_First + 5 .. Header_CRC_Pos - 1 loop
-                  if Input (Pos) /= 0 then
-                     Status := Invalid_Header;
-                     return Empty;
-                  end if;
-               end loop;
-               for Pos in Check_Pos + Check_Size .. Index_First - 1 loop
-                  if Input (Pos) /= 0 then
-                     Status := Invalid_Header;
-                     return Empty;
-                  end if;
-               end loop;
-
-               declare
-                  Local_Status : Status_Code := Ok;
-                  Plain : constant Byte_Array :=
-                    Zlib.LZMA2_Decoder.Decode
-                      (Slice (Input, Payload_First, Compressed_Size),
-                       Natural (Uncompressed_Size),
-                       Local_Status);
-               begin
-                  if Local_Status /= Ok then
-                     Status := Local_Status;
-                     return Empty;
-                  elsif Check_Id = 1
-                    and then Compute_CRC32 (Plain) /= U32_LE_At (Input, Check_Pos)
-                  then
-                     Status := Invalid_Checksum;
-                     return Empty;
-                  elsif Check_Id = 4
-                    and then Compute_XZ_CRC64 (Plain) /= U64_LE_At (Input, Check_Pos)
-                  then
-                     Status := Invalid_Checksum;
-                     return Empty;
-                  end if;
-                  Status := Ok;
-                  return Plain;
-               end;
-            end;
+            Status := Ok;
+            return To_Byte_Array (Output);
          end;
       end;
    exception

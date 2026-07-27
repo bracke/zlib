@@ -290,8 +290,8 @@ package Zlib is
 
    function XZ
      (Input : Byte_Array; Status : out Status_Code) return Byte_Array;
-   --  Decode one complete XZ stream for the supported native subset:
-   --  one stream, one block, one LZMA2 filter, no check, CRC32, or CRC64 check.
+   --  Decode one complete XZ stream for the supported native layout set:
+   --  one stream, one or more LZMA2 blocks, no check, CRC32, or CRC64 check.
    --  Other XZ layouts fail closed with Unsupported_Method or Invalid_Header.
    --  @param Input complete XZ stream
    --  @param Status set to Ok on success or a deterministic failure code
