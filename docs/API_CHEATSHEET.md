@@ -135,7 +135,8 @@ output.
 | streaming raw file compression | `Deflate_Raw_File_Streaming` |
 
 File helpers report file failures through `Input_File_Error` and
-`Output_File_Error`.
+`Output_File_Error`, and report `Insufficient_Memory` when they run out of
+room rather than attributing that to whichever file they were touching.
 
 Any one-shot operation reports `Insufficient_Memory` when the decoded result
 does not fit in available memory. This says nothing about the input; do not

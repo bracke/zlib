@@ -1,4 +1,5 @@
 with Ada.Containers.Vectors;
+with Ada.Exceptions;
 with Ada.Directories;
 with Ada.Streams; use Ada.Streams;
 with Ada.Streams.Stream_IO; use Ada.Streams.Stream_IO;
@@ -55,6 +56,8 @@ with Zlib.Seven_Zip_Paths;
 with Zlib.Seven_Zip_Properties;
 
 package body Zlib is
+
+   use type Ada.Exceptions.Exception_Id;
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
@@ -10005,8 +10008,15 @@ package body Zlib is
             SIO.Close (Output_File);
          end if;
 
-      when others =>
-         Status := Operation;
+      --  Operation records which file was being touched, so that a genuine IO
+      --  failure names the right side. Resource exhaustion is not an IO
+      --  failure: reporting it as Operation blames the input or output file
+      --  for what is a memory limit.
+      when E : others =>
+         Status :=
+           (if Ada.Exceptions.Exception_Identity (E) = Storage_Error'Identity
+            then Insufficient_Memory
+            else Operation);
          if Is_Open (Filter) then
             Close (Filter, Ignore_Error => True);
          end if;
@@ -10033,6 +10043,11 @@ package body Zlib is
          Dictionary     => Empty,
          Use_Dictionary => False,
          Status         => Status);
+   exception
+      --  See Deflate_File_Streaming: a frame too large to establish raises
+      --  before the callee has a handler of its own.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
    end Inflate_File_Streaming;
 
    procedure Inflate_File_With_Dictionary_Streaming
@@ -10184,8 +10199,13 @@ package body Zlib is
             SIO.Close (Output_File);
          end if;
 
-      when others =>
-         Status := Operation;
+      --  See Inflate_File_Streaming_Internal: a memory limit is not an IO
+      --  failure and must not be reported as one.
+      when E : others =>
+         Status :=
+           (if Ada.Exceptions.Exception_Identity (E) = Storage_Error'Identity
+            then Insufficient_Memory
+            else Operation);
          if Is_Open (Filter) then
             Compress_Close (Filter, Ignore_Error => True);
          end if;
@@ -10214,6 +10234,12 @@ package body Zlib is
          Dictionary     => Empty,
          Use_Dictionary => False,
          Status         => Status);
+   exception
+      --  The callee's frame carries the streaming buffers and filter. When it
+      --  is too large to establish, Storage_Error is raised before that frame
+      --  has a handler, so it must be caught here to keep the status contract.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
    end Deflate_File_Streaming;
 
    procedure Deflate_File_With_Dictionary_Streaming
@@ -10389,8 +10415,13 @@ package body Zlib is
             SIO.Close (Input_File);
          end if;
 
-      when others =>
-         Status := Operation;
+      --  See Inflate_File_Streaming_Internal: a memory limit is not an IO
+      --  failure and must not be reported as one.
+      when E : others =>
+         Status :=
+           (if Ada.Exceptions.Exception_Identity (E) = Storage_Error'Identity
+            then Insufficient_Memory
+            else Operation);
          Compressed_Size := 0;
          if Is_Open (Filter) then
             Compress_Close (Filter, Ignore_Error => True);

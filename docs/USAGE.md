@@ -58,7 +58,8 @@ emitted only through explicit metadata overloads. The trailer contains CRC32 and
 `Inflate_File`, `Deflate_Stored_File`, `Deflate_Fixed_File`,
 `Deflate_Dynamic_File`, `Deflate_File`, and `GZip_File` are convenience wrappers.
 They map file read errors to `Input_File_Error` and file write errors to
-`Output_File_Error`.
+`Output_File_Error`. Running out of memory is reported as
+`Insufficient_Memory`, never as a file error.
 
 ## Streaming inflate
 
