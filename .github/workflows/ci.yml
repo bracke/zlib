@@ -11,16 +11,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out zlib
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: zlib
       - name: Check out project_tools sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ github.repository_owner }}/project_tools
           path: project_tools
       - name: Check out cryptolib sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ github.repository_owner }}/cryptolib
           path: cryptolib
@@ -28,7 +28,7 @@ jobs:
         # Pin the toolchain the manifests require. setup-alire@v5 defaults to
         # alr 2.1.0, whose index carries gnat_native 15.2.1; v4's alr 2.0.2 cannot
         # resolve it.
-        uses: alire-project/setup-alire@v5
+        uses: alire-project/setup-alire@v6
         with:
           toolchain: gnat_native=15.2.1 gprbuild
       - name: Install GNATprove
