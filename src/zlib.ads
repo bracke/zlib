@@ -1059,6 +1059,19 @@ package Zlib is
       Password        : String;
       Status          : out Status_Code);
    --  Read an archive file and Extract_Archive_To_Directory it.
+   --
+   --  A ZIP whose members all use Stored or Deflate is streamed: only the
+   --  central directory is read, and each member goes from the archive file
+   --  straight to its output file. Working memory is then a small fixed amount
+   --  independent of the archive size and of the size of any member, so a large
+   --  archive does not need a correspondingly large task stack.
+   --
+   --  Anything else falls back to reading the whole image, which needs roughly
+   --  the archive size plus the largest decompressed member and reports
+   --  Insufficient_Memory when that does not fit. The fallback applies to the
+   --  whole archive, not per member: an encrypted member, or any member whose
+   --  method is neither Stored nor Deflate, puts the entire archive on that
+   --  path.
    --  @param Archive_Path path to a .zip or .7z file
    --  @param Destination_Dir directory to extract into
    --  @param Password archive password, or "" if not encrypted

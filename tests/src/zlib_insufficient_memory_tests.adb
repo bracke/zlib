@@ -1,8 +1,13 @@
+with Ada.Directories;
+with Ada.Streams.Stream_IO;
 with Ada.Unchecked_Deallocation;
 with AUnit.Assertions; use AUnit.Assertions;
 with Zlib; use Zlib;
 
 package body Zlib_Insufficient_Memory_Tests is
+
+   package SIO renames Ada.Streams.Stream_IO;
+   use type Ada.Streams.Stream_Element_Offset;
 
    --  A decoded payload that cannot fit in the caller's stack must be reported
    --  as Insufficient_Memory. It must never be reported as
@@ -14,6 +19,10 @@ package body Zlib_Insufficient_Memory_Tests is
 
    Payload_Size : constant := 2 * 1024 * 1024;
    Runner_Stack : constant := 128 * 1024;
+
+   --  Comfortably below Payload_Size, so a run that buffered either the
+   --  archive or the decompressed member could not fit.
+   Extract_Stack : constant := 1024 * 1024;
 
    type Byte_Array_Access is access Zlib.Byte_Array;
 
@@ -90,12 +99,105 @@ package body Zlib_Insufficient_Memory_Tests is
          "expected Insufficient_Memory, got " & Zlib.Status_Image (Outcome));
    end Test_Inflate_Reports_Insufficient_Memory;
 
+   --  Extraction streams each member from the archive file straight to its
+   --  output file, so it must succeed in a task whose stack could not hold
+   --  either the archive or the decompressed member. This is the property that
+   --  makes a large download extractable without an oversized task.
+   procedure Test_Extraction_Is_Not_Bounded_By_The_Stack
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Ada.Directories.File_Size;
+
+      Work    : constant String :=
+        Ada.Directories.Current_Directory & "/obj/zip_streaming_check";
+      Archive : constant String := Work & "/big.zip";
+      Out_Dir : constant String := Work & "/out";
+      Member  : constant String := Out_Dir & "/big.txt";
+
+      Payload : Byte_Array_Access := new Zlib.Byte_Array (1 .. Payload_Size);
+      Outcome : Zlib.Status_Code := Zlib.Ok;
+      Escaped : Boolean := False;
+   begin
+      if Ada.Directories.Exists (Work) then
+         Ada.Directories.Delete_Tree (Work);
+      end if;
+      Ada.Directories.Create_Path (Out_Dir);
+
+      --  A payload that compresses well keeps the fixture small while the
+      --  decompressed member stays far larger than the extracting task's stack.
+      Payload.all := [others => 65];
+
+      declare
+         Build_Status : Zlib.Status_Code := Zlib.Ok;
+         Archive_Data : constant Zlib.Byte_Array :=
+           Zlib.ZIP (Payload.all, "big.txt", Status => Build_Status);
+         Output       : SIO.File_Type;
+      begin
+         Free (Payload);
+         Assert (Build_Status = Zlib.Ok, "fixture: ZIP must build");
+
+         SIO.Create (Output, SIO.Out_File, Archive);
+         declare
+            Raw    : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Archive_Data'Length));
+            Target : Ada.Streams.Stream_Element_Offset := Raw'First;
+         begin
+            for B of Archive_Data loop
+               Raw (Target) := Ada.Streams.Stream_Element (B);
+               Target := Target + 1;
+            end loop;
+            SIO.Write (Output, Raw);
+         end;
+         SIO.Close (Output);
+      end;
+
+      declare
+         task Runner with Storage_Size => Extract_Stack;
+
+         task body Runner is
+         begin
+            Zlib.Extract_Archive_File_To_Directory
+              (Archive_Path    => Archive,
+               Destination_Dir => Out_Dir,
+               Password        => "",
+               Status          => Outcome);
+         exception
+            when others =>
+               Escaped := True;
+         end Runner;
+      begin
+         null;
+      end;
+
+      Assert
+        (not Escaped,
+         "extraction must not raise out of a status-returning API");
+      Assert
+        (Outcome = Zlib.Ok,
+         "extraction into a "
+         & Natural'Image (Extract_Stack / 1024)
+         & " KB task must stream rather than buffer, got "
+         & Zlib.Status_Image (Outcome));
+      Assert
+        (Ada.Directories.Exists (Member),
+         "the extracted member must exist");
+      Assert
+        (Ada.Directories.Size (Member) = Ada.Directories.File_Size (Payload_Size),
+         "the extracted member must be whole");
+
+      Ada.Directories.Delete_Tree (Work);
+   end Test_Extraction_Is_Not_Bounded_By_The_Stack;
+
    overriding procedure Register_Tests
      (T : in out Test_Case) is
    begin
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Test_Inflate_Reports_Insufficient_Memory'Access,
          "decoded payload larger than the stack reports Insufficient_Memory");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Test_Extraction_Is_Not_Bounded_By_The_Stack'Access,
+         "archive extraction streams and is not bounded by the caller's stack");
    end Register_Tests;
 
 end Zlib_Insufficient_Memory_Tests;

@@ -28,11 +28,31 @@
 `Insufficient_Memory` does not implicate the input. A well-formed stream or
 archive reports it when the decoded payload does not fit in available memory,
 so it must not be read as `Unexpected_End_Of_Input`, which means the input
-really was truncated. Because decoded results are built on the stack, the
-practical limit for `Inflate` and for archive extraction is the calling task's
-stack size, not the heap: extracting an archive needs roughly the archive size
-plus the largest decompressed member. Callers that must handle large payloads
-should run the call in a task with a sufficient `Storage_Size`.
+really was truncated.
+
+## Memory needed to decode
+
+One-shot APIs that return a decoded `Byte_Array` build that result on the
+stack, so the practical limit for `Inflate` and friends is the calling task's
+stack size rather than the heap. Callers decoding large payloads should run the
+call in a task with a sufficient `Storage_Size`.
+
+`Extract_Archive_File_To_Directory` is the exception. For a ZIP whose members
+all use Stored or Deflate, it reads only the central directory and then streams
+each member from the archive file straight to its output file, so its working
+memory is a small fixed amount independent of both the archive size and the
+size of any member. Such an archive extracts in well under a megabyte of stack
+however large it is.
+
+It falls back to whole-image extraction for anything it cannot stream: an
+encrypted member, or any member whose method is neither Stored nor Deflate.
+The fallback is per archive, not per member, because the external codec bridge
+needs the whole image in any case. On that path the old bound applies, roughly
+the archive size plus the largest decompressed member, and a large archive
+again needs a task sized for it.
+
+`Extract_Archive_To_Directory` takes an image the caller already holds in
+memory and is unaffected.
 
 ## Streaming exceptions
 

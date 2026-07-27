@@ -31,6 +31,7 @@ with Zlib.Stream_Inflate;
 with Zlib.Sliding_Window;
 with Zlib.Archive_Listing;
 with Zlib.Archive_Directory_Extraction;
+with Zlib.ZIP_Streaming_Extraction;
 with Zlib.Seven_Zip_BCJ2_Writing;
 with Zlib.Seven_Zip_Codec_Packing;
 with Zlib.Seven_Zip_Codec_Writing;
@@ -2672,6 +2673,15 @@ package body Zlib is
                Output_Window (Filter).all,
                Decode_Status);
          exception
+            --  Resource exhaustion is not a decode failure. Folding it into
+            --  Zlib_Error here would attribute it to the decoder's last data
+            --  status and so report well-formed input as truncated, which is
+            --  exactly what a caller cannot tell apart. It propagates as
+            --  itself; the filter is still marked Failed so that
+            --  Close (Ignore_Error => True) can reclaim it.
+            when Storage_Error =>
+               Mark_Failed (Filter, Insufficient_Memory);
+               raise;
             when others =>
                Mark_Failed
                  (Filter,
@@ -2719,6 +2729,14 @@ package body Zlib is
                   begin
                      Append_One_Input_Byte;
                   exception
+                     --  Running out of memory is not a data error. Folding it
+                     --  into Zlib_Error here would report well-formed input as
+                     --  truncated, so it propagates as itself and the caller
+                     --  decides. The filter is still marked Failed so that
+                     --  Close (Ignore_Error => True) can reclaim it.
+                     when Storage_Error =>
+                        Mark_Failed (Filter, Insufficient_Memory);
+                        raise;
                      when others =>
                         Mark_Failed (Filter, Unexpected_End_Of_Input);
                         raise Zlib_Error;
@@ -2791,6 +2809,15 @@ package body Zlib is
                Output_Window (Filter).all,
                Decode_Status);
          exception
+            --  Resource exhaustion is not a decode failure. Folding it into
+            --  Zlib_Error here would attribute it to the decoder's last data
+            --  status and so report well-formed input as truncated, which is
+            --  exactly what a caller cannot tell apart. It propagates as
+            --  itself; the filter is still marked Failed so that
+            --  Close (Ignore_Error => True) can reclaim it.
+            when Storage_Error =>
+               Mark_Failed (Filter, Insufficient_Memory);
+               raise;
             when others =>
                Mark_Failed
                  (Filter,
@@ -9298,7 +9325,25 @@ package body Zlib is
       Password        : String;
       Status          : out Status_Code)
    is
+      Handled : Boolean := False;
    begin
+      --  Prefer the seek-based ZIP reader: it streams each member from the
+      --  archive file straight to its output file, so a large archive no
+      --  longer has to fit in memory. It declines archives it cannot stream
+      --  (encrypted members, or methods other than Stored and Deflate), and
+      --  those fall back to whole-image extraction below.
+      if Password'Length = 0 then
+         Zlib.ZIP_Streaming_Extraction.Extract_To_Directory
+           (Archive_Path    => Archive_Path,
+            Destination_Dir => Destination_Dir,
+            Safe_Entry_Name => Safe_ZIP_Entry_Name'Access,
+            Handled         => Handled,
+            Status          => Status);
+         if Handled then
+            return;
+         end if;
+      end if;
+
       Zlib.Archive_Directory_Extraction.Extract_File_To_Directory
         (Archive_Path, Destination_Dir, Password, Read_File'Access,
          Extract_Archive_To_Directory'Access, Status);
