@@ -268,6 +268,74 @@ package body Zlib_Insufficient_Memory_Tests is
       Ada.Directories.Delete_Tree (Work);
    end Test_GZip_File_Streams_When_No_Metadata;
 
+   --  Deflate_File and Inflate_File delegate to their streaming counterparts
+   --  too, so a file larger than the task's stack must survive a full
+   --  round-trip. Delegating GZip_File alone would have left these bounded and
+   --  the split between them surprising.
+   procedure Test_File_Helpers_Round_Trip_Beyond_The_Stack
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Ada.Directories.File_Size;
+
+      Work     : constant String :=
+        Ada.Directories.Current_Directory & "/obj/file_helper_check";
+      Source   : constant String := Work & "/input.bin";
+      Squeezed : constant String := Work & "/input.z";
+      Restored : constant String := Work & "/input.back";
+
+      Outcome : Zlib.Status_Code := Zlib.Ok;
+      Escaped : Boolean := False;
+   begin
+      if Ada.Directories.Exists (Work) then
+         Ada.Directories.Delete_Tree (Work);
+      end if;
+      Ada.Directories.Create_Path (Work);
+
+      declare
+         Output : SIO.File_Type;
+         Chunk  : constant Ada.Streams.Stream_Element_Array
+           (1 .. Compress_Chunk) := [others => 67];
+      begin
+         SIO.Create (Output, SIO.Out_File, Source);
+         for I in 1 .. Compress_Payload / Compress_Chunk loop
+            SIO.Write (Output, Chunk);
+         end loop;
+         SIO.Close (Output);
+      end;
+
+      declare
+         task Runner with Storage_Size => Compress_Stack;
+
+         task body Runner is
+         begin
+            Zlib.Deflate_File (Source, Squeezed, Zlib.Auto, Outcome);
+            if Outcome = Zlib.Ok then
+               Zlib.Inflate_File (Squeezed, Restored, Outcome);
+            end if;
+         exception
+            when others =>
+               Escaped := True;
+         end Runner;
+      begin
+         null;
+      end;
+
+      Assert (not Escaped, "file helpers must not raise out of a status API");
+      Assert
+        (Outcome = Zlib.Ok,
+         "Deflate_File/Inflate_File round-trip of"
+         & Natural'Image (Compress_Payload / 1024 / 1024)
+         & " MB in a" & Natural'Image (Compress_Stack / 1024 / 1024)
+         & " MB task must stream, got " & Zlib.Status_Image (Outcome));
+      Assert
+        (Ada.Directories.Size (Restored)
+           = Ada.Directories.File_Size (Compress_Payload),
+         "the round-tripped file must be whole");
+
+      Ada.Directories.Delete_Tree (Work);
+   end Test_File_Helpers_Round_Trip_Beyond_The_Stack;
+
    overriding procedure Register_Tests
      (T : in out Test_Case) is
    begin
@@ -280,6 +348,9 @@ package body Zlib_Insufficient_Memory_Tests is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Test_GZip_File_Streams_When_No_Metadata'Access,
          "GZip_File streams when no gzip metadata is requested");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Test_File_Helpers_Round_Trip_Beyond_The_Stack'Access,
+         "Deflate_File and Inflate_File stream beyond the caller's stack");
    end Register_Tests;
 
 end Zlib_Insufficient_Memory_Tests;

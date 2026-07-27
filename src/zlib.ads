@@ -436,15 +436,18 @@ package Zlib is
      (Input_Path : String; Output_Path : String; Status : out Status_Code);
    --  Decode one complete zlib, gzip, or raw Deflate stream from a file into
    --  another file using the same implicit wrapper auto-detection as Inflate.
+   --  Decoding streams through Inflate_File_Streaming, so the file size is not
+   --  bounded by the calling task's stack.
    --  @param Input_Path path to the compressed stream
    --  @param Output_Path path that receives inflated bytes
    --  @param Status set to Ok or a deterministic failure code
 
    procedure Inflate_Raw_File
      (Input_Path : String; Output_Path : String; Status : out Status_Code);
-   --  Decode one complete raw Deflate payload from a file into another
-   --  file. This is a convenience wrapper over Inflate_Raw and does not
-   --  auto-detect zlib or gzip wrappers.
+   --  Decode one complete raw Deflate payload from a file into another file.
+   --  It does not auto-detect zlib or gzip wrappers. Decoding streams through
+   --  Inflate_Raw_File_Streaming, so the file size is not bounded by the
+   --  calling task's stack.
    --  @param Input_Path path to the raw Deflate payload
    --  @param Output_Path path that receives inflated bytes
    --  @param Status set to Ok or a deterministic failure code
@@ -552,6 +555,9 @@ package Zlib is
       Level       : Compression_Level;
       Status      : out Status_Code);
    --  Encode a file as a zlib stream using broad compression Level.
+   --  Encoding streams through the corresponding *_Streaming helper, so the
+   --  file size is not bounded by the calling task's stack; the emitted bytes
+   --  are unchanged.
    --  @param Input_Path path to the uncompressed input file
    --  @param Output_Path path that receives the zlib stream
    --  @param Level broad compression-effort policy
@@ -562,6 +568,9 @@ package Zlib is
       Mode        : Compression_Mode := Auto;
       Status      : out Status_Code);
    --  Encode a file as a zlib stream using Deflate with Mode.
+   --  Encoding streams through the corresponding *_Streaming helper, so the
+   --  file size is not bounded by the calling task's stack; the emitted bytes
+   --  are unchanged.
    --  @param Input_Path path to the uncompressed input file
    --  @param Output_Path path that receives the zlib stream
    --  @param Mode compression mode or Auto policy
@@ -798,6 +807,9 @@ package Zlib is
       Level       : Compression_Level;
       Status      : out Status_Code);
    --  Encode a file as raw Deflate output using broad compression Level.
+   --  Encoding streams through the corresponding *_Streaming helper, so the
+   --  file size is not bounded by the calling task's stack; the emitted bytes
+   --  are unchanged.
    --  @param Input_Path path to the uncompressed input file
    --  @param Output_Path path that receives raw Deflate output
    --  @param Level broad compression-effort policy
@@ -809,6 +821,9 @@ package Zlib is
       Mode        : Compression_Mode := Auto;
       Status      : out Status_Code);
    --  Encode a file as raw Deflate Stored, Fixed, Dynamic, or Auto output.
+   --  Encoding streams through the corresponding *_Streaming helper, so the
+   --  file size is not bounded by the calling task's stack; the emitted bytes
+   --  are unchanged.
    --  Compression failures are reported through Status and do not write output.
    --  @param Input_Path path to the uncompressed input file
    --  @param Output_Path path that receives raw Deflate output
@@ -822,9 +837,10 @@ package Zlib is
       Status      : out Status_Code);
    --  Decode a compressed file through the streaming inflate API using
    --  bounded internal buffers. Header selects zlib, gzip, or raw Deflate.
-   --  Existing Inflate_File remains available as a whole-file convenience
-   --  helper. Use Inflate_File_With_Dictionary_Streaming for zlib streams that
-   --  require the preset-dictionary FDICT mechanism.
+   --  Inflate_File delegates here, so it is bounded the same way; this entry
+   --  point remains the one that names its wrapper explicitly. Use
+   --  Inflate_File_With_Dictionary_Streaming for zlib streams that require the
+   --  preset-dictionary FDICT mechanism.
    --  @param Input_Path path to the compressed input file
    --  @param Output_Path path that receives inflated bytes
    --  @param Header wrapper/header mode to decode

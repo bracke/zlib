@@ -10491,53 +10491,22 @@ package body Zlib is
    end Inflate_Raw_File_Streaming;
 
    procedure Inflate_File
-     (Input_Path : String; Output_Path : String; Status : out Status_Code)
-   is
-      Input_Status  : Status_Code;
-      Output_Status : Status_Code;
-      Input         : constant Byte_Array :=
-        Read_File (Input_Path, Input_Status);
+     (Input_Path : String; Output_Path : String; Status : out Status_Code) is
    begin
-      if Input_Status /= Ok then
-         Status := Input_Status;
-         return;
-      end if;
-
-      declare
-         Output : constant Byte_Array := Inflate (Input, Status);
-      begin
-         if Status /= Ok then
-            return;
-         end if;
-
-         Write_File (Output_Path, Output, Output_Status);
-         Status := Output_Status;
-      end;
+      --  Header => Default is the same wrapper auto-detection Inflate applies,
+      --  so this decodes exactly what the buffered path decoded while keeping
+      --  working memory independent of the file size.
+      Inflate_File_Streaming
+        (Input_Path  => Input_Path,
+         Output_Path => Output_Path,
+         Header      => Default,
+         Status      => Status);
    end Inflate_File;
 
    procedure Inflate_Raw_File
-     (Input_Path : String; Output_Path : String; Status : out Status_Code)
-   is
-      Input_Status  : Status_Code;
-      Output_Status : Status_Code;
-      Input         : constant Byte_Array :=
-        Read_File (Input_Path, Input_Status);
+     (Input_Path : String; Output_Path : String; Status : out Status_Code) is
    begin
-      if Input_Status /= Ok then
-         Status := Input_Status;
-         return;
-      end if;
-
-      declare
-         Output : constant Byte_Array := Inflate_Raw (Input, Status);
-      begin
-         if Status /= Ok then
-            return;
-         end if;
-
-         Write_File (Output_Path, Output, Output_Status);
-         Status := Output_Status;
-      end;
+      Inflate_Raw_File_Streaming (Input_Path, Output_Path, Status);
    end Inflate_Raw_File;
 
    procedure Deflate_Stored_File
@@ -10619,112 +10588,54 @@ package body Zlib is
      (Input_Path  : String;
       Output_Path : String;
       Level       : Compression_Level;
-      Status      : out Status_Code)
-   is
-      Input_Status  : Status_Code;
-      Output_Status : Status_Code;
-      Input         : constant Byte_Array :=
-        Read_File (Input_Path, Input_Status);
+      Status      : out Status_Code) is
    begin
-      if Input_Status /= Ok then
-         Status := Input_Status;
-         return;
-      end if;
-
-      declare
-         Output : constant Byte_Array := Deflate (Input, Level, Status);
-      begin
-         if Status /= Ok then
-            return;
-         end if;
-
-         Write_File (Output_Path, Output, Output_Status);
-         Status := Output_Status;
-      end;
+      Deflate_File_Streaming
+        (Input_Path  => Input_Path,
+         Output_Path => Output_Path,
+         Header      => Zlib_Header,
+         Mode        => Mode_For_Level (Level),
+         Status      => Status);
    end Deflate_File;
 
    procedure Deflate_File
      (Input_Path  : String;
       Output_Path : String;
       Mode        : Compression_Mode := Auto;
-      Status      : out Status_Code)
-   is
-      Input_Status  : Status_Code;
-      Output_Status : Status_Code;
-      Input         : constant Byte_Array :=
-        Read_File (Input_Path, Input_Status);
+      Status      : out Status_Code) is
    begin
-      if Input_Status /= Ok then
-         Status := Input_Status;
-         return;
-      end if;
-
-      declare
-         Output : constant Byte_Array := Deflate (Input, Mode, Status);
-      begin
-         if Status /= Ok then
-            return;
-         end if;
-
-         Write_File (Output_Path, Output, Output_Status);
-         Status := Output_Status;
-      end;
+      Deflate_File_Streaming
+        (Input_Path  => Input_Path,
+         Output_Path => Output_Path,
+         Header      => Zlib_Header,
+         Mode        => Mode,
+         Status      => Status);
    end Deflate_File;
 
    procedure Deflate_Raw_File
      (Input_Path  : String;
       Output_Path : String;
       Level       : Compression_Level;
-      Status      : out Status_Code)
-   is
-      Input_Status  : Status_Code;
-      Output_Status : Status_Code;
-      Input         : constant Byte_Array :=
-        Read_File (Input_Path, Input_Status);
+      Status      : out Status_Code) is
    begin
-      if Input_Status /= Ok then
-         Status := Input_Status;
-         return;
-      end if;
-
-      declare
-         Output : constant Byte_Array := Deflate_Raw (Input, Level, Status);
-      begin
-         if Status /= Ok then
-            return;
-         end if;
-
-         Write_File (Output_Path, Output, Output_Status);
-         Status := Output_Status;
-      end;
+      Deflate_Raw_File_Streaming
+        (Input_Path  => Input_Path,
+         Output_Path => Output_Path,
+         Mode        => Mode_For_Level (Level),
+         Status      => Status);
    end Deflate_Raw_File;
 
    procedure Deflate_Raw_File
      (Input_Path  : String;
       Output_Path : String;
       Mode        : Compression_Mode := Auto;
-      Status      : out Status_Code)
-   is
-      Input_Status  : Status_Code;
-      Output_Status : Status_Code;
-      Input         : constant Byte_Array :=
-        Read_File (Input_Path, Input_Status);
+      Status      : out Status_Code) is
    begin
-      if Input_Status /= Ok then
-         Status := Input_Status;
-         return;
-      end if;
-
-      declare
-         Output : constant Byte_Array := Deflate_Raw (Input, Mode, Status);
-      begin
-         if Status /= Ok then
-            return;
-         end if;
-
-         Write_File (Output_Path, Output, Output_Status);
-         Status := Output_Status;
-      end;
+      Deflate_Raw_File_Streaming
+        (Input_Path  => Input_Path,
+         Output_Path => Output_Path,
+         Mode        => Mode,
+         Status      => Status);
    end Deflate_Raw_File;
 
    procedure ZIP_File
