@@ -1354,12 +1354,12 @@ package Zlib is
       Password      : String;
       Status        : out Status_Code) return Byte_Array;
    --  Extract one ZIP entry for ZIP methods that are outside Deflate. BZip2
-   --  entries are decoded in-process when they are not encrypted and use
-   --  classic or ZIP64 size metadata. ZIP-LZMA entries emitted by this
-   --  library, Zstandard entries, and default-parameter ZIP PPMd entries are
-   --  also decoded in-process when they are not encrypted and use classic or
-   --  ZIP64 size metadata. Other LZMA streams and encrypted entries fail
-   --  closed with Unsupported_Method.
+   --  entries are decoded in-process when they use classic or ZIP64 size
+   --  metadata. ZIP-LZMA entries emitted by this library, Zstandard entries,
+   --  and default-parameter ZIP PPMd entries are also decoded in-process when
+   --  they use classic or ZIP64 size metadata. Traditional PKZIP encryption is
+   --  supported for those methods when Password is supplied. Strong/AES ZIP
+   --  encryption fails closed with Unsupported_Method.
    --  @param Archive_Image complete logical ZIP archive image
    --  @param Entry_Name archive entry path to extract
    --  @param Password optional ZIP password for encrypted entries

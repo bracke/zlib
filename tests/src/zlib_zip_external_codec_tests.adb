@@ -69,6 +69,93 @@ package body Zlib_ZIP_External_Codec_Tests is
       end loop;
    end Put_Name;
 
+   type ZIP_Crypto_State is record
+      Key0 : Interfaces.Unsigned_32 := 16#1234_5678#;
+      Key1 : Interfaces.Unsigned_32 := 16#2345_6789#;
+      Key2 : Interfaces.Unsigned_32 := 16#3456_7890#;
+   end record;
+
+   function ZIP_Crypto_CRC32_Update
+     (Current : Interfaces.Unsigned_32;
+      Value   : Zlib.Byte) return Interfaces.Unsigned_32
+   is
+      C : Interfaces.Unsigned_32 := Current xor Interfaces.Unsigned_32 (Value);
+   begin
+      for Bit in 1 .. 8 loop
+         if (C and 1) = 1 then
+            C := Interfaces.Shift_Right (C, 1) xor 16#EDB8_8320#;
+         else
+            C := Interfaces.Shift_Right (C, 1);
+         end if;
+      end loop;
+      return C;
+   end ZIP_Crypto_CRC32_Update;
+
+   procedure ZIP_Update_Crypto_Key
+     (State : in out ZIP_Crypto_State;
+      Plain : Zlib.Byte)
+   is
+   begin
+      State.Key0 := ZIP_Crypto_CRC32_Update (State.Key0, Plain);
+      State.Key1 := (State.Key1 + (State.Key0 and 16#FF#)) * 134_775_813 + 1;
+      State.Key2 :=
+        ZIP_Crypto_CRC32_Update
+          (State.Key2,
+           Zlib.Byte (Interfaces.Shift_Right (State.Key1, 24) and 16#FF#));
+   end ZIP_Update_Crypto_Key;
+
+   function ZIP_Initialized_Crypto (Password : String) return ZIP_Crypto_State is
+      State : ZIP_Crypto_State;
+   begin
+      for Ch of Password loop
+         ZIP_Update_Crypto_Key (State, Zlib.Byte (Character'Pos (Ch)));
+      end loop;
+      return State;
+   end ZIP_Initialized_Crypto;
+
+   function ZIP_Crypto_Byte (State : ZIP_Crypto_State) return Zlib.Byte is
+      Temp : constant Interfaces.Unsigned_32 := State.Key2 or 2;
+   begin
+      return Zlib.Byte
+        (Interfaces.Shift_Right ((Temp * (Temp xor 1)), 8) and 16#FF#);
+   end ZIP_Crypto_Byte;
+
+   procedure ZIP_Encrypt_In_Place
+     (State : in out ZIP_Crypto_State;
+      Bytes : in out Zlib.Byte_Array)
+   is
+   begin
+      for Index in Bytes'Range loop
+         declare
+            Plain  : constant Zlib.Byte := Bytes (Index);
+            Cipher : constant Zlib.Byte := Plain xor ZIP_Crypto_Byte (State);
+         begin
+            Bytes (Index) := Cipher;
+            ZIP_Update_Crypto_Key (State, Plain);
+         end;
+      end loop;
+   end ZIP_Encrypt_In_Place;
+
+   function ZIP_Traditional_Encrypted
+     (Payload  : Zlib.Byte_Array;
+      Crc32    : Interfaces.Unsigned_32;
+      Password : String) return Zlib.Byte_Array
+   is
+      Result : Zlib.Byte_Array (1 .. Payload'Length + 12);
+      State  : ZIP_Crypto_State := ZIP_Initialized_Crypto (Password);
+   begin
+      for I in 1 .. 11 loop
+         Result (I) := Zlib.Byte (I);
+      end loop;
+      Result (12) :=
+        Zlib.Byte (Interfaces.Shift_Right (Crc32, 24) and 16#FF#);
+      for I in Payload'Range loop
+         Result (12 + I - Payload'First + 1) := Payload (I);
+      end loop;
+      ZIP_Encrypt_In_Place (State, Result);
+      return Result;
+   end ZIP_Traditional_Encrypted;
+
    procedure Assert_Bytes_Equal
      (Actual   : Zlib.Byte_Array;
       Expected : Zlib.Byte_Array;
@@ -149,36 +236,44 @@ package body Zlib_ZIP_External_Codec_Tests is
       Crc32           : Interfaces.Unsigned_32;
       Uncompressed    : Interfaces.Unsigned_64;
       Entry_Name      : String;
-      Central_ZIP64   : Boolean := False) return Zlib.Byte_Array
+      Central_ZIP64   : Boolean := False;
+      Encrypted       : Boolean := False;
+      Password        : String := "") return Zlib.Byte_Array
    is
+      Wire_Payload     : constant Zlib.Byte_Array :=
+        (if Encrypted
+         then ZIP_Traditional_Encrypted (Payload, Crc32, Password)
+         else Payload);
       Name_Length      : constant Natural := Entry_Name'Length;
       Extra_Length     : constant Natural := (if Central_ZIP64 then 20 else 0);
-      Local_Length     : constant Natural := 30 + Name_Length + Payload'Length;
+      Local_Length     : constant Natural := 30 + Name_Length + Wire_Payload'Length;
       Central_Offset   : constant Natural := Local_Length;
       Central_Length   : constant Natural := 46 + Name_Length + Extra_Length;
       EOCD_Offset      : constant Natural := Central_Offset + Central_Length;
       Total_Length     : constant Natural := EOCD_Offset + 22;
       Archive          : Zlib.Byte_Array (1 .. Total_Length) := [others => 0];
       Compressed_32    : constant Interfaces.Unsigned_32 :=
-        Interfaces.Unsigned_32 (Payload'Length);
+        Interfaces.Unsigned_32 (Wire_Payload'Length);
       Uncompressed_32  : constant Interfaces.Unsigned_32 :=
         Interfaces.Unsigned_32 (Uncompressed);
    begin
       Put_U32 (Archive, 1, 16#0403_4B50#);
       Put_U16 (Archive, 5, (if Central_ZIP64 then 45 else 20));
+      Put_U16 (Archive, 7, (if Encrypted then 1 else 0));
       Put_U16 (Archive, 9, Method);
       Put_U32 (Archive, 15, Crc32);
       Put_U32 (Archive, 19, Compressed_32);
       Put_U32 (Archive, 23, Uncompressed_32);
       Put_U16 (Archive, 27, Interfaces.Unsigned_16 (Name_Length));
       Put_Name (Archive, 31, Entry_Name);
-      for I in Payload'Range loop
-         Archive (31 + Name_Length + I - Payload'First) := Payload (I);
+      for I in Wire_Payload'Range loop
+         Archive (31 + Name_Length + I - Wire_Payload'First) := Wire_Payload (I);
       end loop;
 
       Put_U32 (Archive, Central_Offset + 1, 16#0201_4B50#);
       Put_U16 (Archive, Central_Offset + 5, 45);
       Put_U16 (Archive, Central_Offset + 7, (if Central_ZIP64 then 45 else 20));
+      Put_U16 (Archive, Central_Offset + 9, (if Encrypted then 1 else 0));
       Put_U16 (Archive, Central_Offset + 11, Method);
       Put_U32 (Archive, Central_Offset + 17, Crc32);
       Put_U32
@@ -198,7 +293,7 @@ package body Zlib_ZIP_External_Codec_Tests is
             Put_U16 (Archive, Extra_First, 16#0001#);
             Put_U16 (Archive, Extra_First + 2, 16);
             Put_U64 (Archive, Extra_First + 4, Uncompressed);
-            Put_U64 (Archive, Extra_First + 12, Interfaces.Unsigned_64 (Payload'Length));
+            Put_U64 (Archive, Extra_First + 12, Interfaces.Unsigned_64 (Wire_Payload'Length));
          end;
       end if;
 
@@ -340,6 +435,63 @@ package body Zlib_ZIP_External_Codec_Tests is
         ("BZip2", 12, Repeated_Data (193, 5),
          "ZIP BZip2 payloads are extracted in-process");
    end Test_ZIP_BZip2_Extracted;
+
+   procedure Test_ZIP_Traditional_Encrypted_External_Extracted
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Plain             : constant Zlib.Byte_Array := Repeated_Data (211, 9);
+      Input_Path        : constant String := "zlib-zip-external-encrypted-input.bin";
+      Method            : Interfaces.Unsigned_16;
+      Crc32             : Interfaces.Unsigned_32;
+      Uncompressed_Size : Interfaces.Unsigned_64;
+      Status            : Zlib.Status_Code;
+   begin
+      Write_File (Input_Path, Plain);
+      declare
+         Payload : constant Zlib.Byte_Array :=
+           Zlib.Compress_ZIP_External_File
+             (Input_Path, "BZip2", Method, Crc32, Uncompressed_Size, Status);
+      begin
+         Assert (Status = Zlib.Ok, "encrypted ZIP external compression status");
+         declare
+            Archive : constant Zlib.Byte_Array :=
+              Archive_With_External_Payload
+                (Payload, Method, Crc32, Uncompressed_Size, "payload.bin",
+                 Encrypted => True, Password => "secret");
+            Missing : constant Zlib.Byte_Array :=
+              Zlib.Extract_ZIP_External_Entry
+                (Archive, "payload.bin", "", Status);
+         begin
+            Assert
+              (Status /= Zlib.Ok and then Missing'Length = 0,
+               "encrypted ZIP external requires password");
+            declare
+               Wrong : constant Zlib.Byte_Array :=
+                 Zlib.Extract_ZIP_External_Entry
+                   (Archive, "payload.bin", "wrong", Status);
+            begin
+               Assert
+                 (Status /= Zlib.Ok and then Wrong'Length = 0,
+                  "encrypted ZIP external rejects wrong password");
+            end;
+            declare
+               Decoded : constant Zlib.Byte_Array :=
+                 Zlib.Extract_ZIP_External_Entry
+                   (Archive, "payload.bin", "secret", Status);
+            begin
+               Assert (Status = Zlib.Ok, "encrypted ZIP external extraction status");
+               Assert_Bytes_Equal
+                 (Decoded, Plain, "encrypted ZIP external payload roundtrip");
+            end;
+         end;
+      end;
+      Delete_If_Exists (Input_Path);
+   exception
+      when others =>
+         Delete_If_Exists (Input_Path);
+         raise;
+   end Test_ZIP_Traditional_Encrypted_External_Extracted;
 
    procedure Test_ZIP_LZMA_Created
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -582,6 +734,9 @@ package body Zlib_ZIP_External_Codec_Tests is
       Registration.Register_Routine
         (T, Test_ZIP_BZip2_Extracted'Access,
          "ZIP BZip2 payloads are extracted in-process");
+      Registration.Register_Routine
+        (T, Test_ZIP_Traditional_Encrypted_External_Extracted'Access,
+         "ZIP traditionally encrypted external payloads are extracted with passwords");
       Registration.Register_Routine
         (T, Test_ZIP_LZMA_Created'Access,
          "ZIP LZMA payloads are created in-process");
