@@ -17,19 +17,29 @@ package Zlib.ZIP_Streaming_Extraction is
       Destination_Dir : String;
       Safe_Entry_Name : not null access function
         (Entry_Name : String) return Boolean;
+      Extract_Image   : not null access function
+        (Archive_Image : Byte_Array;
+         Entry_Name    : String;
+         Status        : out Status_Code) return Byte_Array;
       Handled         : out Boolean;
       Status          : out Status_Code);
    --  Extract every member of the ZIP at Archive_Path below Destination_Dir,
    --  creating subdirectories and recreating directory entries.
    --
-   --  Handled is False when the archive needs something this package does not
-   --  stream: a member whose method is neither Stored nor Deflate, an
+   --  Members whose method is neither Stored nor Deflate are not streamed.
+   --  Rather than giving up on the whole archive, such a member is rebuilt as a
+   --  single-entry image holding only its own compressed bytes and handed to
+   --  Extract_Image, so the cost is that one member rather than the archive.
+   --
+   --  Handled is False only when the archive as a whole is out of scope: an
    --  encrypted member, or a container this reader does not recognize. The
    --  caller must then fall back to whole-image extraction, and Status carries
    --  no meaning. When Handled is True, Status is the deterministic result.
    --  @param Archive_Path path to the .zip file
    --  @param Destination_Dir directory to extract into
    --  @param Safe_Entry_Name predicate rejecting unsafe relative entry paths
+   --  @param Extract_Image decodes one entry of a supplied archive image, used
+   --  for members this package does not stream
    --  @param Handled False when the caller must fall back to whole-image
    --  extraction
    --  @param Status Ok on success, otherwise a deterministic failure code

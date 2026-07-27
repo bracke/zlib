@@ -44,12 +44,18 @@ memory is a small fixed amount independent of both the archive size and the
 size of any member. Such an archive extracts in well under a megabyte of stack
 however large it is.
 
-It falls back to whole-image extraction for anything it cannot stream: an
-encrypted member, or any member whose method is neither Stored nor Deflate.
-The fallback is per archive, not per member, because the external codec bridge
-needs the whole image in any case. On that path the old bound applies, roughly
-the archive size plus the largest decompressed member, and a large archive
-again needs a task sized for it.
+Members whose method is neither Stored nor Deflate are not streamed, but they
+no longer spoil the archive: such a member is rebuilt as a single-entry image
+holding only its own compressed bytes and decoded from that, so the cost is
+that one member rather than the whole archive. A mostly-Deflate archive with
+one BZip2 member therefore still extracts in memory proportional to its largest
+member.
+
+Only an encrypted member takes the whole archive out of scope, because
+decrypting needs a password this path is not given. That falls back to
+whole-image extraction, where the old bound applies -- roughly the archive size
+plus the largest decompressed member -- and a large archive again needs a task
+sized for it.
 
 `Extract_Archive_To_Directory` takes an image the caller already holds in
 memory and is unaffected.

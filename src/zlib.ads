@@ -1095,12 +1095,12 @@ package Zlib is
    --  independent of the archive size and of the size of any member, so a large
    --  archive does not need a correspondingly large task stack.
    --
-   --  Anything else falls back to reading the whole image, which needs roughly
-   --  the archive size plus the largest decompressed member and reports
-   --  Insufficient_Memory when that does not fit. The fallback applies to the
-   --  whole archive, not per member: an encrypted member, or any member whose
-   --  method is neither Stored nor Deflate, puts the entire archive on that
-   --  path.
+   --  A member using another method is not streamed, but is rebuilt as a
+   --  single-entry image of its own compressed bytes and decoded from that, so
+   --  it costs that member rather than the archive. Only an encrypted member
+   --  falls back to reading the whole image, which needs roughly the archive
+   --  size plus the largest decompressed member and reports
+   --  Insufficient_Memory when that does not fit.
    --  @param Archive_Path path to a .zip or .7z file
    --  @param Destination_Dir directory to extract into
    --  @param Password archive password, or "" if not encrypted

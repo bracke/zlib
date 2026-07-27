@@ -3983,7 +3983,10 @@ package body Zlib is
                                       .. Payload_First + Payload_Len - 1),
                                    Decode_Status);
                            begin
-                              if Decode_Status /= Ok
+                              if Decode_Status = Insufficient_Memory then
+                                 Status := Insufficient_Memory;
+                                 return Empty;
+                              elsif Decode_Status /= Ok
                                 or else Output'Length /= Plain_Len
                               then
                                  Status := Invalid_Block_Type;
@@ -9340,6 +9343,7 @@ package body Zlib is
            (Archive_Path    => Archive_Path,
             Destination_Dir => Destination_Dir,
             Safe_Entry_Name => Safe_ZIP_Entry_Name'Access,
+            Extract_Image   => Extract_ZIP'Access,
             Handled         => Handled,
             Status          => Status);
          if Handled then

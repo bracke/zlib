@@ -473,6 +473,11 @@ package body Zlib.BZip2_Decoder is
       Free (TT);
 
    exception
+      --  Running out of room to build the decoded block says nothing about the
+      --  block's contents, so it must not be reported as a malformed block.
+      when Storage_Error =>
+         Free (TT);
+         Status := Insufficient_Memory;
       when others =>
          Free (TT);
          Status := Invalid_Block_Type;

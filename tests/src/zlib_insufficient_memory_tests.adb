@@ -1,5 +1,6 @@
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
+with Interfaces;
 with Ada.Unchecked_Deallocation;
 with AUnit.Assertions; use AUnit.Assertions;
 with Zlib; use Zlib;
@@ -336,6 +337,260 @@ package body Zlib_Insufficient_Memory_Tests is
       Ada.Directories.Delete_Tree (Work);
    end Test_File_Helpers_Round_Trip_Beyond_The_Stack;
 
+   --  An archive mixing streamable and non-streamable members must be bounded
+   --  by its largest member, not by the whole archive: one BZip2 member used to
+   --  send the entire archive down the whole-image path.
+   --
+   --  There is no public API that writes a multi-member archive with mixed
+   --  methods, so the fixture is assembled from two single-entry archives: one
+   --  Deflate archive from Zlib.ZIP and one BZip2 payload from
+   --  Zlib.Compress_ZIP_External_File. Their central-directory fields are read
+   --  back rather than assumed.
+   procedure Test_Mixed_Method_Archive_Is_Not_Bounded_By_The_Archive
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Ada.Directories.File_Size;
+      use type Interfaces.Unsigned_16;
+      use type Interfaces.Unsigned_32;
+      use type Interfaces.Unsigned_64;
+
+      Work    : constant String :=
+        Ada.Directories.Current_Directory & "/obj/mixed_archive_check";
+      Archive : constant String := Work & "/mixed.zip";
+      Out_Dir : constant String := Work & "/out";
+      Source  : constant String := Work & "/bz_source.bin";
+
+      Member_Size : constant := 256 * 1024;
+      Deflate_Name : constant String := "a/deflated.txt";
+      BZip2_Name   : constant String := "b/bzipped.txt";
+
+      Outcome : Zlib.Status_Code := Zlib.Ok;
+      Escaped : Boolean := False;
+
+      function U16_At (D : Zlib.Byte_Array; P : Natural)
+        return Interfaces.Unsigned_16
+      is (Interfaces.Unsigned_16 (D (P))
+          or Interfaces.Shift_Left (Interfaces.Unsigned_16 (D (P + 1)), 8));
+
+      function U32_At (D : Zlib.Byte_Array; P : Natural)
+        return Interfaces.Unsigned_32
+      is (Interfaces.Unsigned_32 (D (P))
+          or Interfaces.Shift_Left (Interfaces.Unsigned_32 (D (P + 1)), 8)
+          or Interfaces.Shift_Left (Interfaces.Unsigned_32 (D (P + 2)), 16)
+          or Interfaces.Shift_Left (Interfaces.Unsigned_32 (D (P + 3)), 24));
+
+      procedure Put_U16
+        (D : in out Zlib.Byte_Array; P : Natural;
+         V : Interfaces.Unsigned_16) is
+      begin
+         D (P) := Zlib.Byte (V and 16#FF#);
+         D (P + 1) := Zlib.Byte (Interfaces.Shift_Right (V, 8) and 16#FF#);
+      end Put_U16;
+
+      procedure Put_U32
+        (D : in out Zlib.Byte_Array; P : Natural;
+         V : Interfaces.Unsigned_32) is
+      begin
+         for K in 0 .. 3 loop
+            D (P + K) :=
+              Zlib.Byte (Interfaces.Shift_Right (V, 8 * K) and 16#FF#);
+         end loop;
+      end Put_U32;
+
+      procedure Put_Name
+        (D : in out Zlib.Byte_Array; P : Natural; N : String) is
+      begin
+         for K in N'Range loop
+            D (P + (K - N'First)) := Zlib.Byte (Character'Pos (N (K)));
+         end loop;
+      end Put_Name;
+   begin
+      if Ada.Directories.Exists (Work) then
+         Ada.Directories.Delete_Tree (Work);
+      end if;
+      Ada.Directories.Create_Path (Out_Dir);
+
+      declare
+         Payload : Byte_Array_Access :=
+           new Zlib.Byte_Array (1 .. Member_Size);
+         Build   : Zlib.Status_Code := Zlib.Ok;
+      begin
+         Payload.all := [others => 68];
+
+         --  Deflate member, taken from a single-entry archive so its CRC and
+         --  sizes come from the library rather than being recomputed here.
+         declare
+            One : constant Zlib.Byte_Array :=
+              Zlib.ZIP (Payload.all, Deflate_Name, Status => Build);
+         begin
+            Assert (Build = Zlib.Ok, "fixture: Deflate archive must build");
+
+            --  Write the BZip2 source, then compress it as a ZIP member.
+            declare
+               Output : SIO.File_Type;
+               Raw    : constant Ada.Streams.Stream_Element_Array
+                 (1 .. Ada.Streams.Stream_Element_Offset (Member_Size)) :=
+                   [others => 69];
+            begin
+               SIO.Create (Output, SIO.Out_File, Source);
+               SIO.Write (Output, Raw);
+               SIO.Close (Output);
+            end;
+            Free (Payload);
+
+            declare
+               BZ_Method : Interfaces.Unsigned_16;
+               BZ_CRC    : Interfaces.Unsigned_32;
+               BZ_Unc    : Interfaces.Unsigned_64;
+               BZ_Status : Zlib.Status_Code;
+               BZ_Payload : constant Zlib.Byte_Array :=
+                 Zlib.Compress_ZIP_External_File
+                   (Source, "BZip2", BZ_Method, BZ_CRC, BZ_Unc, BZ_Status);
+
+               --  Deflate member fields, read from the single-entry archive.
+               D_Local     : constant Natural := One'First;
+               D_Name_Len  : constant Natural :=
+                 Natural (U16_At (One, D_Local + 26));
+               D_Extra_Len : constant Natural :=
+                 Natural (U16_At (One, D_Local + 28));
+               D_Method    : constant Interfaces.Unsigned_16 :=
+                 U16_At (One, D_Local + 8);
+               D_CRC       : constant Interfaces.Unsigned_32 :=
+                 U32_At (One, D_Local + 14);
+               D_Comp      : constant Natural :=
+                 Natural (U32_At (One, D_Local + 18));
+               D_Unc       : constant Natural :=
+                 Natural (U32_At (One, D_Local + 22));
+               D_Data      : constant Natural :=
+                 D_Local + 30 + D_Name_Len + D_Extra_Len;
+
+               N1 : constant Natural := Deflate_Name'Length;
+               N2 : constant Natural := BZip2_Name'Length;
+               L1 : constant Natural := 30 + N1 + D_Comp;
+               L2 : constant Natural := 30 + N2 + BZ_Payload'Length;
+               C1 : constant Natural := L1 + L2;
+               C_Size : constant Natural := 46 + N1 + 46 + N2;
+               E_Off  : constant Natural := C1 + C_Size;
+               Image  : Zlib.Byte_Array (1 .. E_Off + 22) := [others => 0];
+            begin
+               Assert (BZ_Status = Zlib.Ok, "fixture: BZip2 member must build");
+               Assert (BZ_Method = 12, "fixture: BZip2 method id");
+
+               Put_U32 (Image, 1, 16#0403_4B50#);
+               Put_U16 (Image, 5, 20);
+               Put_U16 (Image, 9, D_Method);
+               Put_U32 (Image, 15, D_CRC);
+               Put_U32 (Image, 19, Interfaces.Unsigned_32 (D_Comp));
+               Put_U32 (Image, 23, Interfaces.Unsigned_32 (D_Unc));
+               Put_U16 (Image, 27, Interfaces.Unsigned_16 (N1));
+               Put_Name (Image, 31, Deflate_Name);
+               for K in 1 .. D_Comp loop
+                  Image (30 + N1 + K) := One (D_Data + K - 1);
+               end loop;
+
+               Put_U32 (Image, L1 + 1, 16#0403_4B50#);
+               Put_U16 (Image, L1 + 5, 20);
+               Put_U16 (Image, L1 + 9, BZ_Method);
+               Put_U32 (Image, L1 + 15, BZ_CRC);
+               Put_U32
+                 (Image, L1 + 19,
+                  Interfaces.Unsigned_32 (BZ_Payload'Length));
+               Put_U32 (Image, L1 + 23, Interfaces.Unsigned_32 (BZ_Unc));
+               Put_U16 (Image, L1 + 27, Interfaces.Unsigned_16 (N2));
+               Put_Name (Image, L1 + 31, BZip2_Name);
+               for K in 1 .. BZ_Payload'Length loop
+                  Image (L1 + 30 + N2 + K) :=
+                    BZ_Payload (BZ_Payload'First + K - 1);
+               end loop;
+
+               Put_U32 (Image, C1 + 1, 16#0201_4B50#);
+               Put_U16 (Image, C1 + 5, 20);
+               Put_U16 (Image, C1 + 7, 20);
+               Put_U16 (Image, C1 + 11, D_Method);
+               Put_U32 (Image, C1 + 17, D_CRC);
+               Put_U32 (Image, C1 + 21, Interfaces.Unsigned_32 (D_Comp));
+               Put_U32 (Image, C1 + 25, Interfaces.Unsigned_32 (D_Unc));
+               Put_U16 (Image, C1 + 29, Interfaces.Unsigned_16 (N1));
+               Put_U32 (Image, C1 + 43, 0);
+               Put_Name (Image, C1 + 47, Deflate_Name);
+
+               declare
+                  C2 : constant Natural := C1 + 46 + N1;
+               begin
+                  Put_U32 (Image, C2 + 1, 16#0201_4B50#);
+                  Put_U16 (Image, C2 + 5, 20);
+                  Put_U16 (Image, C2 + 7, 20);
+                  Put_U16 (Image, C2 + 11, BZ_Method);
+                  Put_U32 (Image, C2 + 17, BZ_CRC);
+                  Put_U32
+                    (Image, C2 + 21,
+                     Interfaces.Unsigned_32 (BZ_Payload'Length));
+                  Put_U32 (Image, C2 + 25, Interfaces.Unsigned_32 (BZ_Unc));
+                  Put_U16 (Image, C2 + 29, Interfaces.Unsigned_16 (N2));
+                  Put_U32 (Image, C2 + 43, Interfaces.Unsigned_32 (L1));
+                  Put_Name (Image, C2 + 47, BZip2_Name);
+               end;
+
+               Put_U32 (Image, E_Off + 1, 16#0605_4B50#);
+               Put_U16 (Image, E_Off + 9, 2);
+               Put_U16 (Image, E_Off + 11, 2);
+               Put_U32 (Image, E_Off + 13, Interfaces.Unsigned_32 (C_Size));
+               Put_U32 (Image, E_Off + 17, Interfaces.Unsigned_32 (C1));
+
+               declare
+                  Output : SIO.File_Type;
+                  Raw    : Ada.Streams.Stream_Element_Array
+                    (1 .. Ada.Streams.Stream_Element_Offset (Image'Length));
+                  Target : Ada.Streams.Stream_Element_Offset := Raw'First;
+               begin
+                  for B of Image loop
+                     Raw (Target) := Ada.Streams.Stream_Element (B);
+                     Target := Target + 1;
+                  end loop;
+                  SIO.Create (Output, SIO.Out_File, Archive);
+                  SIO.Write (Output, Raw);
+                  SIO.Close (Output);
+               end;
+            end;
+         end;
+      end;
+
+      declare
+         task Runner with Storage_Size => Extract_Stack;
+
+         task body Runner is
+         begin
+            Zlib.Extract_Archive_File_To_Directory
+              (Archive_Path    => Archive,
+               Destination_Dir => Out_Dir,
+               Password        => "",
+               Status          => Outcome);
+         exception
+            when others =>
+               Escaped := True;
+         end Runner;
+      begin
+         null;
+      end;
+
+      Assert (not Escaped, "extraction must not raise out of a status API");
+      Assert
+        (Outcome = Zlib.Ok,
+         "mixed-method archive must extract, got "
+         & Zlib.Status_Image (Outcome));
+      Assert
+        (Ada.Directories.Size (Out_Dir & "/" & Deflate_Name)
+           = Ada.Directories.File_Size (Member_Size),
+         "the streamed Deflate member must be whole");
+      Assert
+        (Ada.Directories.Size (Out_Dir & "/" & BZip2_Name)
+           = Ada.Directories.File_Size (Member_Size),
+         "the bridged BZip2 member must be whole");
+
+      Ada.Directories.Delete_Tree (Work);
+   end Test_Mixed_Method_Archive_Is_Not_Bounded_By_The_Archive;
+
    overriding procedure Register_Tests
      (T : in out Test_Case) is
    begin
@@ -351,6 +606,9 @@ package body Zlib_Insufficient_Memory_Tests is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Test_File_Helpers_Round_Trip_Beyond_The_Stack'Access,
          "Deflate_File and Inflate_File stream beyond the caller's stack");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Test_Mixed_Method_Archive_Is_Not_Bounded_By_The_Archive'Access,
+         "a mixed-method archive is bounded by its largest member");
    end Register_Tests;
 
 end Zlib_Insufficient_Memory_Tests;

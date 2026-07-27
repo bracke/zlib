@@ -66,6 +66,85 @@ package body Zlib.ZIP_Streaming_Extraction is
    end U64_At;
 
    ---------------------------------------------------------------------------
+   --  Little-endian field writers, for rebuilding one member as its own image.
+   ---------------------------------------------------------------------------
+
+   procedure Put_U16
+     (Data : in out Byte_Array; Pos : Natural; Value : Interfaces.Unsigned_16)
+   is
+   begin
+      Data (Pos) := Byte (Value and 16#FF#);
+      Data (Pos + 1) := Byte (Interfaces.Shift_Right (Value, 8) and 16#FF#);
+   end Put_U16;
+
+   procedure Put_U32
+     (Data : in out Byte_Array; Pos : Natural; Value : Interfaces.Unsigned_32)
+   is
+   begin
+      for Offset in 0 .. 3 loop
+         Data (Pos + Offset) :=
+           Byte (Interfaces.Shift_Right (Value, 8 * Offset) and 16#FF#);
+      end loop;
+   end Put_U32;
+
+   procedure Put_Name (Data : in out Byte_Array; Pos : Natural; Name : String)
+   is
+   begin
+      for I in Name'Range loop
+         Data (Pos + (I - Name'First)) := Byte (Character'Pos (Name (I)));
+      end loop;
+   end Put_Name;
+
+   --  Wrap one member's compressed bytes in a minimal single-entry ZIP so the
+   --  codec bridge, which works on whole images, can decode it without the
+   --  original archive being in memory. Mirrors the synthetic image built by
+   --  ZIP_Traditional_Decrypted_External_Image in the root body.
+   function Single_Entry_Image
+     (Entry_Name : String;
+      Method     : Interfaces.Unsigned_16;
+      CRC        : Interfaces.Unsigned_32;
+      Payload    : Byte_Array;
+      Plain_Size : Interfaces.Unsigned_32) return Byte_Array
+   is
+      Name_Len       : constant Natural := Entry_Name'Length;
+      Payload_Len    : constant Natural := Payload'Length;
+      Central_Offset : constant Natural := 30 + Name_Len + Payload_Len;
+      Central_Size   : constant Natural := 46 + Name_Len;
+      EOCD_Offset    : constant Natural := Central_Offset + Central_Size;
+      Image          : Byte_Array (1 .. EOCD_Offset + 22) := [others => 0];
+   begin
+      Put_U32 (Image, 1, 16#0403_4B50#);
+      Put_U16 (Image, 5, 20);
+      Put_U16 (Image, 9, Method);
+      Put_U32 (Image, 15, CRC);
+      Put_U32 (Image, 19, Interfaces.Unsigned_32 (Payload_Len));
+      Put_U32 (Image, 23, Plain_Size);
+      Put_U16 (Image, 27, Interfaces.Unsigned_16 (Name_Len));
+      Put_Name (Image, 31, Entry_Name);
+      for I in 1 .. Payload_Len loop
+         Image (30 + Name_Len + I) := Payload (Payload'First + I - 1);
+      end loop;
+
+      Put_U32 (Image, Central_Offset + 1, 16#0201_4B50#);
+      Put_U16 (Image, Central_Offset + 5, 20);
+      Put_U16 (Image, Central_Offset + 7, 20);
+      Put_U16 (Image, Central_Offset + 11, Method);
+      Put_U32 (Image, Central_Offset + 17, CRC);
+      Put_U32 (Image, Central_Offset + 21, Interfaces.Unsigned_32 (Payload_Len));
+      Put_U32 (Image, Central_Offset + 25, Plain_Size);
+      Put_U16 (Image, Central_Offset + 29, Interfaces.Unsigned_16 (Name_Len));
+      Put_U32 (Image, Central_Offset + 43, 0);
+      Put_Name (Image, Central_Offset + 47, Entry_Name);
+
+      Put_U32 (Image, EOCD_Offset + 1, 16#0605_4B50#);
+      Put_U16 (Image, EOCD_Offset + 9, 1);
+      Put_U16 (Image, EOCD_Offset + 11, 1);
+      Put_U32 (Image, EOCD_Offset + 13, Interfaces.Unsigned_32 (Central_Size));
+      Put_U32 (Image, EOCD_Offset + 17, Interfaces.Unsigned_32 (Central_Offset));
+      return Image;
+   end Single_Entry_Image;
+
+   ---------------------------------------------------------------------------
    --  Positioned reads. Stream_IO indices are 1-based; ZIP offsets are 0-based.
    ---------------------------------------------------------------------------
 
@@ -437,6 +516,104 @@ package body Zlib.ZIP_Streaming_Extraction is
          Status := Unexpected_End_Of_Input;
    end Extract_Member;
 
+   --  A member this package cannot stream is rebuilt as a single-entry image
+   --  holding only its own compressed bytes and handed to the codec bridge, so
+   --  the cost is that member rather than the whole archive.
+   procedure Extract_Foreign_Member
+     (File         : in out SIO.File_Type;
+      File_Size    : Interfaces.Unsigned_64;
+      Local_Offset : Interfaces.Unsigned_64;
+      Method       : Interfaces.Unsigned_16;
+      Comp_Size    : Interfaces.Unsigned_64;
+      Unc_Size     : Interfaces.Unsigned_64;
+      Expected_CRC : Interfaces.Unsigned_32;
+      Entry_Name   : String;
+      Target_Path  : String;
+      Extract_Image : not null access function
+        (Archive_Image : Byte_Array;
+         Entry_Name    : String;
+         Status        : out Status_Code) return Byte_Array;
+      Status       : out Status_Code)
+   is
+      Header     : Byte_Array (0 .. 29);
+      Header_Ok  : Boolean;
+      Data_Start : Interfaces.Unsigned_64;
+   begin
+      Status := Ok;
+
+      if Local_Offset + 30 > File_Size
+        or else Comp_Size > Interfaces.Unsigned_64 (Natural'Last)
+        or else Unc_Size > Interfaces.Unsigned_64 (Interfaces.Unsigned_32'Last)
+      then
+         Status := Unexpected_End_Of_Input;
+         return;
+      end if;
+
+      Read_At (File, Local_Offset, Header, Header_Ok);
+      if not Header_Ok or else U32_At (Header, 0) /= Local_Signature then
+         Status := Unexpected_End_Of_Input;
+         return;
+      end if;
+
+      Data_Start := Local_Offset + 30
+        + Interfaces.Unsigned_64 (U16_At (Header, 26))
+        + Interfaces.Unsigned_64 (U16_At (Header, 28));
+
+      if Data_Start + Comp_Size > File_Size then
+         Status := Unexpected_End_Of_Input;
+         return;
+      end if;
+
+      declare
+         Payload : Byte_Array (1 .. Natural (Comp_Size));
+         Read_Ok : Boolean;
+      begin
+         Read_At (File, Data_Start, Payload, Read_Ok);
+         if not Read_Ok then
+            Status := Unexpected_End_Of_Input;
+            return;
+         end if;
+
+         declare
+            Image : constant Byte_Array :=
+              Single_Entry_Image
+                (Entry_Name => Entry_Name,
+                 Method     => Method,
+                 CRC        => Expected_CRC,
+                 Payload    => Payload,
+                 Plain_Size => Interfaces.Unsigned_32 (Unc_Size));
+            Decoded : constant Byte_Array :=
+              Extract_Image (Image, Entry_Name, Status);
+         begin
+            if Status /= Ok then
+               return;
+            end if;
+
+            declare
+               Output : SIO.File_Type;
+               Raw    : Ada.Streams.Stream_Element_Array
+                 (1 .. Ada.Streams.Stream_Element_Offset (Decoded'Length));
+               Target : Ada.Streams.Stream_Element_Offset := Raw'First;
+            begin
+               for B of Decoded loop
+                  Raw (Target) := Ada.Streams.Stream_Element (B);
+                  Target := Target + 1;
+               end loop;
+               SIO.Create (Output, SIO.Out_File, Target_Path);
+               if Raw'Length > 0 then
+                  SIO.Write (Output, Raw);
+               end if;
+               SIO.Close (Output);
+            end;
+         end;
+      end;
+   exception
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+      when others =>
+         Status := Unsupported_Method;
+   end Extract_Foreign_Member;
+
    ---------------------------------------------------------------------------
    --  Whole-archive extraction.
    ---------------------------------------------------------------------------
@@ -446,6 +623,10 @@ package body Zlib.ZIP_Streaming_Extraction is
       Destination_Dir : String;
       Safe_Entry_Name : not null access function
         (Entry_Name : String) return Boolean;
+      Extract_Image   : not null access function
+        (Archive_Image : Byte_Array;
+         Entry_Name    : String;
+         Status        : out Status_Code) return Byte_Array;
       Handled         : out Boolean;
       Status          : out Status_Code)
    is
@@ -490,22 +671,19 @@ package body Zlib.ZIP_Streaming_Extraction is
             return;
          end if;
 
-         --  First pass: refuse the whole archive unless every member is one
-         --  this package streams. Falling back per member is not possible,
-         --  because the external codec bridge needs the whole image anyway.
+         --  First pass: only an encrypted member takes the whole archive out
+         --  of scope, because decrypting needs the password this entry point
+         --  is not given. Other methods are handled per member below.
          for I in 1 .. CD_Count loop
             exit when Pos + 45 > Central'Last;
             exit when U32_At (Central, Pos) /= Central_Signature;
             declare
                Flags     : constant Interfaces.Unsigned_16 := U16_At (Central, Pos + 8);
-               Method    : constant Interfaces.Unsigned_16 := U16_At (Central, Pos + 10);
                Name_Len  : constant Natural := Natural (U16_At (Central, Pos + 28));
                Extra_Len : constant Natural := Natural (U16_At (Central, Pos + 30));
                Cmt_Len   : constant Natural := Natural (U16_At (Central, Pos + 32));
             begin
-               if (Flags and 1) /= 0
-                 or else (Method /= Method_Stored and then Method /= Method_Deflate)
-               then
+               if (Flags and 1) /= 0 then
                   SIO.Close (File);
                   return;
                end if;
@@ -564,16 +742,33 @@ package body Zlib.ZIP_Streaming_Extraction is
                      else
                         Ada.Directories.Create_Path
                           (Ada.Directories.Containing_Directory (Target));
-                        Extract_Member
-                          (File         => File,
-                           File_Size    => File_Size,
-                           Local_Offset => Local_Offset,
-                           Method       => Method,
-                           Comp_Size    => Comp,
-                           Unc_Size     => Unc,
-                           Expected_CRC => CRC,
-                           Target_Path  => Target,
-                           Status       => Status);
+                        if Method = Method_Stored
+                          or else Method = Method_Deflate
+                        then
+                           Extract_Member
+                             (File         => File,
+                              File_Size    => File_Size,
+                              Local_Offset => Local_Offset,
+                              Method       => Method,
+                              Comp_Size    => Comp,
+                              Unc_Size     => Unc,
+                              Expected_CRC => CRC,
+                              Target_Path  => Target,
+                              Status       => Status);
+                        else
+                           Extract_Foreign_Member
+                             (File         => File,
+                              File_Size    => File_Size,
+                              Local_Offset => Local_Offset,
+                              Method       => Method,
+                              Comp_Size    => Comp,
+                              Unc_Size     => Unc,
+                              Expected_CRC => CRC,
+                              Entry_Name   => Full,
+                              Target_Path  => Target,
+                              Extract_Image => Extract_Image,
+                              Status       => Status);
+                        end if;
                         exit when Status /= Ok;
                      end if;
                   end;
