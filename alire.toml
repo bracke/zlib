@@ -5,7 +5,7 @@ version = "0.1.0"
 authors = ["Bent Bracke"]
 maintainers = ["Bent Bracke <bent@bracke.dk>"]
 maintainers-logins = ["bracke"]
-licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
+licenses = "MIT"
 website = ""
 tags = ["zlib", "deflate", "gzip", "compression", "ada"]
 
