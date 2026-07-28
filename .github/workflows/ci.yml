@@ -14,16 +14,10 @@ jobs:
         uses: actions/checkout@v7
         with:
           path: zlib
-      - name: Check out project_tools sibling
-        uses: actions/checkout@v7
+      - name: Check out sibling crates (transitive pin closure)
+        uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
         with:
-          repository: ${{ github.repository_owner }}/project_tools
-          path: project_tools
-      - name: Check out cryptolib sibling
-        uses: actions/checkout@v7
-        with:
-          repository: ${{ github.repository_owner }}/cryptolib
-          path: cryptolib
+          root: zlib
       - name: Set up Alire
         # Pin the toolchain the manifests require. setup-alire@v5 defaults to
         # alr 2.1.0, whose index carries gnat_native 15.2.1; v4's alr 2.0.2 cannot
