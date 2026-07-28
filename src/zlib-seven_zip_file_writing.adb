@@ -118,6 +118,9 @@ package body Zlib.Seven_Zip_File_Writing is
          end if;
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
       when others =>
          Status := Output_File_Error;
    end Write_File_Archive;
@@ -206,6 +209,9 @@ package body Zlib.Seven_Zip_File_Writing is
         (Input_Path, Output_Path, Ada.Directories.Simple_Name (Input_Path),
          Read_File, Write_File, Source_Metadata, Status);
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
       when others =>
          Status := Input_File_Error;
    end Write_PPMd_File_With_Basename;
@@ -426,6 +432,9 @@ package body Zlib.Seven_Zip_File_Writing is
          end;
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
       when others =>
          Status := Output_File_Error;
    end Write_Stored_File_List;
@@ -614,6 +623,9 @@ package body Zlib.Seven_Zip_File_Writing is
          end;
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
       when others =>
          Status := Output_File_Error;
    end Write_Compressed_File_List;

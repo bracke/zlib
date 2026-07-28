@@ -409,6 +409,10 @@ package body Zlib.LZMA2_Decoder is
       when Constraint_Error =>
          Status := Unexpected_End_Of_Input;
          return Empty;
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;

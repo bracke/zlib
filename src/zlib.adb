@@ -2448,6 +2448,13 @@ package body Zlib is
          Status := Unsupported_Method;
          return Empty_Result;
 
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         if Is_Open (Filter) then
+            Compress_Close (Filter, Ignore_Error => True);
+         end if;
+         Status := Insufficient_Memory;
+         return Empty_Result;
       when others =>
          if Is_Open (Filter) then
             Compress_Close (Filter, Ignore_Error => True);
@@ -3394,6 +3401,14 @@ package body Zlib is
       return Read_File (Path, Status);
 
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         declare
+            Empty : constant Byte_Array (1 .. 0) := [others => 0];
+         begin
+            return Empty;
+         end;
       when others =>
          Status := Input_File_Error;
          declare
@@ -4046,6 +4061,10 @@ package body Zlib is
       Status := (if Found_BZip2_Name then Invalid_Block_Type else Unsupported_Method);
       return Empty;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -4408,6 +4427,10 @@ package body Zlib is
       Status := (if Found_PPMd_Name then Invalid_Block_Type else Unsupported_Method);
       return Empty;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -4952,6 +4975,10 @@ package body Zlib is
       end if;
       return Empty;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -5306,6 +5333,10 @@ package body Zlib is
       Status := Unsupported_Method;
       return Empty;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -5415,6 +5446,10 @@ package body Zlib is
          end;
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+      return Empty;
       when others =>
          Status := Unsupported_Method;
       return Empty;
@@ -5530,6 +5565,10 @@ package body Zlib is
          end;
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -6227,6 +6266,10 @@ package body Zlib is
          end;
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -9194,6 +9237,10 @@ package body Zlib is
       when Constraint_Error =>
          Status := Unexpected_End_Of_Input;
          return Empty;
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -10341,6 +10388,10 @@ package body Zlib is
            Metadata => Metadata);
 
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty_Result;
       when others =>
          Status := Unexpected_End_Of_Input;
          return Empty_Result;
@@ -11441,6 +11492,9 @@ package body Zlib is
       Write_File (Output_Path, To_Byte_Array (Output), Write_Status);
       Status := Write_Status;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
       when others =>
          Status := Output_File_Error;
    end GZip_File_Members;

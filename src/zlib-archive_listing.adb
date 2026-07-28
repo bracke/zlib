@@ -22,6 +22,12 @@ package body Zlib.Archive_Listing is
          return List_ZIP (Archive_Image, Status);
       end if;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return No : Archive_Entry_Array (1 .. 0) do
+            null;
+         end return;
       when others =>
          Status := Unsupported_Method;
          return No : Archive_Entry_Array (1 .. 0) do

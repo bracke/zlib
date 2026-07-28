@@ -38,6 +38,10 @@ package body Zlib.Seven_Zip_BCJ2_Writing is
              (Streams, Entry_Name, Input'Length, Compute_CRC32 (Input), Status);
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;

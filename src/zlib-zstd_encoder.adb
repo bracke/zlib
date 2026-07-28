@@ -766,6 +766,12 @@ package body Zlib.Zstd_Encoder is
       return To_Array (Frame);
 
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Free (Head);
+         Free (Prev);
+         Status := Insufficient_Memory;
+         return [1 .. 0 => 0];
       when others =>
          Free (Head);
          Free (Prev);

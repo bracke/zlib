@@ -331,6 +331,10 @@ package body Zlib.LZMA_Decoder is
          end;
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;

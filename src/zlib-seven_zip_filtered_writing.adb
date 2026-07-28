@@ -59,6 +59,10 @@ package body Zlib.Seven_Zip_Filtered_Writing is
               Codec_Method, Delta_Distance, Metadata, Status, LZMA_Props);
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;

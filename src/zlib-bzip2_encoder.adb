@@ -449,6 +449,10 @@ package body Zlib.BZip2_Encoder is
       Cleanup;
 
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Cleanup;
+         Status := Insufficient_Memory;
       when others =>
          Cleanup;
          Status := Invalid_Block_Type;
@@ -554,6 +558,11 @@ package body Zlib.BZip2_Encoder is
       return Writer.To_Array (W);
 
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Free (Block);
+         Status := Insufficient_Memory;
+         return [1 .. 0 => 0];
       when others =>
          Free (Block);
          Status := Invalid_Block_Type;

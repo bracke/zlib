@@ -438,6 +438,10 @@ package body Zlib.Seven_Zip_Container is
          return Build_Archive (Header_Image, Empty);
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -517,6 +521,10 @@ package body Zlib.Seven_Zip_Container is
          end;
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -632,6 +640,10 @@ package body Zlib.Seven_Zip_Container is
          end;
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -757,6 +769,10 @@ package body Zlib.Seven_Zip_Container is
          end;
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -882,6 +898,10 @@ package body Zlib.Seven_Zip_Container is
          return Build_Archive (Header_Image, Payload);
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -1067,6 +1087,10 @@ package body Zlib.Seven_Zip_Container is
          return Build_Archive (Header_Image, Payload);
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -1145,6 +1169,10 @@ package body Zlib.Seven_Zip_Container is
          return Build_Archive (Header_Image, Packed_Data);
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -1243,6 +1271,10 @@ package body Zlib.Seven_Zip_Container is
          return Build_Archive (Header_Image, Payload);
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -1329,6 +1361,10 @@ package body Zlib.Seven_Zip_Container is
          return Build_Archive (ESI_Image, Payload);
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;

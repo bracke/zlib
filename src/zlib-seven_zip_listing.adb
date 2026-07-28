@@ -525,6 +525,10 @@ package body Zlib.Seven_Zip_Listing is
          end;
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return No;
       when others =>
          Status := Unsupported_Method;
          return No;
