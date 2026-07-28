@@ -102,6 +102,7 @@ package body Zlib.ZIP_Streaming_Extraction is
    function Single_Entry_Image
      (Entry_Name : String;
       Flags      : Interfaces.Unsigned_16;
+      Mod_Time   : Interfaces.Unsigned_16;
       Method     : Interfaces.Unsigned_16;
       CRC        : Interfaces.Unsigned_32;
       Payload    : Byte_Array;
@@ -120,6 +121,11 @@ package body Zlib.ZIP_Streaming_Extraction is
       --  bridge has no way to know the payload needs decrypting.
       Put_U16 (Image, 7, Flags);
       Put_U16 (Image, 9, Method);
+      --  Carried for the same reason as the flags. When bit 3 is set the
+      --  traditional-encryption check byte holds the high byte of this time
+      --  rather than of the CRC, so a rebuilt entry that zeroed it turned a
+      --  correct password into a rejected one.
+      Put_U16 (Image, 11, Mod_Time);
       Put_U32 (Image, 15, CRC);
       Put_U32 (Image, 19, Interfaces.Unsigned_32 (Payload_Len));
       Put_U32 (Image, 23, Plain_Size);
@@ -134,6 +140,7 @@ package body Zlib.ZIP_Streaming_Extraction is
       Put_U16 (Image, Central_Offset + 7, 20);
       Put_U16 (Image, Central_Offset + 9, Flags);
       Put_U16 (Image, Central_Offset + 11, Method);
+      Put_U16 (Image, Central_Offset + 13, Mod_Time);
       Put_U32 (Image, Central_Offset + 17, CRC);
       Put_U32 (Image, Central_Offset + 21, Interfaces.Unsigned_32 (Payload_Len));
       Put_U32 (Image, Central_Offset + 25, Plain_Size);
@@ -587,6 +594,7 @@ package body Zlib.ZIP_Streaming_Extraction is
               Single_Entry_Image
                 (Entry_Name => Entry_Name,
                  Flags      => Flags,
+                 Mod_Time   => U16_At (Header, 10),
                  Method     => Method,
                  CRC        => Expected_CRC,
                  Payload    => Payload,

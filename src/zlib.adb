@@ -3024,6 +3024,12 @@ package body Zlib is
 
          when Insufficient_Memory           =>
             return "insufficient memory for the decoded result";
+
+         when Password_Required             =>
+            return "password required";
+
+         when Invalid_Password              =>
+            return "invalid password";
       end case;
    end Status_Image;
 
@@ -3751,6 +3757,46 @@ package body Zlib is
          return False;
    end ZIP_Name_Equals;
 
+   --  Does this member carry the traditional-encryption flag?
+   --
+   --  Asked so that a missing password can be reported as a missing password
+   --  rather than as an unsupported method. Reads the central directory only.
+   function ZIP_Entry_Is_Encrypted
+     (Archive_Image : Byte_Array;
+      Entry_Name    : String) return Boolean
+   is
+      Pos : Natural := Archive_Image'First;
+   begin
+      while Pos <= Archive_Image'Last - 45 loop
+         if ZIP_U32_At (Archive_Image, Pos) = 16#0201_4B50# then
+            declare
+               Flags    : constant Interfaces.Unsigned_16 :=
+                 ZIP_U16_At (Archive_Image, Pos + 8);
+               Name_Len : constant Natural :=
+                 Natural (ZIP_U16_At (Archive_Image, Pos + 28));
+               Extra    : constant Natural :=
+                 Natural (ZIP_U16_At (Archive_Image, Pos + 30));
+               Comment  : constant Natural :=
+                 Natural (ZIP_U16_At (Archive_Image, Pos + 32));
+            begin
+               if ZIP_Name_Equals
+                    (Archive_Image, Pos + 46, Name_Len, Entry_Name)
+               then
+                  return (Flags and 1) /= 0;
+               end if;
+               Pos := Pos + 46 + Name_Len + Extra + Comment;
+            end;
+         else
+            Pos := Pos + 1;
+         end if;
+      end loop;
+
+      return False;
+   exception
+      when others =>
+         return False;
+   end ZIP_Entry_Is_Encrypted;
+
    type ZIP_Crypto_State is record
       Key0 : Interfaces.Unsigned_32 := 16#1234_5678#;
       Key1 : Interfaces.Unsigned_32 := 16#2345_6789#;
@@ -3958,7 +4004,7 @@ package body Zlib is
 
                   Found_BZip2_Name := True;
                   if (Flags and 1) /= 0 then
-                     Status := Unsupported_Method;
+                     Status := Password_Required;
                      return Empty;
                   end if;
 
@@ -4144,7 +4190,7 @@ package body Zlib is
 
                   Found_Zstd_Name := True;
                   if (Flags and 1) /= 0 then
-                     Status := Unsupported_Method;
+                     Status := Password_Required;
                      return Empty;
                   end if;
 
@@ -4328,7 +4374,7 @@ package body Zlib is
 
                   Found_PPMd_Name := True;
                   if (Flags and 1) /= 0 then
-                     Status := Unsupported_Method;
+                     Status := Password_Required;
                      return Empty;
                   end if;
 
@@ -4539,7 +4585,7 @@ package body Zlib is
 
                   Found_LZMA_Name := True;
                   if (Flags and 1) /= 0 then
-                     Status := Unsupported_Method;
+                     Status := Password_Required;
                      return Empty;
                   end if;
 
@@ -4827,14 +4873,46 @@ package body Zlib is
                               end loop;
 
                               ZIP_Decrypt_In_Place (Crypto, Decrypted);
-                              if Decrypted (12) /=
-                                Byte
-                                  (Interfaces.Shift_Right (Crc, 24)
-                                   and 16#FF#)
-                              then
-                                 Status := Invalid_Checksum;
-                                 return Empty;
-                              end if;
+
+                              --  The last byte of the decryption header is a
+                              --  cheap pre-filter on the password. It normally
+                              --  carries the high byte of the CRC, but when
+                              --  general-purpose bit 3 is set the sizes and
+                              --  CRC follow the payload in a data descriptor
+                              --  and are not known here, so it carries the
+                              --  high byte of the DOS modification time
+                              --  instead. Info-ZIP's "zip -P" writes exactly
+                              --  that, and checking it against the CRC turned
+                              --  a correct password into Invalid_Checksum.
+                              --
+                              --  Either value is accepted: some writers set
+                              --  bit 3 and still use the CRC. Nothing is lost
+                              --  by allowing both, because this byte only
+                              --  filters -- the CRC32 over the decoded member
+                              --  is what actually decides.
+                              declare
+                                 CRC_Check  : constant Byte :=
+                                   Byte
+                                     (Interfaces.Shift_Right (Crc, 24)
+                                      and 16#FF#);
+                                 Time_Check : constant Byte :=
+                                   Byte
+                                     (Interfaces.Shift_Right
+                                        (Interfaces.Unsigned_32
+                                           (ZIP_U16_At
+                                              (Archive_Image, Local + 10)),
+                                         8)
+                                      and 16#FF#);
+                              begin
+                                 if Decrypted (12) /= CRC_Check
+                                   and then
+                                     ((Flags and 8) = 0
+                                      or else Decrypted (12) /= Time_Check)
+                                 then
+                                    Status := Invalid_Password;
+                                    return Empty;
+                                 end if;
+                              end;
 
                               declare
                                  Central_Offset : constant Natural :=
@@ -4945,6 +5023,16 @@ package body Zlib is
       Empty        : constant Byte_Array (1 .. 0) := [others => 0];
    begin
       Status := Unsupported_Method;
+
+      --  An encrypted entry reached without a password is a missing password,
+      --  not an unsupported method. The distinction is the caller's to act on:
+      --  a password can be asked for, a codec cannot.
+      if Password'Length = 0
+        and then ZIP_Entry_Is_Encrypted (Archive_Image, Entry_Name)
+      then
+         Status := Password_Required;
+         return Empty;
+      end if;
 
       if Password'Length /= 0 then
          declare
@@ -5284,7 +5372,11 @@ package body Zlib is
               (Archive_Image, Name_First, Name_Len, Entry_Name)
             then
                if (Flags and 1) /= 0 then
-                  Status := Unsupported_Method;   --  encrypted
+                  --  Encrypted. This entry point takes no password, so say
+                  --  that one is needed rather than blaming the method: the
+                  --  method is very often Stored or Deflate, which this
+                  --  reader handles perfectly well once it can decrypt.
+                  Status := Password_Required;
                   return Empty;
                end if;
                if Method /= 0 and then Method /= 8 then
@@ -8891,9 +8983,10 @@ package body Zlib is
                                        IV (J) := Folder_AES_IV
                                          (Target_Folder_Index, C) (J);
                                     end loop;
-                                    if Password'Length = 0
-                                      or else Payload'Length mod 16 /= 0
-                                    then
+                                    if Password'Length = 0 then
+                                       Status := Password_Required;
+                                       return Empty;
+                                    elsif Payload'Length mod 16 /= 0 then
                                        Status := Unsupported_Method;
                                        return Empty;
                                     end if;
@@ -8916,10 +9009,34 @@ package body Zlib is
                                        end if;
                                        --  Drop the AES block padding; the inner
                                        --  coder gets exactly the AES output.
-                                       return Finish_Decoded_Payload
-                                         (Decrypted
-                                            (Decrypted'First ..
-                                             Decrypted'First + AES_Out - 1));
+                                       declare
+                                          Plain : constant Byte_Array :=
+                                            Finish_Decoded_Payload
+                                              (Decrypted
+                                                 (Decrypted'First ..
+                                                  Decrypted'First
+                                                  + AES_Out - 1));
+                                       begin
+                                          --  A wrong password decrypts to
+                                          --  noise, and the inner coder can
+                                          --  only report what it made of the
+                                          --  noise -- typically an unsupported
+                                          --  method, which is untrue and
+                                          --  unactionable. Here it is known
+                                          --  that an AES folder was decrypted
+                                          --  under a supplied password, so the
+                                          --  password is the explanation worth
+                                          --  giving. A genuinely damaged
+                                          --  archive lands here too; there is
+                                          --  no MAC in this format to tell the
+                                          --  two apart, and stock 7z hedges
+                                          --  the same way.
+                                          if Status /= Ok then
+                                             Status := Invalid_Password;
+                                             return Empty;
+                                          end if;
+                                          return Plain;
+                                       end;
                                     end;
                                  end;
 
@@ -9904,20 +10021,18 @@ package body Zlib is
         [others => (others => <>)];
       Handled : Boolean := False;
    begin
-      --  A ZIP's catalogue lives in its central directory, so it can be read
-      --  without the payloads. Only a password-bearing archive or a container
-      --  this reader does not recognize needs the whole image.
-      if Password'Length = 0 then
-         declare
-            Listed : constant Archive_Entry_Array :=
-              Zlib.ZIP_Streaming_Extraction.List_Entries
-                (Archive_Path, Handled, Status);
-         begin
-            if Handled then
-               return Listed;
-            end if;
-         end;
-      end if;
+      --  A ZIP's catalogue lives in its central directory, which is not
+      --  encrypted whatever its members are, so a password is beside the
+      --  point here and must not cost the whole image.
+      declare
+         Listed : constant Archive_Entry_Array :=
+           Zlib.ZIP_Streaming_Extraction.List_Entries
+             (Archive_Path, Handled, Status);
+      begin
+         if Handled then
+            return Listed;
+         end if;
+      end;
 
       --  A native 7z catalogue is also reachable from a few regions rather
       --  than the whole file.
@@ -10057,81 +10172,79 @@ package body Zlib is
       --  A native 7z is catalogued from its header and then taken one member
       --  at a time, so the archive is never read whole. Each member still
       --  costs its folder, which is the format's own bound.
-      if Password'Length = 0 then
-         declare
-            List_Handled : Boolean := False;
-            List_Status  : Status_Code := Ok;
-            Entries      : constant Archive_Entry_Array :=
-              List_Seven_Zip_File_Entries
-                (Archive_Path, "", List_Handled, List_Status);
-            All_Handled  : Boolean := True;
-         begin
-            if List_Handled and then List_Status = Ok then
-               for E of Entries loop
+      declare
+         List_Handled : Boolean := False;
+         List_Status  : Status_Code := Ok;
+         Entries      : constant Archive_Entry_Array :=
+           List_Seven_Zip_File_Entries
+             (Archive_Path, Password, List_Handled, List_Status);
+         All_Handled  : Boolean := True;
+      begin
+         if List_Handled and then List_Status = Ok then
+            for E of Entries loop
+               declare
+                  Name : constant String :=
+                    Ada.Strings.Unbounded.To_String (E.Name);
+                  Rel  : constant String :=
+                    (if Name'Length > 0 and then Name (Name'Last) = '/'
+                     then Name (Name'First .. Name'Last - 1) else Name);
+               begin
+                  if Rel'Length = 0 or else not Safe_ZIP_Entry_Name (Rel)
+                  then
+                     Status := Unsupported_Method;
+                     return;
+                  end if;
+
                   declare
-                     Name : constant String :=
-                       Ada.Strings.Unbounded.To_String (E.Name);
-                     Rel  : constant String :=
-                       (if Name'Length > 0 and then Name (Name'Last) = '/'
-                        then Name (Name'First .. Name'Last - 1) else Name);
+                     Target : constant String :=
+                       Destination_Dir & "/" & Rel;
                   begin
-                     if Rel'Length = 0 or else not Safe_ZIP_Entry_Name (Rel)
-                     then
-                        Status := Unsupported_Method;
-                        return;
+                     if E.Is_Directory then
+                        Ada.Directories.Create_Path (Target);
+                     else
+                        Ada.Directories.Create_Path
+                          (Ada.Directories.Containing_Directory (Target));
+
+                        declare
+                           Entry_Handled : Boolean := False;
+                           Entry_Kind    : Seven_Zip_Entry_Kind :=
+                             Seven_Zip_File_Entry;
+                           Entry_Meta    : Seven_Zip_Entry_Metadata;
+                           Payload       : constant Byte_Array :=
+                             Extract_Seven_Zip_File_Entry
+                               (Archive_Path, Name, Password, Entry_Handled,
+                                Status, Entry_Kind, Entry_Meta);
+                           Write_Status  : Status_Code := Ok;
+                        begin
+                           --  Declining is a property of the archive, not
+                           --  of one member, so the whole extraction goes
+                           --  back to the image path.
+                           if not Entry_Handled then
+                              All_Handled := False;
+                              exit;
+                           end if;
+
+                           if Status /= Ok then
+                              return;
+                           end if;
+
+                           Write_File (Target, Payload, Write_Status);
+                           if Write_Status /= Ok then
+                              Status := Write_Status;
+                              return;
+                           end if;
+                        end;
                      end if;
-
-                     declare
-                        Target : constant String :=
-                          Destination_Dir & "/" & Rel;
-                     begin
-                        if E.Is_Directory then
-                           Ada.Directories.Create_Path (Target);
-                        else
-                           Ada.Directories.Create_Path
-                             (Ada.Directories.Containing_Directory (Target));
-
-                           declare
-                              Entry_Handled : Boolean := False;
-                              Entry_Kind    : Seven_Zip_Entry_Kind :=
-                                Seven_Zip_File_Entry;
-                              Entry_Meta    : Seven_Zip_Entry_Metadata;
-                              Payload       : constant Byte_Array :=
-                                Extract_Seven_Zip_File_Entry
-                                  (Archive_Path, Name, "", Entry_Handled,
-                                   Status, Entry_Kind, Entry_Meta);
-                              Write_Status  : Status_Code := Ok;
-                           begin
-                              --  Declining is a property of the archive, not
-                              --  of one member, so the whole extraction goes
-                              --  back to the image path.
-                              if not Entry_Handled then
-                                 All_Handled := False;
-                                 exit;
-                              end if;
-
-                              if Status /= Ok then
-                                 return;
-                              end if;
-
-                              Write_File (Target, Payload, Write_Status);
-                              if Write_Status /= Ok then
-                                 Status := Write_Status;
-                                 return;
-                              end if;
-                           end;
-                        end if;
-                     end;
                   end;
-               end loop;
+               end;
+            end loop;
 
-               if All_Handled then
-                  Status := Ok;
-                  return;
-               end if;
+            if All_Handled then
+               Status := Ok;
+               return;
             end if;
-         end;
-      end if;
+         end if;
+      end;
 
       Zlib.Archive_Directory_Extraction.Extract_File_To_Directory
         (Archive_Path, Destination_Dir, Password, Read_File'Access,

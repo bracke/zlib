@@ -138,9 +138,15 @@ package body Zlib_ZIP_External_Codec_Tests is
       end loop;
    end ZIP_Encrypt_In_Place;
 
+   --  Check is the last byte of the decryption header. It normally carries
+   --  the high byte of the CRC, but a writer that sets general-purpose bit 3
+   --  puts the high byte of the DOS time there instead, because the CRC is
+   --  not known until the payload has been written. Info-ZIP's "zip -P" does
+   --  exactly that, so a reader that only ever checks the CRC rejects a
+   --  correct password.
    function ZIP_Traditional_Encrypted
      (Payload  : Zlib.Byte_Array;
-      Crc32    : Interfaces.Unsigned_32;
+      Check    : Zlib.Byte;
       Password : String) return Zlib.Byte_Array
    is
       Result : Zlib.Byte_Array (1 .. Payload'Length + 12);
@@ -149,8 +155,7 @@ package body Zlib_ZIP_External_Codec_Tests is
       for I in 1 .. 11 loop
          Result (I) := Zlib.Byte (I);
       end loop;
-      Result (12) :=
-        Zlib.Byte (Interfaces.Shift_Right (Crc32, 24) and 16#FF#);
+      Result (12) := Check;
       for I in Payload'Range loop
          Result (12 + I - Payload'First + 1) := Payload (I);
       end loop;
@@ -240,11 +245,19 @@ package body Zlib_ZIP_External_Codec_Tests is
       Entry_Name      : String;
       Central_ZIP64   : Boolean := False;
       Encrypted       : Boolean := False;
-      Password        : String := "") return Zlib.Byte_Array
+      Password        : String := "";
+      Data_Descriptor : Boolean := False;
+      Mod_Time        : Interfaces.Unsigned_16 := 0) return Zlib.Byte_Array
    is
+      Flags            : constant Interfaces.Unsigned_16 :=
+        (if Encrypted then 1 else 0) + (if Data_Descriptor then 8 else 0);
+      Check_Byte       : constant Zlib.Byte :=
+        (if Data_Descriptor
+         then Zlib.Byte (Interfaces.Shift_Right (Mod_Time, 8) and 16#FF#)
+         else Zlib.Byte (Interfaces.Shift_Right (Crc32, 24) and 16#FF#));
       Wire_Payload     : constant Zlib.Byte_Array :=
         (if Encrypted
-         then ZIP_Traditional_Encrypted (Payload, Crc32, Password)
+         then ZIP_Traditional_Encrypted (Payload, Check_Byte, Password)
          else Payload);
       Name_Length      : constant Natural := Entry_Name'Length;
       Extra_Length     : constant Natural := (if Central_ZIP64 then 20 else 0);
@@ -261,8 +274,9 @@ package body Zlib_ZIP_External_Codec_Tests is
    begin
       Put_U32 (Archive, 1, 16#0403_4B50#);
       Put_U16 (Archive, 5, (if Central_ZIP64 then 45 else 20));
-      Put_U16 (Archive, 7, (if Encrypted then 1 else 0));
+      Put_U16 (Archive, 7, Flags);
       Put_U16 (Archive, 9, Method);
+      Put_U16 (Archive, 11, Mod_Time);
       Put_U32 (Archive, 15, Crc32);
       Put_U32 (Archive, 19, Compressed_32);
       Put_U32 (Archive, 23, Uncompressed_32);
@@ -275,8 +289,9 @@ package body Zlib_ZIP_External_Codec_Tests is
       Put_U32 (Archive, Central_Offset + 1, 16#0201_4B50#);
       Put_U16 (Archive, Central_Offset + 5, 45);
       Put_U16 (Archive, Central_Offset + 7, (if Central_ZIP64 then 45 else 20));
-      Put_U16 (Archive, Central_Offset + 9, (if Encrypted then 1 else 0));
+      Put_U16 (Archive, Central_Offset + 9, Flags);
       Put_U16 (Archive, Central_Offset + 11, Method);
+      Put_U16 (Archive, Central_Offset + 13, Mod_Time);
       Put_U32 (Archive, Central_Offset + 17, Crc32);
       Put_U32
         (Archive, Central_Offset + 21,
@@ -466,16 +481,18 @@ package body Zlib_ZIP_External_Codec_Tests is
                 (Archive, "payload.bin", "", Status);
          begin
             Assert
-              (Status /= Zlib.Ok and then Missing'Length = 0,
-               "encrypted ZIP external requires password");
+              (Status = Zlib.Password_Required and then Missing'Length = 0,
+               "encrypted ZIP external requires password, got "
+               & Zlib.Status_Image (Status));
             declare
                Wrong : constant Zlib.Byte_Array :=
                  Zlib.Extract_ZIP_External_Entry
                    (Archive, "payload.bin", "wrong", Status);
             begin
                Assert
-                 (Status /= Zlib.Ok and then Wrong'Length = 0,
-                  "encrypted ZIP external rejects wrong password");
+                 (Status = Zlib.Invalid_Password and then Wrong'Length = 0,
+                  "encrypted ZIP external rejects wrong password, got "
+                  & Zlib.Status_Image (Status));
             end;
             declare
                Decoded : constant Zlib.Byte_Array :=
@@ -524,7 +541,8 @@ package body Zlib_ZIP_External_Codec_Tests is
      (Method     : Interfaces.Unsigned_16;
       Wire       : Zlib.Byte_Array;
       Plain      : Zlib.Byte_Array;
-      Label      : String)
+      Label      : String;
+      Descriptor : Boolean := False)
    is
       Secret     : constant String := "secret";
       Member     : constant String := "payload.bin";
@@ -542,7 +560,10 @@ package body Zlib_ZIP_External_Codec_Tests is
          Archive_With_External_Payload
            (Wire, Method, CRC32_Of (Plain),
             Interfaces.Unsigned_64 (Plain'Length), Member,
-            Encrypted => True, Password => Secret));
+            Encrypted       => True,
+            Password        => Secret,
+            Data_Descriptor => Descriptor,
+            Mod_Time        => 16#5A3C#));
 
       Zlib.Extract_Archive_File_Entry_To_File
         (Archive_Path => Archive,
@@ -567,8 +588,9 @@ package body Zlib_ZIP_External_Codec_Tests is
          Password     => "wrong",
          Status       => Status);
       Assert
-        (Status /= Zlib.Ok,
-         "a wrong password must not extract an encrypted " & Label & " member");
+        (Status = Zlib.Invalid_Password,
+         "a wrong password must be named as such for an encrypted " & Label
+         & " member, got " & Zlib.Status_Image (Status));
 
       --  And no password at all is not a way in either.
       Delete_If_Exists (Output);
@@ -579,9 +601,10 @@ package body Zlib_ZIP_External_Codec_Tests is
          Password     => "",
          Status       => Status);
       Assert
-        (Status /= Zlib.Ok,
-         "an encrypted " & Label & " member must not extract without a "
-         & "password");
+        (Status = Zlib.Password_Required,
+         "a missing password must be named as such rather than blamed on the "
+         & "method for an encrypted " & Label & " member, got "
+         & Zlib.Status_Image (Status));
 
       Delete_If_Exists (Work);
    exception
@@ -599,6 +622,21 @@ package body Zlib_ZIP_External_Codec_Tests is
       --  Stored: the wire bytes are the payload itself.
       Assert_Encrypted_Member_Extracts (0, Plain, Plain, "stored");
    end Test_ZIP_Encrypted_Stored_Member_Extracted;
+
+   --  Info-ZIP's "zip -P" sets general-purpose bit 3, and the decryption
+   --  header's check byte then carries the high byte of the DOS time rather
+   --  than of the CRC. Checking it against the CRC regardless rejected the
+   --  correct password on every archive that tool produces -- which is the
+   --  ordinary way to make an encrypted ZIP on a Unix box.
+   procedure Test_ZIP_Encrypted_Data_Descriptor_Member_Extracted
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Plain : constant Zlib.Byte_Array := Repeated_Data (70_001, 5);
+   begin
+      Assert_Encrypted_Member_Extracts
+        (0, Plain, Plain, "bit-3 stored", Descriptor => True);
+   end Test_ZIP_Encrypted_Data_Descriptor_Member_Extracted;
 
    procedure Test_ZIP_Encrypted_Deflate_Member_Extracted
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -866,6 +904,9 @@ package body Zlib_ZIP_External_Codec_Tests is
       Registration.Register_Routine
         (T, Test_ZIP_Encrypted_Deflate_Member_Extracted'Access,
          "an encrypted Deflate member is decrypted through the file API");
+      Registration.Register_Routine
+        (T, Test_ZIP_Encrypted_Data_Descriptor_Member_Extracted'Access,
+         "a data-descriptor entry checks the password against the file time");
       Registration.Register_Routine
         (T, Test_ZIP_LZMA_Created'Access,
          "ZIP LZMA payloads are created in-process");

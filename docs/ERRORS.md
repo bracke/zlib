@@ -22,6 +22,8 @@
 | `Input_File_Error` | File input failed in a file helper. |
 | `Output_File_Error` | File output failed in a file helper. |
 | `Insufficient_Memory` | Not enough memory to hold an intermediate or final result. |
+| `Password_Required` | The archive or member is encrypted and no password was supplied. |
+| `Invalid_Password` | A password was supplied and the encrypted data did not decrypt under it. |
 
 `Status_Image` returns release-contract diagnostic text for each status.
 
@@ -29,6 +31,17 @@
 archive reports it when the decoded payload does not fit in available memory,
 so it must not be read as `Unexpected_End_Of_Input`, which means the input
 really was truncated.
+
+`Password_Required` and `Invalid_Password` say what a caller can act on. Both
+were previously reported as `Unsupported_Method`, which was untrue -- the
+encryption is supported and the member is very often Stored or Deflate -- and
+gave a caller nothing to do. A caller that can prompt for a password should on
+`Password_Required`, and should re-prompt on `Invalid_Password`.
+
+For 7z there is no password check in the format, so `Invalid_Password` there
+means the AES folder did not decode under the supplied password. A damaged
+archive is indistinguishable from a wrong password and reports the same thing;
+stock 7z hedges the same way.
 
 ## Memory needed to decode
 

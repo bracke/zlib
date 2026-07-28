@@ -63,11 +63,21 @@ package Zlib is
       --  Input file could not be opened, read, or represented as bytes.
       Output_File_Error,
       --  Output file could not be created or written.
-      Insufficient_Memory);
+      Insufficient_Memory,
       --  Not enough memory to hold an intermediate or final result. The input
       --  is not implicated: a well-formed stream or archive reports this when
       --  its decoded payload does not fit, so it must not be read as
       --  Unexpected_End_Of_Input, which means the input really was truncated.
+      Password_Required,
+      --  The archive or member is encrypted and no password was supplied.
+      --  The encryption itself is one this reader supports, so it must not be
+      --  read as Unsupported_Method: supplying the password is expected to
+      --  succeed, and a caller that can prompt for one should.
+      Invalid_Password);
+      --  A password was supplied and the encrypted data did not decrypt under
+      --  it. Distinguished from Invalid_Checksum, which means an archive this
+      --  reader could read was damaged: here the archive is intact as far as
+      --  is known and the password is what is wrong.
    --  Deterministic result code returned by public operations.
 
    type Compression_Mode is

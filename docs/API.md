@@ -41,7 +41,9 @@ type Status_Code is
    Unexpected_End_Of_Input,
    Input_File_Error,
    Output_File_Error,
-   Insufficient_Memory);
+   Insufficient_Memory,
+   Password_Required,
+   Invalid_Password);
 
 function Status_Image (Status : Status_Code) return String;
 function Looks_Like_Zlib_Header (Input : Byte_Array) return Boolean;

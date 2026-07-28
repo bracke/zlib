@@ -145,6 +145,11 @@ Any one-shot operation reports `Insufficient_Memory` when the decoded result
 does not fit in available memory. This says nothing about the input; do not
 confuse it with `Unexpected_End_Of_Input`.
 
+An encrypted archive reports `Password_Required` when no password was given and
+`Invalid_Password` when the one given did not decrypt it. Neither is
+`Unsupported_Method`: the encryption is supported and the caller has something
+to do about it.
+
 ## Streaming inflate lifecycle
 
 Use this order:
