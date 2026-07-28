@@ -4864,7 +4864,12 @@ package body Zlib is
       Status := Unsupported_Method;
       return Empty;
    exception
-      when Constraint_Error | Storage_Error =>
+      --  Running out of room says nothing about the method the entry uses, so
+      --  it must not be reported as an unsupported one.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
+      when Constraint_Error =>
          Status := Unsupported_Method;
          return Empty;
       when others =>
@@ -5992,7 +5997,12 @@ package body Zlib is
          end;
       end;
    exception
-      when Constraint_Error | Storage_Error =>
+      --  See ZIP_Traditional_Decrypted_External_Image: a memory limit is not
+      --  an unsupported method.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
+      when Constraint_Error =>
          Status := Unsupported_Method;
          return Empty;
    end XZ;
@@ -6057,7 +6067,16 @@ package body Zlib is
 
       return To_Byte_Array (Output);
    exception
-      when Constraint_Error | Storage_Error =>
+      --  See ZIP_Traditional_Decrypted_External_Image: a memory limit is not
+      --  an unsupported method.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         declare
+            Empty : constant Byte_Array (1 .. 0) := [others => 0];
+         begin
+            return Empty;
+         end;
+      when Constraint_Error =>
          Status := Unsupported_Method;
          declare
             Empty : constant Byte_Array (1 .. 0) := [others => 0];
