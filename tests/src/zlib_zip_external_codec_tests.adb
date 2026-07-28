@@ -2,11 +2,13 @@ with Ada.Directories;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
 with AUnit.Assertions; use AUnit.Assertions;
+with CryptoLib.Checksums;
 with Interfaces;
 with Zlib;
 
 package body Zlib_ZIP_External_Codec_Tests is
    use type Ada.Directories.File_Kind;
+   use type Ada.Streams.Stream_Element_Offset;
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
@@ -493,6 +495,127 @@ package body Zlib_ZIP_External_Codec_Tests is
          raise;
    end Test_ZIP_Traditional_Encrypted_External_Extracted;
 
+   function CRC32_Of (Data : Zlib.Byte_Array) return Interfaces.Unsigned_32 is
+      Raw   : Ada.Streams.Stream_Element_Array
+        (1 .. Ada.Streams.Stream_Element_Offset (Data'Length));
+      Where : Ada.Streams.Stream_Element_Offset := Raw'First;
+      State : CryptoLib.Checksums.CRC32_State;
+   begin
+      for B of Data loop
+         Raw (Where) := Ada.Streams.Stream_Element (B);
+         Where := Where + 1;
+      end loop;
+      CryptoLib.Checksums.CRC32_Reset (State);
+      CryptoLib.Checksums.CRC32_Update (State, Raw);
+      return CryptoLib.Checksums.CRC32_Value (State);
+   end CRC32_Of;
+
+   --  Decryption through the file API, for the two methods the streaming
+   --  reader handles itself.
+   --
+   --  The test above covers an encrypted BZip2 member decoded from an image in
+   --  memory. Stored and Deflate take a different route: the streaming reader
+   --  recognizes them, so they never reach the in-memory decoder, and until
+   --  that route learned to decrypt they could not be extracted at any
+   --  password. Nothing pinned it, because the archive-level encrypted test
+   --  hands the reader an unencrypted archive and only checks that a password
+   --  does no harm.
+   procedure Assert_Encrypted_Member_Extracts
+     (Method     : Interfaces.Unsigned_16;
+      Wire       : Zlib.Byte_Array;
+      Plain      : Zlib.Byte_Array;
+      Label      : String)
+   is
+      Secret     : constant String := "secret";
+      Member     : constant String := "payload.bin";
+      Work       : constant String :=
+        Ada.Directories.Current_Directory & "/obj/zip_encrypted_" & Label;
+      Archive    : constant String := Work & "/archive.zip";
+      Output     : constant String := Work & "/member.out";
+      Status     : Zlib.Status_Code := Zlib.Ok;
+   begin
+      Delete_If_Exists (Work);
+      Ada.Directories.Create_Path (Work);
+
+      Write_File
+        (Archive,
+         Archive_With_External_Payload
+           (Wire, Method, CRC32_Of (Plain),
+            Interfaces.Unsigned_64 (Plain'Length), Member,
+            Encrypted => True, Password => Secret));
+
+      Zlib.Extract_Archive_File_Entry_To_File
+        (Archive_Path => Archive,
+         Entry_Name   => Member,
+         Output_Path  => Output,
+         Password     => Secret,
+         Status       => Status);
+      Assert
+        (Status = Zlib.Ok,
+         "an encrypted " & Label & " member must extract with its password, "
+         & "got " & Zlib.Status_Image (Status));
+      Assert_Bytes_Equal
+        (Read_File (Output), Plain,
+         "encrypted " & Label & " member roundtrip through the file API");
+
+      --  A wrong password must fail rather than write plausible rubbish.
+      Delete_If_Exists (Output);
+      Zlib.Extract_Archive_File_Entry_To_File
+        (Archive_Path => Archive,
+         Entry_Name   => Member,
+         Output_Path  => Output,
+         Password     => "wrong",
+         Status       => Status);
+      Assert
+        (Status /= Zlib.Ok,
+         "a wrong password must not extract an encrypted " & Label & " member");
+
+      --  And no password at all is not a way in either.
+      Delete_If_Exists (Output);
+      Zlib.Extract_Archive_File_Entry_To_File
+        (Archive_Path => Archive,
+         Entry_Name   => Member,
+         Output_Path  => Output,
+         Password     => "",
+         Status       => Status);
+      Assert
+        (Status /= Zlib.Ok,
+         "an encrypted " & Label & " member must not extract without a "
+         & "password");
+
+      Delete_If_Exists (Work);
+   exception
+      when others =>
+         Delete_If_Exists (Work);
+         raise;
+   end Assert_Encrypted_Member_Extracts;
+
+   procedure Test_ZIP_Encrypted_Stored_Member_Extracted
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Plain : constant Zlib.Byte_Array := Repeated_Data (70_001, 5);
+   begin
+      --  Stored: the wire bytes are the payload itself.
+      Assert_Encrypted_Member_Extracts (0, Plain, Plain, "stored");
+   end Test_ZIP_Encrypted_Stored_Member_Extracted;
+
+   procedure Test_ZIP_Encrypted_Deflate_Member_Extracted
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Plain  : constant Zlib.Byte_Array := Repeated_Data (70_001, 5);
+      Status : Zlib.Status_Code := Zlib.Ok;
+   begin
+      declare
+         Wire : constant Zlib.Byte_Array :=
+           Zlib.Deflate_Raw (Plain, Status => Status);
+      begin
+         Assert (Status = Zlib.Ok, "fixture: raw Deflate must succeed");
+         Assert_Encrypted_Member_Extracts (8, Wire, Plain, "deflate");
+      end;
+   end Test_ZIP_Encrypted_Deflate_Member_Extracted;
+
    procedure Test_ZIP_LZMA_Created
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -737,6 +860,12 @@ package body Zlib_ZIP_External_Codec_Tests is
       Registration.Register_Routine
         (T, Test_ZIP_Traditional_Encrypted_External_Extracted'Access,
          "ZIP traditionally encrypted external payloads are extracted with passwords");
+      Registration.Register_Routine
+        (T, Test_ZIP_Encrypted_Stored_Member_Extracted'Access,
+         "an encrypted Stored member is decrypted through the file API");
+      Registration.Register_Routine
+        (T, Test_ZIP_Encrypted_Deflate_Member_Extracted'Access,
+         "an encrypted Deflate member is decrypted through the file API");
       Registration.Register_Routine
         (T, Test_ZIP_LZMA_Created'Access,
          "ZIP LZMA payloads are created in-process");
