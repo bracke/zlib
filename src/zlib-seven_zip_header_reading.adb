@@ -302,8 +302,16 @@ package body Zlib.Seven_Zip_Header_Reading is
         or else Pack_Size > Interfaces.Unsigned_64 (Info.Payload_Count) - Pack_Pos
         or else Natural (Pack_Size) mod 16 /= 0
         or else Natural (Pack_Size) = 0
-        or else Password'Length = 0
       then
+         return Empty;
+      end if;
+
+      --  Reaching here means the header really is AES-encrypted, so a missing
+      --  password is a missing password. Kept apart from the structural tests
+      --  above, which are about a malformed header and must stay
+      --  Unsupported_Method.
+      if Password'Length = 0 then
+         Status := Password_Required;
          return Empty;
       end if;
 
@@ -335,7 +343,10 @@ package body Zlib.Seven_Zip_Header_Reading is
                  LZMA_P, Natural (Hdr_Size), 1, 0, 0, Local);
          begin
             if Local /= Ok then
-               Status := Local;
+               --  The header decrypted under this password into something
+               --  that is not a header. With no MAC in the format that means
+               --  the password, as far as anything here can tell.
+               Status := Invalid_Password;
                return Empty;
             end if;
             Status := Ok;
@@ -645,6 +656,18 @@ package body Zlib.Seven_Zip_Header_Reading is
          Pack_Pos := AES_Pack_Pos;
          Status := Ok;
          return AES_Header;
+      end if;
+
+      --  An AES header that failed for want of a password, or under a wrong
+      --  one, will not decode as a plain header either, and the plain attempt
+      --  can only report Unsupported_Method. Keep the answer a caller can act
+      --  on. Only these two statuses are carried over: any other AES failure
+      --  is a header this reader does not understand, and the plain attempt
+      --  deserves its turn.
+      if AES_Status in Password_Required | Invalid_Password then
+         Pack_Pos := AES_Pack_Pos;
+         Status := AES_Status;
+         return Empty;
       end if;
 
       Pack_Pos := Generic_Pos;

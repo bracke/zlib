@@ -11612,8 +11612,9 @@ package body Zlib_Seven_Zip_Tests is
                 (Archive, "secret.bin", "wrong-password", Bad_Status);
          begin
             Assert
-              (Bad_Status /= Zlib.Ok or else Bad /= Data,
-               "AES-256 7z rejects a wrong password");
+              (Bad_Status = Zlib.Invalid_Password and then Bad /= Data,
+               "AES-256 7z names a wrong password as such, got "
+               & Zlib.Status_Image (Bad_Status));
          end;
       end;
    end Test_AES_Encrypt_Decrypt_Roundtrip;
@@ -11649,6 +11650,28 @@ package body Zlib_Seven_Zip_Tests is
                Assert
                  (OStatus = Zlib.Ok and then Out_B = Data,
                   "mhe archive round-trips header + data with the password");
+            end;
+
+            --  An encrypted header cannot be read at all without the
+            --  password, so the archive looks like a container this reader
+            --  does not understand. It is not one, and saying so left a
+            --  caller holding the password with nothing to act on.
+            declare
+               No_PW  : Zlib.Status_Code := Zlib.Ok;
+               None   : constant Zlib.Byte_Array :=
+                 Zlib.Extract_Seven_Zip (MHE, "hidden.bin", "", No_PW);
+               Bad_PW : Zlib.Status_Code := Zlib.Ok;
+               Wrong  : constant Zlib.Byte_Array :=
+                 Zlib.Extract_Seven_Zip (MHE, "hidden.bin", "not-it", Bad_PW);
+            begin
+               Assert
+                 (No_PW = Zlib.Password_Required and then None'Length = 0,
+                  "an mhe archive without a password asks for one, got "
+                  & Zlib.Status_Image (No_PW));
+               Assert
+                 (Bad_PW = Zlib.Invalid_Password and then Wrong'Length = 0,
+                  "an mhe archive under a wrong password says so, got "
+                  & Zlib.Status_Image (Bad_PW));
             end;
          end;
       end;

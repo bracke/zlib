@@ -30,6 +30,13 @@ package body Zlib.Seven_Zip_Listing is
         [others => (others => <>)];
       No_Bytes : constant Byte_Array (1 .. 0) := [others => 0];
 
+      --  Why the header could not be decoded, when the reason is one the
+      --  caller can act on. Without this an encrypted header is indistinct
+      --  from a header this reader does not understand, and both come back as
+      --  Unsupported_Method -- which for the encrypted one is untrue and
+      --  leaves a caller holding the password with nothing to do.
+      Header_Failure : Status_Code := Ok;
+
       --  Decode the next-header bytes into a plain (kHeader 0x01) image.
       function Plain_Header return Byte_Array is
          Base : constant Natural := Signature'First + 32;
@@ -114,6 +121,9 @@ package body Zlib.Seven_Zip_Listing is
               or else Header'Length = 0
               or else Header (Header'First) /= 16#01#
             then
+               if Header_Status in Password_Required | Invalid_Password then
+                  Header_Failure := Header_Status;
+               end if;
                return No_Bytes;
             end if;
 
@@ -132,7 +142,8 @@ package body Zlib.Seven_Zip_Listing is
          return No;
       end if;
       if Header'Length = 0 or else Header (Header'First) /= 16#01# then
-         Status := Unsupported_Method;
+         Status :=
+           (if Header_Failure /= Ok then Header_Failure else Unsupported_Method);
          return No;
       end if;
 
