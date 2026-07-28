@@ -13,14 +13,17 @@ package body Zlib.Seven_Zip_Listing is
 
    subtype Seven_Zip_LZMA_Props is Byte_Array (1 .. 5);
 
-   function List
-     (Archive_Image              : Byte_Array;
+   function List_From_Parts
+     (Signature                  : Byte_Array;
+      Next_Header                : Byte_Array;
       Password                   : String;
       Decode_LZMA_Encoded_Header : not null access function
         (Input         : Byte_Array;
          LZMA_Props    : Byte_Array;
          Expected_Size : Natural;
          Status        : out Status_Code) return Byte_Array;
+      Fetch_Packed               : access function
+        (First : Natural; Last : Natural) return Byte_Array := null;
       Status                     : out Status_Code) return Archive_Entry_Array
    is
       No : constant Archive_Entry_Array (1 .. 0) :=
@@ -29,11 +32,11 @@ package body Zlib.Seven_Zip_Listing is
 
       --  Decode the next-header bytes into a plain (kHeader 0x01) image.
       function Plain_Header return Byte_Array is
-         Base : constant Natural := Archive_Image'First + 32;
+         Base : constant Natural := Signature'First + 32;
          NHO  : constant Natural :=
-           Natural (Zlib.Seven_Zip_Numbers.U64_At (Archive_Image, Archive_Image'First + 12));
+           Natural (Zlib.Seven_Zip_Numbers.U64_At (Signature, Signature'First + 12));
          NHS  : constant Natural :=
-           Natural (Zlib.Seven_Zip_Numbers.U64_At (Archive_Image, Archive_Image'First + 20));
+           Natural (Zlib.Seven_Zip_Numbers.U64_At (Signature, Signature'First + 20));
 
          function Decode_Header_Payload
            (Input          : Byte_Array;
@@ -73,13 +76,16 @@ package body Zlib.Seven_Zip_Listing is
             end case;
          end Decode_Header_Payload;
       begin
-         if NHS = 0 or else Base + NHO + NHS - 1 > Archive_Image'Last then
+         if NHS = 0
+           or else Base + NHO < Next_Header'First
+           or else Base + NHO + NHS - 1 > Next_Header'Last
+         then
             return No_Bytes;
          end if;
 
          declare
             H : constant Byte_Array :=
-              Archive_Image (Base + NHO .. Base + NHO + NHS - 1);
+              Next_Header (Base + NHO .. Base + NHO + NHS - 1);
          begin
             if H (H'First) = 16#01# then
                return H;
@@ -100,8 +106,9 @@ package body Zlib.Seven_Zip_Listing is
             Pack_Pos      : Natural := 0;
             Header        : constant Byte_Array :=
               Zlib.Seven_Zip_Header_Reading.Decode_Encoded_Header
-                (Archive_Image, Password, Info, Decode_Header_Payload'Access,
-                 Pack_Pos, Header_Status);
+                (Next_Header, Password, Info, Decode_Header_Payload'Access,
+                 Fetch_Packed => Fetch_Packed,
+                 Pack_Pos => Pack_Pos, Status => Header_Status);
          begin
             if Header_Status /= Ok
               or else Header'Length = 0
@@ -117,9 +124,9 @@ package body Zlib.Seven_Zip_Listing is
       Header : constant Byte_Array := Plain_Header;
    begin
       Status := Unsupported_Method;
-      if Archive_Image'Length < 32
-        or else Archive_Image (Archive_Image'First) /= 16#37#
-        or else Archive_Image (Archive_Image'First + 1) /= 16#7A#
+      if Signature'Length < 32
+        or else Signature (Signature'First) /= 16#37#
+        or else Signature (Signature'First + 1) /= 16#7A#
       then
          Status := Invalid_Header;
          return No;
@@ -521,6 +528,36 @@ package body Zlib.Seven_Zip_Listing is
       when others =>
          Status := Unsupported_Method;
          return No;
+   end List_From_Parts;
+
+   function List
+     (Archive_Image              : Byte_Array;
+      Password                   : String;
+      Decode_LZMA_Encoded_Header : not null access function
+        (Input         : Byte_Array;
+         LZMA_Props    : Byte_Array;
+         Expected_Size : Natural;
+         Status        : out Status_Code) return Byte_Array;
+      Status                     : out Status_Code) return Archive_Entry_Array
+   is
+      No : constant Archive_Entry_Array (1 .. 0) :=
+        [others => (others => <>)];
+   begin
+      if Archive_Image'Length < 32 then
+         Status := Invalid_Header;
+         return No;
+      end if;
+
+      --  Both regions are slices of the image at their own offsets, so the
+      --  shared walk sees exactly the indices it would have seen before.
+      return List_From_Parts
+        (Signature                  =>
+           Archive_Image (Archive_Image'First .. Archive_Image'First + 31),
+         Next_Header                => Archive_Image,
+         Password                   => Password,
+         Decode_LZMA_Encoded_Header => Decode_LZMA_Encoded_Header,
+         Fetch_Packed               => null,
+         Status                     => Status);
    end List;
 
 end Zlib.Seven_Zip_Listing;

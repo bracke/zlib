@@ -1094,12 +1094,13 @@ package Zlib is
    --  Catalogue every member of an archive file without decompressing
    --  payloads.
    --
-   --  A ZIP is catalogued from its central directory alone, so the cost is
-   --  proportional to the number of members rather than to the archive size and
-   --  a large archive can be listed without holding it in memory. A .7z, or a
-   --  ZIP needing a password, reads the whole image as List_Archive_Entries
-   --  does. Password is used only to decode 7z encrypted headers; pass "" when
-   --  not needed.
+   --  A ZIP is catalogued from its central directory alone, and a .7z from its
+   --  signature header, its next header, and the packed stream of an encoded
+   --  header. Either way the cost is proportional to the number of members
+   --  rather than to the archive size, so a large archive can be listed
+   --  without holding it in memory. A ZIP needing a password still reads the
+   --  whole image. Password is used only to decode 7z encrypted headers; pass
+   --  "" when not needed.
    --  @param Archive_Path path to a .zip or .7z file
    --  @param Password archive password, or "" if not needed
    --  @param Status Ok on success, otherwise a deterministic failure code

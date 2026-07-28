@@ -7451,7 +7451,8 @@ package body Zlib is
                           Zlib.Seven_Zip_Header_Reading.Decode_Encoded_Header
                             (Archive_Image, Password, Info,
                              Decode_Header_Payload'Access,
-                             Encoded_Header_Pack_Pos, Header_Status);
+                             Pack_Pos => Encoded_Header_Pack_Pos,
+                             Status   => Header_Status);
                      begin
                         if Header_Status /= Ok then
                            Status := Header_Status;
@@ -9330,6 +9331,147 @@ package body Zlib is
          Status := Unsupported_Method;
    end Extract_Archive_File_Entry_To_File;
 
+   --  Catalogue a native 7z from its file, reading only the regions a
+   --  catalogue needs: the signature header, the next header, and the packed
+   --  stream of an encoded header. Handled is False when the file is not a 7z,
+   --  so the caller can try another container.
+   function List_Seven_Zip_File_Entries
+     (Archive_Path : String;
+      Password     : String;
+      Handled      : out Boolean;
+      Status       : out Status_Code) return Archive_Entry_Array
+   is
+      No   : constant Archive_Entry_Array (1 .. 0) :=
+        [others => (others => <>)];
+      File : SIO.File_Type;
+
+      function Read_Region (First : Natural; Last : Natural) return Byte_Array
+      is
+         Empty : constant Byte_Array (1 .. 0) := [others => 0];
+      begin
+         if Last < First then
+            return Empty;
+         end if;
+
+         declare
+            Buffer : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Last - First + 1));
+            Final  : Ada.Streams.Stream_Element_Offset;
+            Result : Byte_Array (First .. Last) := [others => 0];
+         begin
+            SIO.Set_Index (File, SIO.Positive_Count (First + 1));
+            SIO.Read (File, Buffer, Final);
+            if Final /= Buffer'Last then
+               return Empty;
+            end if;
+            for I in Buffer'Range loop
+               Result (First + Natural (I - Buffer'First)) := Byte (Buffer (I));
+            end loop;
+            return Result;
+         end;
+      end Read_Region;
+
+      function Decode_LZMA_Listing_Header
+        (Input         : Byte_Array;
+         LZMA_Props    : Byte_Array;
+         Expected_Size : Natural;
+         Decode_Status : out Status_Code) return Byte_Array
+      is
+         Empty : constant Byte_Array (1 .. 0) := [others => 0];
+         Props : Seven_Zip_LZMA_Props := [others => 0];
+      begin
+         if LZMA_Props'Length /= Props'Length then
+            Decode_Status := Unsupported_Method;
+            return Empty;
+         end if;
+
+         for Offset in 0 .. Props'Length - 1 loop
+            Props (Props'First + Offset) :=
+              LZMA_Props (LZMA_Props'First + Offset);
+         end loop;
+
+         return
+           LZMA_Decode_Raw_Encoded_Header
+             (Input, Props, Expected_Size, Decode_Status);
+      end Decode_LZMA_Listing_Header;
+   begin
+      Handled := False;
+      Status := Unsupported_Method;
+
+      if not Ada.Directories.Exists (Archive_Path) then
+         return No;
+      end if;
+
+      SIO.Open (File, SIO.In_File, Archive_Path);
+
+      declare
+         File_Size : constant Natural := Natural (SIO.Size (File));
+      begin
+         if File_Size < 32 then
+            SIO.Close (File);
+            return No;
+         end if;
+
+         declare
+            Signature : constant Byte_Array := Read_Region (0, 31);
+         begin
+            if Signature'Length /= 32
+              or else Signature (0) /= 16#37#
+              or else Signature (1) /= 16#7A#
+            then
+               SIO.Close (File);
+               return No;
+            end if;
+
+            declare
+               NHO : constant Natural :=
+                 Natural (Zlib.Seven_Zip_Numbers.U64_At (Signature, 12));
+               NHS : constant Natural :=
+                 Natural (Zlib.Seven_Zip_Numbers.U64_At (Signature, 20));
+            begin
+               if NHS = 0 or else 32 + NHO + NHS > File_Size then
+                  SIO.Close (File);
+                  Handled := True;
+                  Status := Invalid_Header;
+                  return No;
+               end if;
+
+               declare
+                  Next_Header : constant Byte_Array :=
+                    Read_Region (32 + NHO, 32 + NHO + NHS - 1);
+                  Listed      : constant Archive_Entry_Array :=
+                    Zlib.Seven_Zip_Listing.List_From_Parts
+                      (Signature                  => Signature,
+                       Next_Header                => Next_Header,
+                       Password                   => Password,
+                       Decode_LZMA_Encoded_Header =>
+                         Decode_LZMA_Listing_Header'Access,
+                       Fetch_Packed               => Read_Region'Access,
+                       Status                     => Status);
+               begin
+                  SIO.Close (File);
+                  Handled := True;
+                  return Listed;
+               end;
+            end;
+         end;
+      end;
+   exception
+      when Storage_Error =>
+         if SIO.Is_Open (File) then
+            SIO.Close (File);
+         end if;
+         Handled := True;
+         Status := Insufficient_Memory;
+         return No;
+      when others =>
+         if SIO.Is_Open (File) then
+            SIO.Close (File);
+         end if;
+         Handled := False;
+         return No;
+   end List_Seven_Zip_File_Entries;
+
    function List_Archive_File_Entries
      (Archive_Path : String;
       Password     : String;
@@ -9353,6 +9495,19 @@ package body Zlib is
             end if;
          end;
       end if;
+
+      --  A native 7z catalogue is also reachable from a few regions rather
+      --  than the whole file.
+      declare
+         Seven_Handled : Boolean := False;
+         Listed        : constant Archive_Entry_Array :=
+           List_Seven_Zip_File_Entries
+             (Archive_Path, Password, Seven_Handled, Status);
+      begin
+         if Seven_Handled then
+            return Listed;
+         end if;
+      end;
 
       declare
          Read_Status : Status_Code := Ok;

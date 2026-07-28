@@ -129,6 +129,27 @@ package body Zlib.Seven_Zip_Header_Reading is
       return True;
    end Parse_AES_Properties;
 
+   --  The packed stream an encoded header names is the only part of the
+   --  archive outside the header itself that decoding needs. Fetch_Packed
+   --  supplies it when the caller does not hold the archive.
+   function Packed_Slice
+     (Archive_Image : Byte_Array;
+      Fetch_Packed  : access function
+        (First : Natural; Last : Natural) return Byte_Array;
+      First         : Natural;
+      Last          : Natural) return Byte_Array
+   is
+      Empty : constant Byte_Array (1 .. 0) := [others => 0];
+   begin
+      if Last < First then
+         return Empty;
+      elsif Fetch_Packed = null then
+         return Archive_Image (First .. Last);
+      else
+         return Fetch_Packed (First, Last);
+      end if;
+   end Packed_Slice;
+
    function Decode_AES_Header
      (Archive_Image : Byte_Array;
       Password      : String;
@@ -142,6 +163,8 @@ package body Zlib.Seven_Zip_Header_Reading is
          PPMd_Order     : Natural;
          PPMd_Memory    : Interfaces.Unsigned_32;
          Status         : out Status_Code) return Byte_Array;
+      Fetch_Packed  : access function
+        (First : Natural; Last : Natural) return Byte_Array;
       Pack_Pos_Out  : out Natural;
       Status        : out Status_Code) return Byte_Array
    is
@@ -288,7 +311,9 @@ package body Zlib.Seven_Zip_Header_Reading is
       declare
          Enc_First : constant Natural := Info.Payload_First + Natural (Pack_Pos);
          Enc       : constant Byte_Array :=
-           Archive_Image (Enc_First .. Enc_First + Natural (Pack_Size) - 1);
+           Packed_Slice
+             (Archive_Image, Fetch_Packed, Enc_First,
+              Enc_First + Natural (Pack_Size) - 1);
          Key       : constant Byte_Array :=
            Zlib.Seven_Zip_AES.Derive_Key (Password, Salt (1 .. Salt_Len), Cycles);
          Dec       : constant Byte_Array := Zlib.Seven_Zip_AES.Decrypt_CBC (Key, IV, Enc);
@@ -335,6 +360,8 @@ package body Zlib.Seven_Zip_Header_Reading is
          PPMd_Order     : Natural;
          PPMd_Memory    : Interfaces.Unsigned_32;
          Status         : out Status_Code) return Byte_Array;
+      Fetch_Packed  : access function
+        (First : Natural; Last : Natural) return Byte_Array;
       Pack_Pos_Out  : out Natural;
       Status        : out Status_Code) return Byte_Array
    is
@@ -540,7 +567,7 @@ package body Zlib.Seven_Zip_Header_Reading is
          Enc_Last  : constant Natural :=
            (if Enc_Size = 0 then Enc_First - 1 else Enc_First + Enc_Size - 1);
          Encoded   : constant Byte_Array :=
-           (if Enc_Size = 0 then Empty else Archive_Image (Enc_First .. Enc_Last));
+           Packed_Slice (Archive_Image, Fetch_Packed, Enc_First, Enc_Last);
          Local     : Status_Code := Ok;
          Decoded   : constant Byte_Array :=
            Decode
@@ -586,6 +613,8 @@ package body Zlib.Seven_Zip_Header_Reading is
          PPMd_Order     : Natural;
          PPMd_Memory    : Interfaces.Unsigned_32;
          Status         : out Status_Code) return Byte_Array;
+      Fetch_Packed  : access function
+        (First : Natural; Last : Natural) return Byte_Array := null;
       Pack_Pos      : out Natural;
       Status        : out Status_Code) return Byte_Array
    is
@@ -593,14 +622,16 @@ package body Zlib.Seven_Zip_Header_Reading is
       AES_Pack_Pos   : Natural := 0;
       AES_Header     : constant Byte_Array :=
         Decode_AES_Header
-          (Archive_Image, Password, Info, Decode, AES_Pack_Pos, AES_Status);
+          (Archive_Image, Password, Info, Decode, Fetch_Packed, AES_Pack_Pos,
+           AES_Status);
       Generic_Status : Status_Code := Ok;
       Generic_Pos    : Natural := 0;
       Generic_Header : constant Byte_Array :=
         (if AES_Status = Ok
          then Empty
          else Decode_Generic_Header
-           (Archive_Image, Info, Decode, Generic_Pos, Generic_Status));
+           (Archive_Image, Info, Decode, Fetch_Packed, Generic_Pos,
+            Generic_Status));
    begin
       if AES_Status = Ok then
          Pack_Pos := AES_Pack_Pos;
