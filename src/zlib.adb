@@ -7335,22 +7335,44 @@ package body Zlib is
          Auto, Default_Level, False, True, Password, Status);
    end Seven_Zip_PPMd_Encrypted_Files;
 
+   --  Archive_Image need only span the header region at its true archive
+   --  offsets, and Signature_Region the signature header. A non-null
+   --  Fetch_Packed supplies each folder's packed stream, so an archive can be
+   --  extracted from without being held. Whole-image callers pass the same
+   --  array twice and a null hook, which is what this did before.
    function Extract_Seven_Zip_Entry
-     (Archive_Image : Byte_Array;
-      Entry_Name    : String;
-      Password      : String;
-      Status        : out Status_Code;
-      Kind          : out Seven_Zip_Entry_Kind;
-      Metadata      : out Seven_Zip_Entry_Metadata) return Byte_Array
+     (Archive_Image    : Byte_Array;
+      Entry_Name       : String;
+      Password         : String;
+      Signature_Region : Byte_Array;
+      Fetch_Packed     : access function
+        (First : Natural; Last : Natural) return Byte_Array;
+      Use_Preset_Info  : Boolean;
+      Preset_Info      : Zlib.Seven_Zip_Container.Start_Header_Info;
+      Status           : out Status_Code;
+      Kind             : out Seven_Zip_Entry_Kind;
+      Metadata         : out Seven_Zip_Entry_Metadata) return Byte_Array
    is
       Empty : constant Byte_Array (1 .. 0) := [others => 0];
+
+      function Packed_Region (First : Natural; Last : Natural) return Byte_Array
+      is
+      begin
+         if Last < First then
+            return Empty;
+         elsif Fetch_Packed = null then
+            return Archive_Image (First .. Last);
+         else
+            return Fetch_Packed (First, Last);
+         end if;
+      end Packed_Region;
    begin
       Status := Unsupported_Method;
       Kind := Seven_Zip_File_Entry;
       Metadata := No_Seven_Zip_Entry_Metadata;
 
       if not Seven_Zip_Entry_Name_Valid (Entry_Name)
-        or else Archive_Image'Length < 33
+        or else Signature_Region'Length < 33
       then
          return Empty;
       end if;
@@ -7358,8 +7380,8 @@ package body Zlib is
       declare
          F : Natural := 0;
       begin
-         if not Seven_Zip_Find_Signature (Archive_Image, F)
-           or else Archive_Image'Last - F + 1 < 33
+         if not Seven_Zip_Find_Signature (Signature_Region, F)
+           or else Signature_Region'Last - F + 1 < 33
          then
             return Empty;
          end if;
@@ -7367,8 +7389,14 @@ package body Zlib is
          declare
             Info : Zlib.Seven_Zip_Container.Start_Header_Info;
          begin
-            if not Zlib.Seven_Zip_Container.Read_Start_Header
-              (Archive_Image, F, Info, Status)
+            --  Read_Start_Header validates the header against the array it
+            --  is handed. A caller reading from a file holds only a bounded
+            --  prefix, so it resolves the two offsets against the file itself
+            --  and passes the result in.
+            if Use_Preset_Info then
+               Info := Preset_Info;
+            elsif not Zlib.Seven_Zip_Container.Read_Start_Header
+              (Signature_Region, F, Info, Status)
             then
                return Empty;
             end if;
@@ -7464,6 +7492,7 @@ package body Zlib is
                           Zlib.Seven_Zip_Header_Reading.Decode_Encoded_Header
                             (Archive_Image, Password, Info,
                              Decode_Header_Payload'Access,
+                             Fetch_Packed => Fetch_Packed,
                              Pack_Pos => Encoded_Header_Pack_Pos,
                              Status   => Header_Status);
                      begin
@@ -7485,19 +7514,27 @@ package body Zlib is
                              (if Decoded_Header (Decoded_Header'First) = 16#01#
                               then Decoded_Header
                               else [16#01#] & Decoded_Header);
+                           --  Normalizing an encoded header rebuilds a whole
+                           --  image from the payload prefix, which is nearly
+                           --  the whole archive. Callers that do not hold it
+                           --  decline before reaching here.
                            Synthetic_Payload : constant Byte_Array :=
-                             (if Encoded_Header_Pack_Pos = 0
-                              then Empty
-                              else Archive_Image
-                                (Payload_First ..
-                                 Payload_First + Encoded_Header_Pack_Pos - 1));
+                             Packed_Region
+                               (Payload_First,
+                                Payload_First + Encoded_Header_Pack_Pos - 1);
                            Synthetic_Image : constant Byte_Array :=
                              Zlib.Seven_Zip_Container.Build_Archive
                                (Normalized_Header, Synthetic_Payload);
                         begin
                            return Extract_Seven_Zip_Entry
-                             (Synthetic_Image, Entry_Name, Password, Status, Kind,
-                              Metadata);
+                             (Synthetic_Image, Entry_Name, Password,
+                              Signature_Region => Synthetic_Image,
+                              Fetch_Packed     => null,
+                              Use_Preset_Info  => False,
+                              Preset_Info      => (others => <>),
+                              Status           => Status,
+                              Kind             => Kind,
+                              Metadata         => Metadata);
                         end;
                      end;
                   end if;
@@ -8440,9 +8477,7 @@ package body Zlib is
                               then Target_First - 1
                               else Target_First + Target_Size - 1);
                            Payload      : constant Byte_Array :=
-                             (if Target_Size = 0
-                              then Empty
-                              else Archive_Image (Target_First .. Target_Last));
+                             Packed_Region (Target_First, Target_Last);
 
                            function Substream_Folder_At
                              (Index : Natural) return Natural is
@@ -8649,10 +8684,7 @@ package body Zlib is
                                           then Pack_First - 1
                                           else Pack_First + Pack_Size - 1);
                                        Pack_Data : constant Byte_Array :=
-                                         (if Pack_Size = 0
-                                          then Empty
-                                          else Archive_Image
-                                            (Pack_First .. Pack_Last));
+                                         Packed_Region (Pack_First, Pack_Last);
                                     begin
                                        if Compute_CRC32 (Pack_Data) /=
                                          Pack_CRCs (Pack_Index)
@@ -8994,10 +9026,7 @@ package body Zlib is
                                              else Pack_First + Pack_Size - 1);
                                        begin
                                           return
-                                            (if Pack_Size = 0
-                                             then Empty
-                                             else Archive_Image
-                                               (Pack_First .. Pack_Last));
+                                            Packed_Region (Pack_First, Pack_Last);
                                        end;
                                     end Pack_Data;
 
@@ -9160,7 +9189,11 @@ package body Zlib is
       Metadata : Seven_Zip_Entry_Metadata;
    begin
       return Extract_Seven_Zip_Entry
-        (Archive_Image, Entry_Name, "", Status, Kind, Metadata);
+        (Archive_Image, Entry_Name, "",
+         Signature_Region => Archive_Image, Fetch_Packed => null,
+            Use_Preset_Info => False,
+            Preset_Info     => (others => <>),
+         Status => Status, Kind => Kind, Metadata => Metadata);
    end Extract_Seven_Zip_Stored;
 
    function Extract_Seven_Zip
@@ -9171,7 +9204,11 @@ package body Zlib is
       Metadata : Seven_Zip_Entry_Metadata;
    begin
       return Extract_Seven_Zip_Entry
-        (Archive_Image, Entry_Name, "", Status, Kind, Metadata);
+        (Archive_Image, Entry_Name, "",
+         Signature_Region => Archive_Image, Fetch_Packed => null,
+            Use_Preset_Info => False,
+            Preset_Info     => (others => <>),
+         Status => Status, Kind => Kind, Metadata => Metadata);
    end Extract_Seven_Zip;
 
    function Extract_Seven_Zip
@@ -9185,7 +9222,11 @@ package body Zlib is
          Metadata : Seven_Zip_Entry_Metadata;
       begin
          return Extract_Seven_Zip_Entry
-           (Archive_Image, Entry_Name, Password, Status, Kind, Metadata);
+           (Archive_Image, Entry_Name, Password,
+            Signature_Region => Archive_Image, Fetch_Packed => null,
+            Use_Preset_Info => False,
+            Preset_Info     => (others => <>),
+            Status => Status, Kind => Kind, Metadata => Metadata);
       end;
    end Extract_Seven_Zip;
 
@@ -9288,6 +9329,16 @@ package body Zlib is
       return List_Seven_Zip_Entries_With_Password (Archive_Image, "", Status);
    end List_Seven_Zip_Entries;
 
+   function Extract_Seven_Zip_File_Entry
+     (Archive_Path : String;
+      Entry_Name   : String;
+      Password     : String;
+      Handled      : out Boolean;
+      Status       : out Status_Code;
+      Kind         : out Seven_Zip_Entry_Kind;
+      Metadata     : out Seven_Zip_Entry_Metadata) return Byte_Array;
+   --  Declared ahead of its first caller; defined below.
+
    procedure Extract_Archive_File_Entry_To_File
      (Archive_Path : String;
       Entry_Name   : String;
@@ -9309,6 +9360,25 @@ package body Zlib is
             return;
          end if;
       end if;
+
+      declare
+         Seven_Handled : Boolean := False;
+         Seven_Kind    : Seven_Zip_Entry_Kind := Seven_Zip_File_Entry;
+         Seven_Meta    : Seven_Zip_Entry_Metadata;
+         Decoded       : constant Byte_Array :=
+           Extract_Seven_Zip_File_Entry
+             (Archive_Path, Entry_Name, Password, Seven_Handled, Status,
+              Seven_Kind, Seven_Meta);
+         Write_Status  : Status_Code := Ok;
+      begin
+         if Seven_Handled then
+            if Status = Ok then
+               Write_File (Output_Path, Decoded, Write_Status);
+               Status := Write_Status;
+            end if;
+            return;
+         end if;
+      end;
 
       declare
          Read_Status : Status_Code := Ok;
@@ -9348,6 +9418,170 @@ package body Zlib is
    --  catalogue needs: the signature header, the next header, and the packed
    --  stream of an encoded header. Handled is False when the file is not a 7z,
    --  so the caller can try another container.
+   --  Extract one entry of a native 7z from its file, reading the signature
+   --  region, the header, and the packed streams of the folders involved --
+   --  not the archive. Handled is False when this reader cannot take the file,
+   --  so the caller falls back to whole-image extraction.
+   Seven_Zip_Prefix_Scan : constant := 1024 * 1024;
+
+   function Extract_Seven_Zip_File_Entry
+     (Archive_Path : String;
+      Entry_Name   : String;
+      Password     : String;
+      Handled      : out Boolean;
+      Status       : out Status_Code;
+      Kind         : out Seven_Zip_Entry_Kind;
+      Metadata     : out Seven_Zip_Entry_Metadata) return Byte_Array
+   is
+      Empty : constant Byte_Array (1 .. 0) := [others => 0];
+      File  : SIO.File_Type;
+
+      function Read_Region (First : Natural; Last : Natural) return Byte_Array
+      is
+      begin
+         if Last < First then
+            return Empty;
+         end if;
+
+         declare
+            Buffer : Ada.Streams.Stream_Element_Array (1 .. 64 * 1024);
+            Result : Byte_Array (First .. Last) := [others => 0];
+            Filled : Natural := 0;
+            Wanted : constant Natural := Last - First + 1;
+            Final  : Ada.Streams.Stream_Element_Offset;
+         begin
+            SIO.Set_Index (File, SIO.Positive_Count (First + 1));
+            while Filled < Wanted loop
+               SIO.Read (File, Buffer, Final);
+               exit when Final < Buffer'First;
+               for I in Buffer'First .. Final loop
+                  exit when Filled = Wanted;
+                  Result (First + Filled) := Byte (Buffer (I));
+                  Filled := Filled + 1;
+               end loop;
+            end loop;
+            if Filled /= Wanted then
+               return Empty;
+            end if;
+            return Result;
+         end;
+      end Read_Region;
+   begin
+      Handled := False;
+      Status := Unsupported_Method;
+      Kind := Seven_Zip_File_Entry;
+      Metadata := No_Seven_Zip_Entry_Metadata;
+
+      if not Ada.Directories.Exists (Archive_Path) then
+         return Empty;
+      end if;
+
+      SIO.Open (File, SIO.In_File, Archive_Path);
+
+      declare
+         File_Size : constant Natural := Natural (SIO.Size (File));
+         Scan_Last : constant Natural :=
+           Natural'Min (File_Size, Seven_Zip_Prefix_Scan) - 1;
+      begin
+         if File_Size < 33 then
+            SIO.Close (File);
+            return Empty;
+         end if;
+
+         declare
+            --  The signature may sit behind an SFX stub, so a bounded prefix
+            --  is scanned; anything beyond it falls back.
+            Prefix : constant Byte_Array := Read_Region (0, Scan_Last);
+            F      : Natural := 0;
+            Info   : Zlib.Seven_Zip_Container.Start_Header_Info;
+         begin
+            if Prefix'Length = 0
+              or else not Seven_Zip_Find_Signature (Prefix, F)
+              or else Prefix'Last - F + 1 < 33
+            then
+               SIO.Close (File);
+               return Empty;
+            end if;
+
+            declare
+               Base : constant Natural := F + 32;
+               NHO  : constant Natural :=
+                 Natural (Zlib.Seven_Zip_Numbers.U64_At (Prefix, F + 12));
+               NHS  : constant Natural :=
+                 Natural (Zlib.Seven_Zip_Numbers.U64_At (Prefix, F + 20));
+            begin
+               if NHS = 0 or else Base + NHO + NHS > File_Size then
+                  SIO.Close (File);
+                  return Empty;
+               end if;
+
+               Info :=
+                 (Payload_First => Base,
+                  Header_First  => Base + NHO,
+                  Header_Last   => Base + NHO + NHS - 1,
+                  Payload_Count => NHO,
+                  Header_Count  => NHS,
+                  Header_CRC    =>
+                    Interfaces.Unsigned_32 (Prefix (F + 28))
+                    or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_32 (Prefix (F + 29)), 8)
+                    or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_32 (Prefix (F + 30)), 16)
+                    or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_32 (Prefix (F + 31)), 24));
+            end;
+
+            declare
+               Header : constant Byte_Array :=
+                 Read_Region (Info.Header_First, Info.Header_Last);
+            begin
+               --  A compressed header is normalized by rebuilding the archive
+               --  image, so taking it here would materialize what this path
+               --  exists to avoid.
+               if Header'Length = 0
+                 or else Header (Header'First) = 16#17#
+               then
+                  SIO.Close (File);
+                  return Empty;
+               end if;
+
+               declare
+                  Payload : constant Byte_Array :=
+                    Extract_Seven_Zip_Entry
+                      (Archive_Image    => Header,
+                       Entry_Name       => Entry_Name,
+                       Password         => Password,
+                       Signature_Region => Prefix,
+                       Fetch_Packed     => Read_Region'Access,
+                       Use_Preset_Info  => True,
+                       Preset_Info      => Info,
+                       Status           => Status,
+                       Kind             => Kind,
+                       Metadata         => Metadata);
+               begin
+                  SIO.Close (File);
+                  Handled := True;
+                  return Payload;
+               end;
+            end;
+         end;
+      end;
+   exception
+      when Storage_Error =>
+         if SIO.Is_Open (File) then
+            SIO.Close (File);
+         end if;
+         Handled := True;
+         Status := Insufficient_Memory;
+         return Empty;
+      when others =>
+         if SIO.Is_Open (File) then
+            SIO.Close (File);
+         end if;
+         Handled := False;
+         return Empty;
+   end Extract_Seven_Zip_File_Entry;
+
    function List_Seven_Zip_File_Entries
      (Archive_Path : String;
       Password     : String;
@@ -9682,7 +9916,12 @@ package body Zlib is
    is
       Entry_Kind : Seven_Zip_Entry_Kind := Seven_Zip_File_Entry;
       Payload    : constant Byte_Array :=
-        Extract_Seven_Zip_Entry (Archive, Entry_Name, "", Status, Entry_Kind, Metadata);
+        Extract_Seven_Zip_Entry
+          (Archive, Entry_Name, "",
+           Signature_Region => Archive, Fetch_Packed => null,
+            Use_Preset_Info => False,
+            Preset_Info     => (others => <>),
+           Status => Status, Kind => Entry_Kind, Metadata => Metadata);
    begin
       Is_Directory := Entry_Kind = Seven_Zip_Directory_Entry;
       return Payload;

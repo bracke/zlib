@@ -60,6 +60,17 @@ sized for it.
 `Extract_Archive_To_Directory` takes an image the caller already holds in
 memory and is unaffected.
 
+A `.7z` is read from its signature header, its header, and the packed streams
+of the folders a request actually touches, so the archive itself is never read
+whole. What remains is the folder: 7z groups files into folders that share one
+coder chain, and any file in a folder requires decoding that folder. For a
+non-solid archive a folder is one member, and extracting one 800 KB member from
+a 9.6 MB archive needs about a megabyte. For a solid archive -- what `7z a`
+writes by default -- one folder holds everything, so the cost is the archive's
+whole content and no amount of streaming can reduce it. An archive whose header
+is itself compressed, also a `7z a` default, is read whole, because normalizing
+that header rebuilds the archive image.
+
 ## Streaming exceptions
 
 ### `Status_Error`
