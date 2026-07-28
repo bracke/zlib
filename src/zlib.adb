@@ -7626,27 +7626,57 @@ package body Zlib is
                              (if Decoded_Header (Decoded_Header'First) = 16#01#
                               then Decoded_Header
                               else [16#01#] & Decoded_Header);
-                           --  Normalizing an encoded header rebuilds a whole
-                           --  image from the payload prefix, which is nearly
-                           --  the whole archive. Callers that do not hold it
-                           --  decline before reaching here.
-                           Synthetic_Payload : constant Byte_Array :=
-                             Packed_Region
-                               (Payload_First,
-                                Payload_First + Encoded_Header_Pack_Pos - 1);
-                           Synthetic_Image : constant Byte_Array :=
-                             Zlib.Seven_Zip_Container.Build_Archive
-                               (Normalized_Header, Synthetic_Payload);
                         begin
-                           return Extract_Seven_Zip_Entry
-                             (Synthetic_Image, Entry_Name, Password,
-                              Signature_Region => Synthetic_Image,
-                              Fetch_Packed     => null,
-                              Use_Preset_Info  => False,
-                              Preset_Info      => (others => <>),
-                              Status           => Status,
-                              Kind             => Kind,
-                              Metadata         => Metadata);
+                           --  A caller reading from a file recurses on the
+                           --  decoded header while keeping the archive's own
+                           --  packed area. Rebuilding an image instead would
+                           --  need the payload prefix, which is nearly the
+                           --  whole archive, and would undo the point of
+                           --  reading from a file at all.
+                           if Fetch_Packed /= null then
+                              return Extract_Seven_Zip_Entry
+                                (Archive_Image    => Normalized_Header,
+                                 Entry_Name       => Entry_Name,
+                                 Password         => Password,
+                                 Signature_Region => Signature_Region,
+                                 Fetch_Packed     => Fetch_Packed,
+                                 Use_Preset_Info  => True,
+                                 Preset_Info      =>
+                                   (Payload_First => Payload_First,
+                                    Header_First  => Normalized_Header'First,
+                                    Header_Last   => Normalized_Header'Last,
+                                    --  The decoded header describes only the
+                                    --  file streams, which end where the
+                                    --  encoded header's own packed stream
+                                    --  begins.
+                                    Payload_Count => Encoded_Header_Pack_Pos,
+                                    Header_Count  => Normalized_Header'Length,
+                                    Header_CRC    => 0),
+                                 Status           => Status,
+                                 Kind             => Kind,
+                                 Metadata         => Metadata);
+                           end if;
+
+                           declare
+                              Synthetic_Payload : constant Byte_Array :=
+                                Packed_Region
+                                  (Payload_First,
+                                   Payload_First
+                                   + Encoded_Header_Pack_Pos - 1);
+                              Synthetic_Image : constant Byte_Array :=
+                                Zlib.Seven_Zip_Container.Build_Archive
+                                  (Normalized_Header, Synthetic_Payload);
+                           begin
+                              return Extract_Seven_Zip_Entry
+                                (Synthetic_Image, Entry_Name, Password,
+                                 Signature_Region => Synthetic_Image,
+                                 Fetch_Packed     => null,
+                                 Use_Preset_Info  => False,
+                                 Preset_Info      => (others => <>),
+                                 Status           => Status,
+                                 Kind             => Kind,
+                                 Metadata         => Metadata);
+                           end;
                         end;
                      end;
                   end if;
@@ -9651,12 +9681,7 @@ package body Zlib is
                Header : constant Byte_Array :=
                  Read_Region (Info.Header_First, Info.Header_Last);
             begin
-               --  A compressed header is normalized by rebuilding the archive
-               --  image, so taking it here would materialize what this path
-               --  exists to avoid.
-               if Header'Length = 0
-                 or else Header (Header'First) = 16#17#
-               then
+               if Header'Length = 0 then
                   SIO.Close (File);
                   return Empty;
                end if;

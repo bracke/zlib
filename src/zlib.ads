@@ -1081,10 +1081,9 @@ package Zlib is
    --  the archive.
    --
    --  For a .7z, the header and the folders the request touches are read
-   --  rather than the archive. The remaining bound is the folder: a non-solid
-   --  archive costs one member, a solid one costs its whole content. An
-   --  archive with a compressed header is read whole, because normalizing that
-   --  header rebuilds the image.
+   --  rather than the archive, whether or not that header is compressed. The
+   --  remaining bound is the folder: a non-solid archive costs one member, a
+   --  solid one costs its whole decompressed content.
    --
    --  An encrypted member, or a ZIP needing a password, reads the whole
    --  image. Password is used for 7z and for encrypted ZIP
@@ -1147,10 +1146,10 @@ package Zlib is
    --  it costs that member rather than the archive.
    --
    --  A .7z is catalogued from its header and then taken one member at a time,
-   --  so it is not read whole either. Each member costs its folder, which is
-   --  the format's own bound: a non-solid archive costs one member, a solid one
-   --  costs its whole content. An archive whose header is itself compressed is
-   --  read whole, because normalizing that header rebuilds the image.
+   --  so it is not read whole either, and a compressed header costs no more
+   --  than a plain one. Each member costs its folder, which is the format's own
+   --  bound: a non-solid archive costs one member, a solid one costs its whole
+   --  decompressed content.
    --
    --  An encrypted member falls back to reading the whole image, which needs
    --  roughly the archive size plus the largest decompressed member and
