@@ -3367,6 +3367,19 @@ package body Zlib is
       end;
 
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         if SIO.Is_Open (File) then
+            SIO.Close (File);
+         end if;
+
+         Status := Insufficient_Memory;
+
+         declare
+            Empty : constant Byte_Array (1 .. 0) := [others => 0];
+         begin
+            return Empty;
+         end;
       when others =>
          if SIO.Is_Open (File) then
             SIO.Close (File);
@@ -3657,6 +3670,13 @@ package body Zlib is
       Status := Ok;
 
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         if SIO.Is_Open (File) then
+            SIO.Close (File);
+         end if;
+
+         Status := Insufficient_Memory;
       when others =>
          if SIO.Is_Open (File) then
             SIO.Close (File);
@@ -4245,6 +4265,10 @@ package body Zlib is
       Status := (if Found_Zstd_Name then Invalid_Block_Type else Unsupported_Method);
       return Empty;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+      return Empty;
       when others =>
          Status := Unsupported_Method;
       return Empty;
@@ -4619,6 +4643,10 @@ package body Zlib is
       Status := (if Found_LZMA_Name then Invalid_Block_Type else Unsupported_Method);
       return Empty;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -5185,6 +5213,10 @@ package body Zlib is
          return Result;
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return No;
       when others =>
          Status := Invalid_Header;
          return No;
@@ -5395,6 +5427,10 @@ package body Zlib is
          end;
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
       when others =>
          Status := Unsupported_Method;
          return Empty;
@@ -5517,6 +5553,10 @@ package body Zlib is
          end;
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+      return Empty;
       when others =>
          Status := Unsupported_Method;
       return Empty;
@@ -5651,6 +5691,13 @@ package body Zlib is
       Close (Output);
       Compressed_Size := Interfaces.Unsigned_64 (Payload'Length);
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         if Is_Open (Output) then
+            Close (Output);
+         end if;
+         Status := Insufficient_Memory;
+         Compressed_Size := 0;
       when others =>
          if Is_Open (Output) then
             Close (Output);
@@ -6546,6 +6593,9 @@ package body Zlib is
    exception
       when Constraint_Error =>
          Status := Unsupported_Method;
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
       when others =>
          Status := Unsupported_Method;
    end ZIP_Files;
@@ -10268,6 +10318,10 @@ package body Zlib is
                  Status => Status);
       end case;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty_Result;
       when others =>
          Status := Unexpected_End_Of_Input;
          return Empty_Result;
@@ -10482,6 +10536,10 @@ package body Zlib is
       Status := Ok;
       return To_Byte_Array (Output);
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty_Result;
       when others =>
          Status := Unsupported_Method;
          return Empty_Result;
@@ -10536,6 +10594,10 @@ package body Zlib is
       begin
          SIO.Open (Input_File, SIO.In_File, Input_Path);
       exception
+         --  A memory limit is not a data, method or file error.
+         when Storage_Error =>
+            Status := Insufficient_Memory;
+            return;
          when others =>
             Status := Input_File_Error;
             return;
@@ -10544,6 +10606,13 @@ package body Zlib is
       begin
          SIO.Create (Output_File, SIO.Out_File, Output_Path);
       exception
+         --  A memory limit is not a data, method or file error.
+         when Storage_Error =>
+            if SIO.Is_Open (Input_File) then
+               SIO.Close (Input_File);
+            end if;
+            Status := Insufficient_Memory;
+            return;
          when others =>
             if SIO.Is_Open (Input_File) then
                SIO.Close (Input_File);
@@ -10994,6 +11063,10 @@ package body Zlib is
       begin
          SIO.Open (Input_File, SIO.In_File, Input_Path);
       exception
+         --  A memory limit is not a data, method or file error.
+         when Storage_Error =>
+            Status := Insufficient_Memory;
+            return;
          when others =>
             Status := Input_File_Error;
             return;

@@ -50,6 +50,10 @@ package body Zlib.Seven_Zip_File_Extraction is
       Metadata.Is_Directory := Is_Directory;
       return Metadata;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return No_Seven_Zip_Entry_Metadata;
       when others =>
          Status := Unsupported_Method;
          return No_Seven_Zip_Entry_Metadata;
@@ -109,6 +113,10 @@ package body Zlib.Seven_Zip_File_Extraction is
                     (Ada.Directories.Containing_Directory (Output_Path));
                   Ada.Directories.Create_Path (Output_Path);
                exception
+                  --  A memory limit is not a data, method or file error.
+                  when Storage_Error =>
+                     Status := Insufficient_Memory;
+                     return;
                   when others =>
                      Status := Output_File_Error;
                      return;
@@ -123,6 +131,10 @@ package body Zlib.Seven_Zip_File_Extraction is
                Ada.Directories.Create_Path
                  (Ada.Directories.Containing_Directory (Output_Path));
             exception
+               --  A memory limit is not a data, method or file error.
+               when Storage_Error =>
+                  Status := Insufficient_Memory;
+                  return;
                when others =>
                   Status := Output_File_Error;
                   return;
@@ -139,6 +151,9 @@ package body Zlib.Seven_Zip_File_Extraction is
          end;
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
       when others =>
          Status := Output_File_Error;
    end Extract_File;
@@ -238,6 +253,10 @@ package body Zlib.Seven_Zip_File_Extraction is
             begin
                Ada.Directories.Create_Path (Output_Dir);
             exception
+               --  A memory limit is not a data, method or file error.
+               when Storage_Error =>
+                  Status := Insufficient_Memory;
+                  return;
                when others =>
                   Status := Output_File_Error;
                   return;
@@ -272,6 +291,10 @@ package body Zlib.Seven_Zip_File_Extraction is
                         return;
                      end if;
                   exception
+                     --  A memory limit is not a data, method or file error.
+                     when Storage_Error =>
+                        Status := Insufficient_Memory;
+                        return;
                      when others =>
                         Status := Output_File_Error;
                         return;
@@ -292,6 +315,10 @@ package body Zlib.Seven_Zip_File_Extraction is
                      begin
                         Ada.Directories.Create_Path (Output_Path);
                      exception
+                        --  A memory limit is not a data, method or file error.
+                        when Storage_Error =>
+                           Status := Insufficient_Memory;
+                           return;
                         when others =>
                            Status := Output_File_Error;
                            return;
@@ -303,6 +330,10 @@ package body Zlib.Seven_Zip_File_Extraction is
                         Ada.Directories.Create_Path
                           (Ada.Directories.Containing_Directory (Output_Path));
                      exception
+                        --  A memory limit is not a data, method or file error.
+                        when Storage_Error =>
+                           Status := Insufficient_Memory;
+                           return;
                         when others =>
                            Status := Output_File_Error;
                            return;
@@ -324,6 +355,9 @@ package body Zlib.Seven_Zip_File_Extraction is
          Status := Ok;
       end;
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
       when others =>
          Status := Output_File_Error;
    end Extract_Files;
