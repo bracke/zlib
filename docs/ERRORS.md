@@ -51,11 +51,9 @@ that one member rather than the whole archive. A mostly-Deflate archive with
 one BZip2 member therefore still extracts in memory proportional to its largest
 member.
 
-Only an encrypted member takes the whole archive out of scope, because
-decrypting needs a password this path is not given. That falls back to
-whole-image extraction, where the old bound applies -- roughly the archive size
-plus the largest decompressed member -- and a large archive again needs a task
-sized for it.
+An encrypted member is rebuilt the same way, keeping its encryption flag so it
+can be decrypted with the caller's password, so it too costs one member rather
+than the archive.
 
 `Extract_Archive_To_Directory` takes an image the caller already holds in
 memory and is unaffected.

@@ -1086,8 +1086,8 @@ package Zlib is
    --  solid one costs its whole decompressed content.
    --
    --  An encrypted member is decrypted with Password whatever its compression
-   --  method, reading the whole image to do so. A wrong password is reported as
-   --  Invalid_Checksum. Password is used for 7z and for encrypted ZIP
+   --  method, and costs that member rather than the archive. A wrong password
+   --  is reported as Invalid_Checksum. Password is used for 7z and for encrypted ZIP
    --  members; pass "" when not needed.
    --  @param Archive_Path path to a .zip or .7z file
    --  @param Entry_Name archive entry name to extract
@@ -1153,10 +1153,8 @@ package Zlib is
    --  decompressed content.
    --
    --  An encrypted member is decrypted with Password whatever its compression
-   --  method, and falls back to reading the whole image, which needs roughly
-   --  the archive size plus the largest decompressed member and reports
-   --  Insufficient_Memory when that does not fit. A wrong password is reported
-   --  as Invalid_Checksum.
+   --  method, and costs that member rather than the archive like any other. A
+   --  wrong password is reported as Invalid_Checksum.
    --  @param Archive_Path path to a .zip or .7z file
    --  @param Destination_Dir directory to extract into
    --  @param Password archive password, or "" if not encrypted

@@ -9497,6 +9497,23 @@ package body Zlib is
       Metadata     : out Seven_Zip_Entry_Metadata) return Byte_Array;
    --  Declared ahead of its first caller; defined below.
 
+   --  The streaming reader hands rebuilt single-entry images here. Encrypted
+   --  ones need the password; the plain entry point handles the rest.
+   function Extract_ZIP_Entry_Image
+     (Archive_Image : Byte_Array;
+      Entry_Name    : String;
+      Password      : String;
+      Status        : out Status_Code) return Byte_Array
+   is
+   begin
+      if Password'Length = 0 then
+         return Extract_ZIP (Archive_Image, Entry_Name, Status);
+      end if;
+
+      return Extract_ZIP_External_Entry
+        (Archive_Image, Entry_Name, Password, Status);
+   end Extract_ZIP_Entry_Image;
+
    procedure Extract_Archive_File_Entry_To_File
      (Archive_Path : String;
       Entry_Name   : String;
@@ -9506,18 +9523,21 @@ package body Zlib is
    is
       Handled : Boolean := False;
    begin
-      if Password'Length = 0 then
+      --  The streaming reader decrypts through the same bridge, so a password
+      --  no longer forces the whole image.
+      begin
          Zlib.ZIP_Streaming_Extraction.Extract_Entry_To_File
            (Archive_Path  => Archive_Path,
             Entry_Name    => Entry_Name,
             Output_Path   => Output_Path,
-            Extract_Image => Extract_ZIP'Access,
+            Password      => Password,
+            Extract_Image => Extract_ZIP_Entry_Image'Access,
             Handled       => Handled,
             Status        => Status);
          if Handled then
             return;
          end if;
-      end if;
+      end;
 
       declare
          Seven_Handled : Boolean := False;
@@ -9998,6 +10018,9 @@ package body Zlib is
          Write_File          => Write_File'Access,
          Status              => Status);
    exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
       when others =>
          Status := Unsupported_Method;
    end Extract_Archive_To_Directory;
@@ -10015,18 +10038,21 @@ package body Zlib is
       --  longer has to fit in memory. It declines archives it cannot stream
       --  (encrypted members, or methods other than Stored and Deflate), and
       --  those fall back to whole-image extraction below.
-      if Password'Length = 0 then
+      --  The streaming reader decrypts through the same bridge, so a password
+      --  no longer forces the whole image.
+      begin
          Zlib.ZIP_Streaming_Extraction.Extract_To_Directory
            (Archive_Path    => Archive_Path,
             Destination_Dir => Destination_Dir,
             Safe_Entry_Name => Safe_ZIP_Entry_Name'Access,
-            Extract_Image   => Extract_ZIP'Access,
+            Password        => Password,
+            Extract_Image   => Extract_ZIP_Entry_Image'Access,
             Handled         => Handled,
             Status          => Status);
          if Handled then
             return;
          end if;
-      end if;
+      end;
 
       --  A native 7z is catalogued from its header and then taken one member
       --  at a time, so the archive is never read whole. Each member still

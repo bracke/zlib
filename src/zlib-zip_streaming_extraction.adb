@@ -101,6 +101,7 @@ package body Zlib.ZIP_Streaming_Extraction is
    --  ZIP_Traditional_Decrypted_External_Image in the root body.
    function Single_Entry_Image
      (Entry_Name : String;
+      Flags      : Interfaces.Unsigned_16;
       Method     : Interfaces.Unsigned_16;
       CRC        : Interfaces.Unsigned_32;
       Payload    : Byte_Array;
@@ -115,6 +116,9 @@ package body Zlib.ZIP_Streaming_Extraction is
    begin
       Put_U32 (Image, 1, 16#0403_4B50#);
       Put_U16 (Image, 5, 20);
+      --  The encryption flag has to survive into the rebuilt entry, or the
+      --  bridge has no way to know the payload needs decrypting.
+      Put_U16 (Image, 7, Flags);
       Put_U16 (Image, 9, Method);
       Put_U32 (Image, 15, CRC);
       Put_U32 (Image, 19, Interfaces.Unsigned_32 (Payload_Len));
@@ -128,6 +132,7 @@ package body Zlib.ZIP_Streaming_Extraction is
       Put_U32 (Image, Central_Offset + 1, 16#0201_4B50#);
       Put_U16 (Image, Central_Offset + 5, 20);
       Put_U16 (Image, Central_Offset + 7, 20);
+      Put_U16 (Image, Central_Offset + 9, Flags);
       Put_U16 (Image, Central_Offset + 11, Method);
       Put_U32 (Image, Central_Offset + 17, CRC);
       Put_U32 (Image, Central_Offset + 21, Interfaces.Unsigned_32 (Payload_Len));
@@ -528,10 +533,13 @@ package body Zlib.ZIP_Streaming_Extraction is
       Unc_Size     : Interfaces.Unsigned_64;
       Expected_CRC : Interfaces.Unsigned_32;
       Entry_Name   : String;
+      Flags        : Interfaces.Unsigned_16;
+      Password     : String;
       Target_Path  : String;
       Extract_Image : not null access function
         (Archive_Image : Byte_Array;
          Entry_Name    : String;
+         Password      : String;
          Status        : out Status_Code) return Byte_Array;
       Status       : out Status_Code)
    is
@@ -578,12 +586,13 @@ package body Zlib.ZIP_Streaming_Extraction is
             Image : constant Byte_Array :=
               Single_Entry_Image
                 (Entry_Name => Entry_Name,
+                 Flags      => Flags,
                  Method     => Method,
                  CRC        => Expected_CRC,
                  Payload    => Payload,
                  Plain_Size => Interfaces.Unsigned_32 (Unc_Size));
             Decoded : constant Byte_Array :=
-              Extract_Image (Image, Entry_Name, Status);
+              Extract_Image (Image, Entry_Name, Password, Status);
          begin
             if Status /= Ok then
                return;
@@ -623,9 +632,11 @@ package body Zlib.ZIP_Streaming_Extraction is
       Destination_Dir : String;
       Safe_Entry_Name : not null access function
         (Entry_Name : String) return Boolean;
+      Password        : String;
       Extract_Image   : not null access function
         (Archive_Image : Byte_Array;
          Entry_Name    : String;
+         Password      : String;
          Status        : out Status_Code) return Byte_Array;
       Handled         : out Boolean;
       Status          : out Status_Code)
@@ -671,26 +682,6 @@ package body Zlib.ZIP_Streaming_Extraction is
             return;
          end if;
 
-         --  First pass: only an encrypted member takes the whole archive out
-         --  of scope, because decrypting needs the password this entry point
-         --  is not given. Other methods are handled per member below.
-         for I in 1 .. CD_Count loop
-            exit when Pos + 45 > Central'Last;
-            exit when U32_At (Central, Pos) /= Central_Signature;
-            declare
-               Flags     : constant Interfaces.Unsigned_16 := U16_At (Central, Pos + 8);
-               Name_Len  : constant Natural := Natural (U16_At (Central, Pos + 28));
-               Extra_Len : constant Natural := Natural (U16_At (Central, Pos + 30));
-               Cmt_Len   : constant Natural := Natural (U16_At (Central, Pos + 32));
-            begin
-               if (Flags and 1) /= 0 then
-                  SIO.Close (File);
-                  return;
-               end if;
-               Pos := Pos + 46 + Name_Len + Extra_Len + Cmt_Len;
-            end;
-         end loop;
-
          Handled := True;
          Status := Ok;
          Pos := 0;
@@ -699,6 +690,7 @@ package body Zlib.ZIP_Streaming_Extraction is
             exit when Pos + 45 > Central'Last;
             exit when U32_At (Central, Pos) /= Central_Signature;
             declare
+               Flags     : constant Interfaces.Unsigned_16 := U16_At (Central, Pos + 8);
                Method    : constant Interfaces.Unsigned_16 := U16_At (Central, Pos + 10);
                CRC       : constant Interfaces.Unsigned_32 := U32_At (Central, Pos + 16);
                Comp_32   : constant Interfaces.Unsigned_32 := U32_At (Central, Pos + 20);
@@ -742,8 +734,9 @@ package body Zlib.ZIP_Streaming_Extraction is
                      else
                         Ada.Directories.Create_Path
                           (Ada.Directories.Containing_Directory (Target));
-                        if Method = Method_Stored
-                          or else Method = Method_Deflate
+                        if (Flags and 1) = 0
+                          and then (Method = Method_Stored
+                                    or else Method = Method_Deflate)
                         then
                            Extract_Member
                              (File         => File,
@@ -765,6 +758,8 @@ package body Zlib.ZIP_Streaming_Extraction is
                               Unc_Size     => Unc,
                               Expected_CRC => CRC,
                               Entry_Name   => Full,
+                              Flags        => Flags,
+                              Password     => Password,
                               Target_Path  => Target,
                               Extract_Image => Extract_Image,
                               Status       => Status);
@@ -802,9 +797,11 @@ package body Zlib.ZIP_Streaming_Extraction is
      (Archive_Path : String;
       Entry_Name   : String;
       Output_Path  : String;
+      Password     : String;
       Extract_Image : not null access function
         (Archive_Image : Byte_Array;
          Entry_Name    : String;
+         Password      : String;
          Status        : out Status_Code) return Byte_Array;
       Handled      : out Boolean;
       Status       : out Status_Code)
@@ -878,19 +875,15 @@ package body Zlib.ZIP_Streaming_Extraction is
                if US.To_String (Name) = Entry_Name then
                   Matched := True;
 
-                  --  An encrypted member needs a password this entry point is
-                  --  not given, so the caller must take the whole-image path.
-                  if (Flags and 1) /= 0 then
-                     SIO.Close (File);
-                     return;
-                  end if;
-
                   Resolve_Sizes
                     (Central, Name_First + Name_Len, Extra_Len,
                      Comp_32, Unc_32, Off_32, Comp, Unc, Local_Offset);
 
                   Handled := True;
-                  if Method = Method_Stored or else Method = Method_Deflate then
+                  if (Flags and 1) = 0
+                    and then (Method = Method_Stored
+                              or else Method = Method_Deflate)
+                  then
                      Extract_Member
                        (File         => File,
                         File_Size    => File_Size,
@@ -911,6 +904,8 @@ package body Zlib.ZIP_Streaming_Extraction is
                         Unc_Size     => Unc,
                         Expected_CRC => CRC,
                         Entry_Name   => Entry_Name,
+                        Flags        => Flags,
+                        Password     => Password,
                         Target_Path  => Output_Path,
                         Extract_Image => Extract_Image,
                         Status       => Status);
