@@ -955,6 +955,91 @@ package body Zlib_Insufficient_Memory_Tests is
       Ada.Directories.Delete_Tree (Work);
    end Test_Seven_Zip_Entry_Extraction;
 
+   --  Extracting a whole 7z to a directory goes member by member off the
+   --  catalogue, so the archive is never read whole. It is the case the
+   --  original report was about, and it must not be bounded by the archive.
+   procedure Test_Seven_Zip_Directory_Extraction
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Ada.Directories.File_Size;
+
+      Work    : constant String :=
+        Ada.Directories.Current_Directory & "/obj/seven_zip_dir_check";
+      Archive : constant String := Work & "/stored.7z";
+      Out_Dir : constant String := Work & "/out";
+      Member  : constant String := "tree/deep/member.bin";
+
+      Member_Size : constant := 1024 * 1024;
+      Pick_Stack  : constant := 3 * 1024 * 1024;
+      Outcome : Zlib.Status_Code := Zlib.Ok;
+      Escaped : Boolean := False;
+   begin
+      if Ada.Directories.Exists (Work) then
+         Ada.Directories.Delete_Tree (Work);
+      end if;
+      Ada.Directories.Create_Path (Out_Dir);
+
+      declare
+         Payload : Byte_Array_Access :=
+           new Zlib.Byte_Array (1 .. Member_Size);
+         Build   : Zlib.Status_Code := Zlib.Ok;
+      begin
+         Payload.all := [others => 75];
+         declare
+            Image  : constant Zlib.Byte_Array :=
+              Zlib.Seven_Zip_Stored (Payload.all, Member, Build);
+            Out_F  : SIO.File_Type;
+            Raw    : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Image'Length));
+            Target : Ada.Streams.Stream_Element_Offset := Raw'First;
+         begin
+            Free (Payload);
+            Assert (Build = Zlib.Ok, "fixture: 7z archive must build");
+            for B of Image loop
+               Raw (Target) := Ada.Streams.Stream_Element (B);
+               Target := Target + 1;
+            end loop;
+            SIO.Create (Out_F, SIO.Out_File, Archive);
+            SIO.Write (Out_F, Raw);
+            SIO.Close (Out_F);
+         end;
+      end;
+
+      declare
+         task Runner with Storage_Size => Pick_Stack;
+
+         task body Runner is
+         begin
+            Zlib.Extract_Archive_File_To_Directory
+              (Archive_Path    => Archive,
+               Destination_Dir => Out_Dir,
+               Password        => "",
+               Status          => Outcome);
+         exception
+            when others =>
+               Escaped := True;
+         end Runner;
+      begin
+         null;
+      end;
+
+      Assert (not Escaped, "extraction must not raise out of a status API");
+      Assert
+        (Outcome = Zlib.Ok,
+         "extracting a 7z to a directory must succeed, got "
+         & Zlib.Status_Image (Outcome));
+      Assert
+        (Ada.Directories.Exists (Out_Dir & "/" & Member),
+         "the member must be recreated under its relative path");
+      Assert
+        (Ada.Directories.Size (Out_Dir & "/" & Member)
+           = Ada.Directories.File_Size (Member_Size),
+         "the extracted member must be whole");
+
+      Ada.Directories.Delete_Tree (Work);
+   end Test_Seven_Zip_Directory_Extraction;
+
    overriding procedure Register_Tests
      (T : in out Test_Case) is
    begin
@@ -985,6 +1070,9 @@ package body Zlib_Insufficient_Memory_Tests is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Test_Seven_Zip_Entry_Extraction'Access,
          "extracting one 7z member from a file succeeds and is whole");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Test_Seven_Zip_Directory_Extraction'Access,
+         "extracting a whole 7z to a directory does not read the archive");
    end Register_Tests;
 
 end Zlib_Insufficient_Memory_Tests;

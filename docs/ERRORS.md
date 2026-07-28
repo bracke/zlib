@@ -62,7 +62,8 @@ memory and is unaffected.
 
 A `.7z` is read from its signature header, its header, and the packed streams
 of the folders a request actually touches, so the archive itself is never read
-whole. What remains is the folder: 7z groups files into folders that share one
+whole. That holds for extracting one member and for extracting the whole
+archive to a directory, which goes member by member off the catalogue. What remains is the folder: 7z groups files into folders that share one
 coder chain, and any file in a folder requires decoding that folder. For a
 non-solid archive a folder is one member, and extracting one 800 KB member from
 a 9.6 MB archive needs about a megabyte. For a solid archive -- what `7z a`

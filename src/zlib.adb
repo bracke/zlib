@@ -9854,9 +9854,93 @@ package body Zlib is
          end if;
       end if;
 
+      --  A native 7z is catalogued from its header and then taken one member
+      --  at a time, so the archive is never read whole. Each member still
+      --  costs its folder, which is the format's own bound.
+      if Password'Length = 0 then
+         declare
+            List_Handled : Boolean := False;
+            List_Status  : Status_Code := Ok;
+            Entries      : constant Archive_Entry_Array :=
+              List_Seven_Zip_File_Entries
+                (Archive_Path, "", List_Handled, List_Status);
+            All_Handled  : Boolean := True;
+         begin
+            if List_Handled and then List_Status = Ok then
+               for E of Entries loop
+                  declare
+                     Name : constant String :=
+                       Ada.Strings.Unbounded.To_String (E.Name);
+                     Rel  : constant String :=
+                       (if Name'Length > 0 and then Name (Name'Last) = '/'
+                        then Name (Name'First .. Name'Last - 1) else Name);
+                  begin
+                     if Rel'Length = 0 or else not Safe_ZIP_Entry_Name (Rel)
+                     then
+                        Status := Unsupported_Method;
+                        return;
+                     end if;
+
+                     declare
+                        Target : constant String :=
+                          Destination_Dir & "/" & Rel;
+                     begin
+                        if E.Is_Directory then
+                           Ada.Directories.Create_Path (Target);
+                        else
+                           Ada.Directories.Create_Path
+                             (Ada.Directories.Containing_Directory (Target));
+
+                           declare
+                              Entry_Handled : Boolean := False;
+                              Entry_Kind    : Seven_Zip_Entry_Kind :=
+                                Seven_Zip_File_Entry;
+                              Entry_Meta    : Seven_Zip_Entry_Metadata;
+                              Payload       : constant Byte_Array :=
+                                Extract_Seven_Zip_File_Entry
+                                  (Archive_Path, Name, "", Entry_Handled,
+                                   Status, Entry_Kind, Entry_Meta);
+                              Write_Status  : Status_Code := Ok;
+                           begin
+                              --  Declining is a property of the archive, not
+                              --  of one member, so the whole extraction goes
+                              --  back to the image path.
+                              if not Entry_Handled then
+                                 All_Handled := False;
+                                 exit;
+                              end if;
+
+                              if Status /= Ok then
+                                 return;
+                              end if;
+
+                              Write_File (Target, Payload, Write_Status);
+                              if Write_Status /= Ok then
+                                 Status := Write_Status;
+                                 return;
+                              end if;
+                           end;
+                        end if;
+                     end;
+                  end;
+               end loop;
+
+               if All_Handled then
+                  Status := Ok;
+                  return;
+               end if;
+            end if;
+         end;
+      end if;
+
       Zlib.Archive_Directory_Extraction.Extract_File_To_Directory
         (Archive_Path, Destination_Dir, Password, Read_File'Access,
          Extract_Archive_To_Directory'Access, Status);
+   exception
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+      when others =>
+         Status := Unsupported_Method;
    end Extract_Archive_File_To_Directory;
 
    function List_Archive_Entries
