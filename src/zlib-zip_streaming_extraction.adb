@@ -798,6 +798,150 @@ package body Zlib.ZIP_Streaming_Extraction is
          Status := Unsupported_Method;
    end Extract_To_Directory;
 
+   procedure Extract_Entry_To_File
+     (Archive_Path : String;
+      Entry_Name   : String;
+      Output_Path  : String;
+      Extract_Image : not null access function
+        (Archive_Image : Byte_Array;
+         Entry_Name    : String;
+         Status        : out Status_Code) return Byte_Array;
+      Handled      : out Boolean;
+      Status       : out Status_Code)
+   is
+      File      : SIO.File_Type;
+      File_Size : Interfaces.Unsigned_64;
+      CD_Offset : Interfaces.Unsigned_64;
+      CD_Size   : Interfaces.Unsigned_64;
+      CD_Count  : Natural;
+      Found     : Boolean;
+   begin
+      Handled := False;
+      Status := Unsupported_Method;
+
+      if Entry_Name'Length = 0 then
+         Handled := True;
+         Status := Unsupported_Method;
+         return;
+      end if;
+
+      if not Ada.Directories.Exists (Archive_Path) then
+         Handled := True;
+         Status := Input_File_Error;
+         return;
+      end if;
+
+      SIO.Open (File, SIO.In_File, Archive_Path);
+      File_Size := Interfaces.Unsigned_64 (SIO.Size (File));
+      Find_Central_Directory
+        (File, File_Size, CD_Offset, CD_Size, CD_Count, Found);
+      if not Found then
+         SIO.Close (File);
+         return;
+      end if;
+
+      declare
+         Central : Byte_Array (0 .. Natural (CD_Size) - 1);
+         Read_Ok : Boolean;
+         Pos     : Natural := 0;
+         Matched : Boolean := False;
+      begin
+         Read_At (File, CD_Offset, Central, Read_Ok);
+         if not Read_Ok then
+            SIO.Close (File);
+            return;
+         end if;
+
+         for I in 1 .. CD_Count loop
+            exit when Pos + 45 > Central'Last;
+            exit when U32_At (Central, Pos) /= Central_Signature;
+            declare
+               Flags     : constant Interfaces.Unsigned_16 := U16_At (Central, Pos + 8);
+               Method    : constant Interfaces.Unsigned_16 := U16_At (Central, Pos + 10);
+               CRC       : constant Interfaces.Unsigned_32 := U32_At (Central, Pos + 16);
+               Comp_32   : constant Interfaces.Unsigned_32 := U32_At (Central, Pos + 20);
+               Unc_32    : constant Interfaces.Unsigned_32 := U32_At (Central, Pos + 24);
+               Name_Len  : constant Natural := Natural (U16_At (Central, Pos + 28));
+               Extra_Len : constant Natural := Natural (U16_At (Central, Pos + 30));
+               Cmt_Len   : constant Natural := Natural (U16_At (Central, Pos + 32));
+               Off_32    : constant Interfaces.Unsigned_32 := U32_At (Central, Pos + 42);
+               Name_First : constant Natural := Pos + 46;
+               Comp, Unc, Local_Offset : Interfaces.Unsigned_64;
+               Name       : US.Unbounded_String;
+            begin
+               exit when Name_First + Name_Len + Extra_Len + Cmt_Len - 1 > Central'Last;
+
+               for K in Name_First .. Name_First + Name_Len - 1 loop
+                  US.Append (Name, Character'Val (Natural (Central (K))));
+               end loop;
+
+               if US.To_String (Name) = Entry_Name then
+                  Matched := True;
+
+                  --  An encrypted member needs a password this entry point is
+                  --  not given, so the caller must take the whole-image path.
+                  if (Flags and 1) /= 0 then
+                     SIO.Close (File);
+                     return;
+                  end if;
+
+                  Resolve_Sizes
+                    (Central, Name_First + Name_Len, Extra_Len,
+                     Comp_32, Unc_32, Off_32, Comp, Unc, Local_Offset);
+
+                  Handled := True;
+                  if Method = Method_Stored or else Method = Method_Deflate then
+                     Extract_Member
+                       (File         => File,
+                        File_Size    => File_Size,
+                        Local_Offset => Local_Offset,
+                        Method       => Method,
+                        Comp_Size    => Comp,
+                        Unc_Size     => Unc,
+                        Expected_CRC => CRC,
+                        Target_Path  => Output_Path,
+                        Status       => Status);
+                  else
+                     Extract_Foreign_Member
+                       (File         => File,
+                        File_Size    => File_Size,
+                        Local_Offset => Local_Offset,
+                        Method       => Method,
+                        Comp_Size    => Comp,
+                        Unc_Size     => Unc,
+                        Expected_CRC => CRC,
+                        Entry_Name   => Entry_Name,
+                        Target_Path  => Output_Path,
+                        Extract_Image => Extract_Image,
+                        Status       => Status);
+                  end if;
+                  exit;
+               end if;
+
+               Pos := Name_First + Name_Len + Extra_Len + Cmt_Len;
+            end;
+         end loop;
+
+         SIO.Close (File);
+
+         --  A ZIP this reader understood, whose directory simply has no such
+         --  member, is a definite answer rather than a reason to re-read the
+         --  archive whole.
+         if not Matched then
+            Handled := True;
+            Status := Unsupported_Method;
+         end if;
+      end;
+
+   exception
+      when Storage_Error =>
+         Handled := True;
+         Status := Insufficient_Memory;
+      when others =>
+         Handled := True;
+         Status := Unsupported_Method;
+   end Extract_Entry_To_File;
+
    function List_Entries
      (Archive_Path : String;
       Handled      : out Boolean;

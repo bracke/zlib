@@ -1067,6 +1067,26 @@ package Zlib is
    --  @param Status Ok on success, otherwise a deterministic failure code
    --  @return one Archive_Entry per member when Status is Ok
 
+   procedure Extract_Archive_File_Entry_To_File
+     (Archive_Path : String;
+      Entry_Name   : String;
+      Output_Path  : String;
+      Password     : String;
+      Status       : out Status_Code);
+   --  Write one named member of an archive file to Output_Path.
+   --
+   --  For a ZIP, only that member is read: it is streamed from the archive
+   --  file straight to Output_Path when its method allows, and otherwise
+   --  rebuilt as a single-entry image, so the cost is the member rather than
+   --  the archive. A .7z, an encrypted member, or a ZIP needing a password
+   --  reads the whole image. Password is used for 7z and for encrypted ZIP
+   --  members; pass "" when not needed.
+   --  @param Archive_Path path to a .zip or .7z file
+   --  @param Entry_Name archive entry name to extract
+   --  @param Output_Path file that receives the decoded member
+   --  @param Password archive password, or "" if not needed
+   --  @param Status Ok on success, otherwise a deterministic failure code
+
    function List_Archive_File_Entries
      (Archive_Path : String;
       Password     : String;

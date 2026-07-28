@@ -44,6 +44,31 @@ package Zlib.ZIP_Streaming_Extraction is
    --  extraction
    --  @param Status Ok on success, otherwise a deterministic failure code
 
+   procedure Extract_Entry_To_File
+     (Archive_Path : String;
+      Entry_Name   : String;
+      Output_Path  : String;
+      Extract_Image : not null access function
+        (Archive_Image : Byte_Array;
+         Entry_Name    : String;
+         Status        : out Status_Code) return Byte_Array;
+      Handled      : out Boolean;
+      Status       : out Status_Code);
+   --  Write one named member of the ZIP at Archive_Path to Output_Path,
+   --  streaming it when its method allows and otherwise rebuilding it as a
+   --  single-entry image as Extract_To_Directory does. Only that member is
+   --  touched, so the cost is the member rather than the archive.
+   --
+   --  Handled is False when the file is not a ZIP this reader recognizes or
+   --  the named member is encrypted; the caller must then fall back to
+   --  whole-image extraction and Status carries no meaning.
+   --  @param Archive_Path path to the .zip file
+   --  @param Entry_Name central-directory name of the member to extract
+   --  @param Output_Path file that receives the decoded member
+   --  @param Extract_Image decodes one entry of a supplied archive image
+   --  @param Handled False when the caller must fall back
+   --  @param Status Ok on success, otherwise a deterministic failure code
+
    function List_Entries
      (Archive_Path : String;
       Handled      : out Boolean;

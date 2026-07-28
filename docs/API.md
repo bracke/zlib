@@ -402,6 +402,13 @@ from parallel path/name arrays and can force ZIP64 local, central, and
 end-of-central-directory metadata through `Force_ZIP64`. Entry names are safe
 relative paths only.
 
+`Extract_Archive_File_Entry_To_File` writes one named member of an archive
+file to a path. For a ZIP only that member is read, streamed straight to the
+output when its method allows and otherwise rebuilt as a single-entry image, so
+the cost is the member rather than the archive. A `.7z`, an encrypted member, or
+a ZIP needing a password reads the whole image. A name the directory does not
+hold is reported as a failure without writing an output file.
+
 `List_Archive_Entries` catalogues an archive already held in memory.
 `List_Archive_File_Entries` catalogues one from a path, and for a ZIP reads
 only the central directory, so the cost is proportional to the number of

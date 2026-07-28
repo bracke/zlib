@@ -9274,6 +9274,62 @@ package body Zlib is
       return List_Seven_Zip_Entries_With_Password (Archive_Image, "", Status);
    end List_Seven_Zip_Entries;
 
+   procedure Extract_Archive_File_Entry_To_File
+     (Archive_Path : String;
+      Entry_Name   : String;
+      Output_Path  : String;
+      Password     : String;
+      Status       : out Status_Code)
+   is
+      Handled : Boolean := False;
+   begin
+      if Password'Length = 0 then
+         Zlib.ZIP_Streaming_Extraction.Extract_Entry_To_File
+           (Archive_Path  => Archive_Path,
+            Entry_Name    => Entry_Name,
+            Output_Path   => Output_Path,
+            Extract_Image => Extract_ZIP'Access,
+            Handled       => Handled,
+            Status        => Status);
+         if Handled then
+            return;
+         end if;
+      end if;
+
+      declare
+         Read_Status : Status_Code := Ok;
+         Image       : constant Byte_Array :=
+           Read_File (Archive_Path, Read_Status);
+      begin
+         if Read_Status /= Ok then
+            Status := Read_Status;
+            return;
+         end if;
+
+         declare
+            Is_7z : constant Boolean :=
+              Zlib.Seven_Zip_Container.Has_Archive_Signature (Image);
+            Decoded : constant Byte_Array :=
+              (if Is_7z
+               then Extract_Seven_Zip (Image, Entry_Name, Password, Status)
+               else Extract_ZIP (Image, Entry_Name, Status));
+            Write_Status : Status_Code := Ok;
+         begin
+            if Status /= Ok then
+               return;
+            end if;
+
+            Write_File (Output_Path, Decoded, Write_Status);
+            Status := Write_Status;
+         end;
+      end;
+   exception
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+      when others =>
+         Status := Unsupported_Method;
+   end Extract_Archive_File_Entry_To_File;
+
    function List_Archive_File_Entries
      (Archive_Path : String;
       Password     : String;

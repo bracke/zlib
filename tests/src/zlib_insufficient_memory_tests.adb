@@ -605,7 +605,8 @@ package body Zlib_Insufficient_Memory_Tests is
       Archive : constant String := Work & "/one.zip";
       Member  : constant String := "deep/member.txt";
 
-      Listing_Stack : constant := 256 * 1024;
+      Listing_Stack   : constant := 256 * 1024;
+      Listing_Payload : constant := 2 * 1024 * 1024;
       Outcome : Zlib.Status_Code := Zlib.Ok;
       Count   : Natural := 0;
       Sized   : Boolean := False;
@@ -618,7 +619,7 @@ package body Zlib_Insufficient_Memory_Tests is
 
       declare
          Payload : Byte_Array_Access :=
-           new Zlib.Byte_Array (1 .. Compress_Payload);
+           new Zlib.Byte_Array (1 .. Listing_Payload);
          Build   : Zlib.Status_Code := Zlib.Ok;
       begin
          Payload.all := [others => 70];
@@ -655,7 +656,7 @@ package body Zlib_Insufficient_Memory_Tests is
                Sized :=
                  Listed'Length = 1
                  and then Listed (Listed'First).Uncompressed_Size =
-                   Interfaces.Unsigned_64 (Compress_Payload);
+                   Interfaces.Unsigned_64 (Listing_Payload);
             end;
          exception
             when others =>
@@ -675,6 +676,109 @@ package body Zlib_Insufficient_Memory_Tests is
 
       Ada.Directories.Delete_Tree (Work);
    end Test_Listing_Does_Not_Read_The_Payloads;
+
+   --  Pulling one member out of an archive must cost that member, not the
+   --  archive. A Stored archive is used so the file on disk is genuinely as
+   --  large as its contents, and the extracting task is smaller than both.
+   procedure Test_Single_Entry_Extraction_Costs_One_Member
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Ada.Directories.File_Size;
+
+      Work    : constant String :=
+        Ada.Directories.Current_Directory & "/obj/single_entry_check";
+      Archive : constant String := Work & "/stored.zip";
+      Output  : constant String := Work & "/member.out";
+      Member  : constant String := "nested/member.bin";
+
+      Member_Size : constant := 2 * 1024 * 1024;
+      Pick_Stack  : constant := 1024 * 1024;
+      Outcome : Zlib.Status_Code := Zlib.Ok;
+      Escaped : Boolean := False;
+   begin
+      if Ada.Directories.Exists (Work) then
+         Ada.Directories.Delete_Tree (Work);
+      end if;
+      Ada.Directories.Create_Path (Work);
+
+      declare
+         Payload : Byte_Array_Access :=
+           new Zlib.Byte_Array (1 .. Member_Size);
+         Build   : Zlib.Status_Code := Zlib.Ok;
+      begin
+         Payload.all := [others => 71];
+         declare
+            Image  : constant Zlib.Byte_Array :=
+              Zlib.ZIP (Payload.all, Member, Zlib.Stored, Build);
+            Out_F  : SIO.File_Type;
+            Raw    : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Image'Length));
+            Target : Ada.Streams.Stream_Element_Offset := Raw'First;
+         begin
+            Free (Payload);
+            Assert (Build = Zlib.Ok, "fixture: stored archive must build");
+            for B of Image loop
+               Raw (Target) := Ada.Streams.Stream_Element (B);
+               Target := Target + 1;
+            end loop;
+            SIO.Create (Out_F, SIO.Out_File, Archive);
+            SIO.Write (Out_F, Raw);
+            SIO.Close (Out_F);
+         end;
+      end;
+
+      --  The archive on disk is now at least as large as its member, and both
+      --  exceed the task below.
+      Assert
+        (Ada.Directories.Size (Archive)
+           >= Ada.Directories.File_Size (Member_Size),
+         "fixture: a Stored archive must be as large as its member");
+
+      declare
+         task Runner with Storage_Size => Pick_Stack;
+
+         task body Runner is
+         begin
+            Zlib.Extract_Archive_File_Entry_To_File
+              (Archive_Path => Archive,
+               Entry_Name   => Member,
+               Output_Path  => Output,
+               Password     => "",
+               Status       => Outcome);
+         exception
+            when others =>
+               Escaped := True;
+         end Runner;
+      begin
+         null;
+      end;
+
+      Assert (not Escaped, "extraction must not raise out of a status API");
+      Assert
+        (Outcome = Zlib.Ok,
+         "extracting one member must not need the archive, got "
+         & Zlib.Status_Image (Outcome));
+      Assert
+        (Ada.Directories.Size (Output)
+           = Ada.Directories.File_Size (Member_Size),
+         "the extracted member must be whole");
+
+      --  A name the directory does not hold is a definite answer, not a
+      --  reason to read the archive whole.
+      Zlib.Extract_Archive_File_Entry_To_File
+        (Archive_Path => Archive,
+         Entry_Name   => "nested/absent.bin",
+         Output_Path  => Work & "/absent.out",
+         Password     => "",
+         Status       => Outcome);
+      Assert (Outcome /= Zlib.Ok, "a missing member must not report success");
+      Assert
+        (not Ada.Directories.Exists (Work & "/absent.out"),
+         "a missing member must not leave an output file");
+
+      Ada.Directories.Delete_Tree (Work);
+   end Test_Single_Entry_Extraction_Costs_One_Member;
 
    overriding procedure Register_Tests
      (T : in out Test_Case) is
@@ -697,6 +801,9 @@ package body Zlib_Insufficient_Memory_Tests is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Test_Listing_Does_Not_Read_The_Payloads'Access,
          "listing an archive reads only its central directory");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Test_Single_Entry_Extraction_Costs_One_Member'Access,
+         "extracting one member costs that member, not the archive");
    end Register_Tests;
 
 end Zlib_Insufficient_Memory_Tests;
