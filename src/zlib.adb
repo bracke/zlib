@@ -3323,26 +3323,39 @@ package body Zlib is
             end;
          end if;
 
+         --  Read straight into the result through a small window. Holding a
+         --  whole second copy of the file in a Stream_Element_Array first,
+         --  which is what this used to do, doubled the memory every whole-file
+         --  helper needs.
          declare
-            Buffer :
-              Ada.Streams.Stream_Element_Array
-                (1 .. Ada.Streams.Stream_Element_Offset (Size));
+            Result : Byte_Array (1 .. Size);
+            Chunk  : Ada.Streams.Stream_Element_Array (1 .. 64 * 1024);
             Last   : Ada.Streams.Stream_Element_Offset;
+            Filled : Natural := 0;
          begin
-            SIO.Read (File, Buffer, Last);
+            while Filled < Size loop
+               SIO.Read (File, Chunk, Last);
+               exit when Last < Chunk'First;
+
+               for I in Chunk'First .. Last loop
+                  exit when Filled = Size;
+                  Filled := Filled + 1;
+                  Result (Filled) := Byte (Chunk (I));
+               end loop;
+            end loop;
             SIO.Close (File);
 
-            declare
-               Result : Byte_Array (1 .. Size);
-            begin
-               for I in Result'Range loop
-                  Result (I) :=
-                    Byte (Buffer (Ada.Streams.Stream_Element_Offset (I)));
-               end loop;
+            if Filled /= Size then
+               Status := Input_File_Error;
+               declare
+                  Empty : constant Byte_Array (1 .. 0) := [others => 0];
+               begin
+                  return Empty;
+               end;
+            end if;
 
-               Status := Ok;
-               return Result;
-            end;
+            Status := Ok;
+            return Result;
          end;
       end;
 
