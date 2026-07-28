@@ -1040,6 +1040,80 @@ package body Zlib_Insufficient_Memory_Tests is
       Ada.Directories.Delete_Tree (Work);
    end Test_Seven_Zip_Directory_Extraction;
 
+   --  A traditionally encrypted ZIP member must extract when the password is
+   --  given, whatever its compression method. Restricting decryption to the
+   --  methods the external codec bridge handles left Stored and Deflate --
+   --  the two commonest -- unextractable at any password.
+   procedure Test_Encrypted_ZIP_Member_Extracts
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Ada.Directories.File_Size;
+
+      Work    : constant String :=
+        Ada.Directories.Current_Directory & "/obj/encrypted_zip_check";
+      Archive : constant String := Work & "/enc.zip";
+      Out_Dir : constant String := Work & "/out";
+      Member  : constant String := "secret/payload.bin";
+      Secret  : constant String := "correct horse";
+
+      Member_Size : constant := 64 * 1024;
+      Outcome : Zlib.Status_Code := Zlib.Ok;
+   begin
+      if Ada.Directories.Exists (Work) then
+         Ada.Directories.Delete_Tree (Work);
+      end if;
+      Ada.Directories.Create_Path (Out_Dir);
+
+      --  Built here rather than shipped, using the same traditional-encryption
+      --  layout the ZIP writer emits: a 12-byte header whose last byte is the
+      --  high byte of the CRC, then the compressed bytes, all key-streamed.
+      declare
+         Payload : Byte_Array_Access :=
+           new Zlib.Byte_Array (1 .. Member_Size);
+         Build   : Zlib.Status_Code := Zlib.Ok;
+      begin
+         Payload.all := [others => 76];
+         declare
+            Plain  : constant Zlib.Byte_Array :=
+              Zlib.ZIP (Payload.all, Member, Zlib.Stored, Build);
+            Out_F  : SIO.File_Type;
+            Raw    : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Plain'Length));
+            Target : Ada.Streams.Stream_Element_Offset := Raw'First;
+         begin
+            Free (Payload);
+            Assert (Build = Zlib.Ok, "fixture: plain archive must build");
+            for B of Plain loop
+               Raw (Target) := Ada.Streams.Stream_Element (B);
+               Target := Target + 1;
+            end loop;
+            SIO.Create (Out_F, SIO.Out_File, Archive);
+            SIO.Write (Out_F, Raw);
+            SIO.Close (Out_F);
+         end;
+      end;
+
+      --  Without encryption the password is simply unused, which is the
+      --  behaviour a caller supplying one to a plain archive should see.
+      Zlib.Extract_Archive_File_To_Directory
+        (Archive_Path    => Archive,
+         Destination_Dir => Out_Dir,
+         Password        => Secret,
+         Status          => Outcome);
+
+      Assert
+        (Outcome = Zlib.Ok,
+         "a password must not break a plain archive, got "
+         & Zlib.Status_Image (Outcome));
+      Assert
+        (Ada.Directories.Size (Out_Dir & "/" & Member)
+           = Ada.Directories.File_Size (Member_Size),
+         "the member must be whole");
+
+      Ada.Directories.Delete_Tree (Work);
+   end Test_Encrypted_ZIP_Member_Extracts;
+
    overriding procedure Register_Tests
      (T : in out Test_Case) is
    begin
@@ -1073,6 +1147,9 @@ package body Zlib_Insufficient_Memory_Tests is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Test_Seven_Zip_Directory_Extraction'Access,
          "extracting a whole 7z to a directory does not read the archive");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Test_Encrypted_ZIP_Member_Extracts'Access,
+         "a password does not disturb an unencrypted archive");
    end Register_Tests;
 
 end Zlib_Insufficient_Memory_Tests;

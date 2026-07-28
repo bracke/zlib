@@ -4737,7 +4737,15 @@ package body Zlib is
                if ZIP_Name_Equals
                  (Archive_Image, Name_First, Name_Len, Entry_Name)
                then
-                  if not Is_ZIP_External_Method (Method) then
+                  --  Traditional ZIP encryption is independent of the
+                  --  compression method, so Stored and Deflate entries are
+                  --  decrypted here too. Restricting this to the methods the
+                  --  external bridge handles left the two commonest ones
+                  --  unextractable whatever the password.
+                  if not Is_ZIP_External_Method (Method)
+                    and then Method /= 0
+                    and then Method /= 8
+                  then
                      Status := Unsupported_Method;
                      return Empty;
                   elsif (Flags and 1) = 0 then
@@ -4950,8 +4958,12 @@ package body Zlib is
                return Empty;
             end if;
 
-            return Extract_ZIP_External_Entry
-              (Decode_Image, Entry_Name, "", Status);
+            --  The decrypted image carries the entry's real method with the
+            --  encryption flag cleared, so it goes back through the ordinary
+            --  entry point. Handing it to the external bridge instead left
+            --  Stored and Deflate entries -- the common ones -- unextractable,
+            --  because that bridge only knows the codecs it delegates.
+            return Extract_ZIP (Decode_Image, Entry_Name, Status);
          end;
       end if;
 
@@ -9542,6 +9554,9 @@ package body Zlib is
             Decoded : constant Byte_Array :=
               (if Is_7z
                then Extract_Seven_Zip (Image, Entry_Name, Password, Status)
+               elsif Password'Length > 0
+               then Extract_ZIP_External_Entry
+                      (Image, Entry_Name, Password, Status)
                else Extract_ZIP (Image, Entry_Name, Status));
             Write_Status : Status_Code := Ok;
          begin
@@ -9951,6 +9966,24 @@ package body Zlib is
       begin
          return Extract_Seven_Zip (Image, Entry_Name, Password_In, Status);
       end Extract_Seven_Zip_With_Password;
+
+      --  Extract_ZIP has no password of its own, so an encrypted member would
+      --  fail however the caller was called. The traditional-encryption entry
+      --  point handles both, and falls back to the plain one when there is no
+      --  password to apply.
+      function Extract_ZIP_With_Password
+        (Image      : Byte_Array;
+         Entry_Name : String;
+         Status     : out Status_Code) return Byte_Array
+      is
+      begin
+         if Password'Length = 0 then
+            return Extract_ZIP (Image, Entry_Name, Status);
+         end if;
+
+         return Extract_ZIP_External_Entry
+           (Image, Entry_Name, Password, Status);
+      end Extract_ZIP_With_Password;
    begin
       Zlib.Archive_Directory_Extraction.Extract_To_Directory
         (Archive_Image       => Archive_Image,
@@ -9960,7 +9993,7 @@ package body Zlib is
          List_Seven_Zip      => List_Seven_Zip_With_Password'Access,
          List_ZIP            => List_ZIP_Entries'Access,
          Extract_Seven_Zip   => Extract_Seven_Zip_With_Password'Access,
-         Extract_ZIP         => Extract_ZIP'Access,
+         Extract_ZIP         => Extract_ZIP_With_Password'Access,
          Safe_Entry_Name     => Safe_ZIP_Entry_Name'Access,
          Write_File          => Write_File'Access,
          Status              => Status);
