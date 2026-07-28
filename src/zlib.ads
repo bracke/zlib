@@ -1067,6 +1067,24 @@ package Zlib is
    --  @param Status Ok on success, otherwise a deterministic failure code
    --  @return one Archive_Entry per member when Status is Ok
 
+   function List_Archive_File_Entries
+     (Archive_Path : String;
+      Password     : String;
+      Status       : out Status_Code) return Archive_Entry_Array;
+   --  Catalogue every member of an archive file without decompressing
+   --  payloads.
+   --
+   --  A ZIP is catalogued from its central directory alone, so the cost is
+   --  proportional to the number of members rather than to the archive size and
+   --  a large archive can be listed without holding it in memory. A .7z, or a
+   --  ZIP needing a password, reads the whole image as List_Archive_Entries
+   --  does. Password is used only to decode 7z encrypted headers; pass "" when
+   --  not needed.
+   --  @param Archive_Path path to a .zip or .7z file
+   --  @param Password archive password, or "" if not needed
+   --  @param Status Ok on success, otherwise a deterministic failure code
+   --  @return one Archive_Entry per member when Status is Ok
+
    procedure Extract_Archive_To_Directory
      (Archive_Image   : Byte_Array;
       Destination_Dir : String;

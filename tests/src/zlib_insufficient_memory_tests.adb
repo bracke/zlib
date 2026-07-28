@@ -591,6 +591,91 @@ package body Zlib_Insufficient_Memory_Tests is
       Ada.Directories.Delete_Tree (Work);
    end Test_Mixed_Method_Archive_Is_Not_Bounded_By_The_Archive;
 
+   --  Listing reads only the central directory, so an archive far larger than
+   --  the task's stack must still be catalogued. Holding the payloads is what
+   --  the file-based entry point exists to avoid.
+   procedure Test_Listing_Does_Not_Read_The_Payloads
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Interfaces.Unsigned_64;
+
+      Work    : constant String :=
+        Ada.Directories.Current_Directory & "/obj/listing_check";
+      Archive : constant String := Work & "/one.zip";
+      Member  : constant String := "deep/member.txt";
+
+      Listing_Stack : constant := 256 * 1024;
+      Outcome : Zlib.Status_Code := Zlib.Ok;
+      Count   : Natural := 0;
+      Sized   : Boolean := False;
+      Escaped : Boolean := False;
+   begin
+      if Ada.Directories.Exists (Work) then
+         Ada.Directories.Delete_Tree (Work);
+      end if;
+      Ada.Directories.Create_Path (Work);
+
+      declare
+         Payload : Byte_Array_Access :=
+           new Zlib.Byte_Array (1 .. Compress_Payload);
+         Build   : Zlib.Status_Code := Zlib.Ok;
+      begin
+         Payload.all := [others => 70];
+         declare
+            Image  : constant Zlib.Byte_Array :=
+              Zlib.ZIP (Payload.all, Member, Status => Build);
+            Output : SIO.File_Type;
+            Raw    : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Image'Length));
+            Target : Ada.Streams.Stream_Element_Offset := Raw'First;
+         begin
+            Free (Payload);
+            Assert (Build = Zlib.Ok, "fixture: archive must build");
+            for B of Image loop
+               Raw (Target) := Ada.Streams.Stream_Element (B);
+               Target := Target + 1;
+            end loop;
+            SIO.Create (Output, SIO.Out_File, Archive);
+            SIO.Write (Output, Raw);
+            SIO.Close (Output);
+         end;
+      end;
+
+      declare
+         task Runner with Storage_Size => Listing_Stack;
+
+         task body Runner is
+         begin
+            declare
+               Listed : constant Zlib.Archive_Entry_Array :=
+                 Zlib.List_Archive_File_Entries (Archive, "", Outcome);
+            begin
+               Count := Listed'Length;
+               Sized :=
+                 Listed'Length = 1
+                 and then Listed (Listed'First).Uncompressed_Size =
+                   Interfaces.Unsigned_64 (Compress_Payload);
+            end;
+         exception
+            when others =>
+               Escaped := True;
+         end Runner;
+      begin
+         null;
+      end;
+
+      Assert (not Escaped, "listing must not raise out of a status API");
+      Assert
+        (Outcome = Zlib.Ok,
+         "listing an archive larger than the task must succeed, got "
+         & Zlib.Status_Image (Outcome));
+      Assert (Count = 1, "the archive has exactly one member");
+      Assert (Sized, "the catalogued size must come from the directory");
+
+      Ada.Directories.Delete_Tree (Work);
+   end Test_Listing_Does_Not_Read_The_Payloads;
+
    overriding procedure Register_Tests
      (T : in out Test_Case) is
    begin
@@ -609,6 +694,9 @@ package body Zlib_Insufficient_Memory_Tests is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Test_Mixed_Method_Archive_Is_Not_Bounded_By_The_Archive'Access,
          "a mixed-method archive is bounded by its largest member");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Test_Listing_Does_Not_Read_The_Payloads'Access,
+         "listing an archive reads only its central directory");
    end Register_Tests;
 
 end Zlib_Insufficient_Memory_Tests;

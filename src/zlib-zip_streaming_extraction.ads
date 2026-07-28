@@ -44,4 +44,21 @@ package Zlib.ZIP_Streaming_Extraction is
    --  extraction
    --  @param Status Ok on success, otherwise a deterministic failure code
 
+   function List_Entries
+     (Archive_Path : String;
+      Handled      : out Boolean;
+      Status       : out Status_Code) return Archive_Entry_Array;
+   --  Catalogue every member of the ZIP at Archive_Path by reading only its
+   --  central directory, so the cost is proportional to the number of members
+   --  rather than to the archive size. Payloads are never touched.
+   --
+   --  Handled is False when the file is not a ZIP this reader recognizes; the
+   --  caller must then fall back to whole-image listing and Status carries no
+   --  meaning.
+   --  @param Archive_Path path to the .zip file
+   --  @param Handled False when the caller must fall back to whole-image
+   --  listing
+   --  @param Status Ok on success, otherwise a deterministic failure code
+   --  @return one Archive_Entry per member when Handled and Status are set
+
 end Zlib.ZIP_Streaming_Extraction;

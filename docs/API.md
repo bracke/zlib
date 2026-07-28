@@ -402,6 +402,13 @@ from parallel path/name arrays and can force ZIP64 local, central, and
 end-of-central-directory metadata through `Force_ZIP64`. Entry names are safe
 relative paths only.
 
+`List_Archive_Entries` catalogues an archive already held in memory.
+`List_Archive_File_Entries` catalogues one from a path, and for a ZIP reads
+only the central directory, so the cost is proportional to the number of
+members rather than to the archive size and a large archive can be listed
+without holding it. A `.7z`, or a ZIP needing a password, reads the whole image
+as before.
+
 `Seven_Zip_Stored` emits a native `.7z` archive image containing one file stored
 with the 7z Copy coder, or a header-only directory entry when metadata marks a
 directory. It writes the 7z signature header, packed stream, main-stream

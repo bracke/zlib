@@ -9274,6 +9274,51 @@ package body Zlib is
       return List_Seven_Zip_Entries_With_Password (Archive_Image, "", Status);
    end List_Seven_Zip_Entries;
 
+   function List_Archive_File_Entries
+     (Archive_Path : String;
+      Password     : String;
+      Status       : out Status_Code) return Archive_Entry_Array
+   is
+      None    : constant Archive_Entry_Array (1 .. 0) :=
+        [others => (others => <>)];
+      Handled : Boolean := False;
+   begin
+      --  A ZIP's catalogue lives in its central directory, so it can be read
+      --  without the payloads. Only a password-bearing archive or a container
+      --  this reader does not recognize needs the whole image.
+      if Password'Length = 0 then
+         declare
+            Listed : constant Archive_Entry_Array :=
+              Zlib.ZIP_Streaming_Extraction.List_Entries
+                (Archive_Path, Handled, Status);
+         begin
+            if Handled then
+               return Listed;
+            end if;
+         end;
+      end if;
+
+      declare
+         Read_Status : Status_Code := Ok;
+         Image       : constant Byte_Array :=
+           Read_File (Archive_Path, Read_Status);
+      begin
+         if Read_Status /= Ok then
+            Status := Read_Status;
+            return None;
+         end if;
+
+         return List_Archive_Entries (Image, Password, Status);
+      end;
+   exception
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return None;
+      when others =>
+         Status := Unsupported_Method;
+         return None;
+   end List_Archive_File_Entries;
+
    procedure Extract_Archive_To_Directory
      (Archive_Image   : Byte_Array;
       Destination_Dir : String;

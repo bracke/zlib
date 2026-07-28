@@ -73,6 +73,8 @@ remain wrapper-strict.
 | compressed 7z output with metadata | `Seven_Zip_Deflate`, `Seven_Zip_BZip2`, `Seven_Zip_LZMA`, `Seven_Zip_LZMA2`, `Seven_Zip_PPMd` metadata overloads |
 | extract supported native 7z layouts | `Extract_Seven_Zip_Stored`, `Extract_Seven_Zip` |
 | inspect supported 7z entry metadata | `Extract_Seven_Zip_Metadata` |
+| catalogue an archive already in memory | `List_Archive_Entries` |
+| catalogue an archive file without holding it | `List_Archive_File_Entries` |
 | file helper 7z output/extraction | `Seven_Zip_*_File`, `Extract_Seven_Zip_*_File`; dirs are header-only |
 | file-list 7z output/extraction | `Seven_Zip_*_Files`, `Extract_Seven_Zip_*_Files`; dirs are no-stream |
 

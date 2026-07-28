@@ -798,4 +798,108 @@ package body Zlib.ZIP_Streaming_Extraction is
          Status := Unsupported_Method;
    end Extract_To_Directory;
 
+   function List_Entries
+     (Archive_Path : String;
+      Handled      : out Boolean;
+      Status       : out Status_Code) return Archive_Entry_Array
+   is
+      None      : constant Archive_Entry_Array (1 .. 0) :=
+        [others => (others => <>)];
+      File      : SIO.File_Type;
+      File_Size : Interfaces.Unsigned_64;
+      CD_Offset : Interfaces.Unsigned_64;
+      CD_Size   : Interfaces.Unsigned_64;
+      CD_Count  : Natural;
+      Found     : Boolean;
+   begin
+      Handled := False;
+      Status := Unsupported_Method;
+
+      if not Ada.Directories.Exists (Archive_Path) then
+         Handled := True;
+         Status := Input_File_Error;
+         return None;
+      end if;
+
+      SIO.Open (File, SIO.In_File, Archive_Path);
+      File_Size := Interfaces.Unsigned_64 (SIO.Size (File));
+      Find_Central_Directory
+        (File, File_Size, CD_Offset, CD_Size, CD_Count, Found);
+      if not Found then
+         SIO.Close (File);
+         return None;
+      end if;
+
+      declare
+         Central : Byte_Array (0 .. Natural (CD_Size) - 1);
+         Read_Ok : Boolean;
+         Pos     : Natural := 0;
+         Found_N : Natural := 0;
+         Result  : Archive_Entry_Array (1 .. CD_Count) :=
+           [others => (others => <>)];
+      begin
+         Read_At (File, CD_Offset, Central, Read_Ok);
+         SIO.Close (File);
+         if not Read_Ok then
+            return None;
+         end if;
+
+         for I in 1 .. CD_Count loop
+            exit when Pos + 45 > Central'Last;
+            exit when U32_At (Central, Pos) /= Central_Signature;
+            declare
+               Method    : constant Interfaces.Unsigned_16 := U16_At (Central, Pos + 10);
+               CRC       : constant Interfaces.Unsigned_32 := U32_At (Central, Pos + 16);
+               Comp_32   : constant Interfaces.Unsigned_32 := U32_At (Central, Pos + 20);
+               Unc_32    : constant Interfaces.Unsigned_32 := U32_At (Central, Pos + 24);
+               Name_Len  : constant Natural := Natural (U16_At (Central, Pos + 28));
+               Extra_Len : constant Natural := Natural (U16_At (Central, Pos + 30));
+               Cmt_Len   : constant Natural := Natural (U16_At (Central, Pos + 32));
+               Off_32    : constant Interfaces.Unsigned_32 := U32_At (Central, Pos + 42);
+               Name_First : constant Natural := Pos + 46;
+               Comp, Unc, Local_Offset : Interfaces.Unsigned_64;
+               Name       : US.Unbounded_String;
+            begin
+               exit when Name_First + Name_Len + Extra_Len + Cmt_Len - 1 > Central'Last;
+
+               for K in Name_First .. Name_First + Name_Len - 1 loop
+                  US.Append (Name, Character'Val (Natural (Central (K))));
+               end loop;
+
+               Resolve_Sizes
+                 (Central, Name_First + Name_Len, Extra_Len,
+                  Comp_32, Unc_32, Off_32, Comp, Unc, Local_Offset);
+
+               Found_N := Found_N + 1;
+               Result (Found_N) :=
+                 (Name              => Name,
+                  Is_Directory      =>
+                    Name_Len > 0
+                    and then Central (Name_First + Name_Len - 1) =
+                      Byte (Character'Pos ('/')),
+                  Compression       => Method,
+                  Uncompressed_Size => Unc,
+                  Compressed_Size   => Comp,
+                  CRC_32            => CRC);
+
+               Pos := Name_First + Name_Len + Extra_Len + Cmt_Len;
+            end;
+         end loop;
+
+         Handled := True;
+         Status := Ok;
+         return Result (1 .. Found_N);
+      end;
+
+   exception
+      when Storage_Error =>
+         Handled := True;
+         Status := Insufficient_Memory;
+         return None;
+      when others =>
+         Handled := True;
+         Status := Unsupported_Method;
+         return None;
+   end List_Entries;
+
 end Zlib.ZIP_Streaming_Extraction;
