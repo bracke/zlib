@@ -8,6 +8,7 @@ with Zlib; use Zlib;
 package body Zlib_Insufficient_Memory_Tests is
 
    package SIO renames Ada.Streams.Stream_IO;
+   use type Ada.Streams.Stream_Element;
    use type Ada.Streams.Stream_Element_Offset;
 
    --  A decoded payload that cannot fit in the caller's stack must be reported
@@ -1114,6 +1115,210 @@ package body Zlib_Insufficient_Memory_Tests is
       Ada.Directories.Delete_Tree (Work);
    end Test_Encrypted_ZIP_Member_Extracts;
 
+   --  A 7z holds its members in folders -- solid blocks -- and a folder is the
+   --  smallest unit that can be decoded. Extracting one member must therefore
+   --  cost its folder, not the archive. The other 7z tests here pin that the
+   --  extracted bytes are right; none of them pins that bound, because every
+   --  archive this crate can write puts all of its members in a single folder,
+   --  where the two are indistinguishable.
+   --
+   --  The fixture is a 7z with twenty members in twenty separate folders
+   --  (7z -ms=off), Copy-coded, so each folder holds exactly one member. Only
+   --  its container is a literal here: with the Copy coder the packed streams
+   --  are the member bytes themselves, and those are generated, so four
+   --  megabytes of archive cost about a kilobyte of source.
+   --
+   --  The archive is 4,003,090 bytes and the task is 1 MB, so a run that read
+   --  the archive -- or that decoded all twenty folders to reach one member --
+   --  could not fit. The bound binds rather than being nominal: at 128 KB this
+   --  same call reports Insufficient_Memory, and it passes from somewhere
+   --  under 512 KB upwards, that being the reader's fixed working set rather
+   --  than anything proportional to the archive.
+
+   Folder_Member_Count : constant := 20;
+   Folder_Member_Size  : constant := 200_100;
+   Folder_Wanted       : constant := 7;
+
+   --  Above the reader's fixed working set, a quarter of the archive.
+   Folder_Stack : constant := 1024 * 1024;
+
+   Folder_Header_Hex : constant String :=
+     "377abcaf271c0004260dd1d8d0103d000000000022040000000000005868e522";
+
+   Folder_Footer_Hex : constant String :=
+     "010406001409c3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40d" &
+     "c3a40dc3a40dc3a40dc3a40dc3a40dc3a40d00070b140001010001010001010001010001010001010001010001010001" &
+     "01000101000101000101000101000101000101000101000101000101000101000101000cc3a40dc3a40dc3a40dc3a40d" &
+     "c3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40dc3a40d" &
+     "00080a015b7394e57ab1b36d58f1aa2e79338da61c7198a83db3bf201ff3a6633e3181ebd5778c7ff4b5abf7c74475a9" &
+     "e6865221c4c64b62e5046cea804679e4a1845e6c83c4472fa20660a749406d3368824abb000005150e03800000190d00" &
+     "0000000000000000000000001181e9006d006600320000006d00660032002f006d00300030002e00620069006e000000" &
+     "6d00660032002f006d00300031002e00620069006e0000006d00660032002f006d00300032002e00620069006e000000" &
+     "6d00660032002f006d00300033002e00620069006e0000006d00660032002f006d00300034002e00620069006e000000" &
+     "6d00660032002f006d00300035002e00620069006e0000006d00660032002f006d00300036002e00620069006e000000" &
+     "6d00660032002f006d00300037002e00620069006e0000006d00660032002f006d00300038002e00620069006e000000" &
+     "6d00660032002f006d00300039002e00620069006e0000006d00660032002f006d00310030002e00620069006e000000" &
+     "6d00660032002f006d00310031002e00620069006e0000006d00660032002f006d00310032002e00620069006e000000" &
+     "6d00660032002f006d00310033002e00620069006e0000006d00660032002f006d00310034002e00620069006e000000" &
+     "6d00660032002f006d00310035002e00620069006e0000006d00660032002f006d00310036002e00620069006e000000" &
+     "6d00660032002f006d00310037002e00620069006e0000006d00660032002f006d00310038002e00620069006e000000" &
+     "6d00660032002f006d00310039002e00620069006e0000001901001480aa0100dc8735bd981edd01434a35bd981edd01" &
+     "2a4f35bd981edd01af5535bd981edd01ff5835bd981edd01f25b35bd981edd01a05e35bd981edd01316135bd981edd01" &
+     "e06335bd981edd017a6635bd981edd014b6935bd981edd01066c35bd981edd01d86e35bd981edd01e97135bd981edd01" &
+     "f57435bd981edd01407835bd981edd01107c35bd981edd01838035bd981edd016d8435bd981edd01dc8735bd981edd01" &
+     "8b8a35bd981edd01155601001080fd412080b4812080b4812080b4812080b4812080b4812080b4812080b4812080b481" &
+     "2080b4812080b4812080b4812080b4812080b4812080b4812080b4812080b4812080b4812080b4812080b4812080b481" &
+     "0000";
+
+   --  The repeating unit of member Index's payload: twenty-nine bytes, so
+   --  6_900 repetitions make one member. Distinct per member, so extracting
+   --  the wrong folder cannot pass.
+   function Folder_Unit (Index : Natural) return String is
+     ("zlib-folder-bound-fixture-"
+      & Character'Val (Character'Pos ('0') + Index / 10)
+      & Character'Val (Character'Pos ('0') + Index mod 10)
+      & "-");
+
+   function Folder_Member_Name (Index : Natural) return String is
+     ("mf2/m"
+      & Character'Val (Character'Pos ('0') + Index / 10)
+      & Character'Val (Character'Pos ('0') + Index mod 10)
+      & ".bin");
+
+   procedure Write_Hex (File : SIO.File_Type; Hex : String) is
+      function Nibble (C : Character) return Ada.Streams.Stream_Element is
+        (case C is
+            when '0' .. '9' =>
+              Ada.Streams.Stream_Element
+                (Character'Pos (C) - Character'Pos ('0')),
+            when others     =>
+              Ada.Streams.Stream_Element
+                (Character'Pos (C) - Character'Pos ('a') + 10));
+
+      Raw    : Ada.Streams.Stream_Element_Array
+        (1 .. Ada.Streams.Stream_Element_Offset (Hex'Length / 2));
+      Cursor : Ada.Streams.Stream_Element_Offset := Raw'First;
+   begin
+      for I in 0 .. Hex'Length / 2 - 1 loop
+         Raw (Cursor) :=
+           Nibble (Hex (Hex'First + 2 * I)) * 16
+           + Nibble (Hex (Hex'First + 2 * I + 1));
+         Cursor := Cursor + 1;
+      end loop;
+      SIO.Write (File, Raw);
+   end Write_Hex;
+
+   procedure Write_Folder_Member (File : SIO.File_Type; Index : Natural) is
+      Unit   : constant String := Folder_Unit (Index);
+      Block  : Ada.Streams.Stream_Element_Array
+        (1 .. Ada.Streams.Stream_Element_Offset (Unit'Length) * 300);
+      Cursor : Ada.Streams.Stream_Element_Offset := Block'First;
+   begin
+      for Repeat in 1 .. 300 loop
+         for C of Unit loop
+            Block (Cursor) :=
+              Ada.Streams.Stream_Element (Character'Pos (C));
+            Cursor := Cursor + 1;
+         end loop;
+      end loop;
+
+      --  6_900 units per member, 300 per block.
+      for Written in 1 .. 23 loop
+         SIO.Write (File, Block);
+      end loop;
+   end Write_Folder_Member;
+
+   procedure Test_Seven_Zip_Extraction_Is_Bounded_By_The_Folder
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Ada.Directories.File_Size;
+
+      Work    : constant String :=
+        Ada.Directories.Current_Directory & "/obj/seven_zip_folder_bound";
+      Archive : constant String := Work & "/folders.7z";
+      Output  : constant String := Work & "/member.out";
+      Member  : constant String := Folder_Member_Name (Folder_Wanted);
+
+      Outcome : Zlib.Status_Code := Zlib.Ok;
+      Escaped : Boolean := False;
+   begin
+      if Ada.Directories.Exists (Work) then
+         Ada.Directories.Delete_Tree (Work);
+      end if;
+      Ada.Directories.Create_Path (Work);
+
+      declare
+         File : SIO.File_Type;
+      begin
+         SIO.Create (File, SIO.Out_File, Archive);
+         Write_Hex (File, Folder_Header_Hex);
+         for Index in 0 .. Folder_Member_Count - 1 loop
+            Write_Folder_Member (File, Index);
+         end loop;
+         Write_Hex (File, Folder_Footer_Hex);
+         SIO.Close (File);
+      end;
+
+      Assert
+        (Ada.Directories.Size (Archive)
+           > Ada.Directories.File_Size (Folder_Stack),
+         "fixture: the archive must be larger than the task it is read in");
+
+      declare
+         task Runner with Storage_Size => Folder_Stack;
+
+         task body Runner is
+         begin
+            Zlib.Extract_Archive_File_Entry_To_File
+              (Archive_Path => Archive,
+               Entry_Name   => Member,
+               Output_Path  => Output,
+               Password     => "",
+               Status       => Outcome);
+         exception
+            when others =>
+               Escaped := True;
+         end Runner;
+      begin
+         null;
+      end;
+
+      Assert (not Escaped, "extraction must not raise out of a status API");
+      Assert
+        (Outcome = Zlib.Ok,
+         "one folder of a multi-folder 7z must be extractable in a task "
+         & "smaller than the archive, got " & Zlib.Status_Image (Outcome));
+      Assert
+        (Ada.Directories.Size (Output)
+           = Ada.Directories.File_Size (Folder_Member_Size),
+         "the extracted member must be whole");
+
+      --  The right folder, not merely a whole one.
+      declare
+         File   : SIO.File_Type;
+         Unit   : constant String := Folder_Unit (Folder_Wanted);
+         Raw    : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Unit'Length));
+         Last   : Ada.Streams.Stream_Element_Offset;
+         Cursor : Ada.Streams.Stream_Element_Offset := Raw'First;
+      begin
+         SIO.Open (File, SIO.In_File, Output);
+         SIO.Read (File, Raw, Last);
+         SIO.Close (File);
+         Assert (Last = Raw'Last, "the member must start with its own unit");
+         for C of Unit loop
+            Assert
+              (Raw (Cursor)
+                 = Ada.Streams.Stream_Element (Character'Pos (C)),
+               "the extracted bytes must come from the requested folder");
+            Cursor := Cursor + 1;
+         end loop;
+      end;
+
+      Ada.Directories.Delete_Tree (Work);
+   end Test_Seven_Zip_Extraction_Is_Bounded_By_The_Folder;
+
    overriding procedure Register_Tests
      (T : in out Test_Case) is
    begin
@@ -1150,6 +1355,9 @@ package body Zlib_Insufficient_Memory_Tests is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Test_Encrypted_ZIP_Member_Extracts'Access,
          "a password does not disturb an unencrypted archive");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Test_Seven_Zip_Extraction_Is_Bounded_By_The_Folder'Access,
+         "extracting one 7z member costs its folder, not the archive");
    end Register_Tests;
 
 end Zlib_Insufficient_Memory_Tests;
