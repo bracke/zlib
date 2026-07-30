@@ -106,12 +106,18 @@ package body Zlib.ZIP_Streaming_Extraction is
       Method     : Interfaces.Unsigned_16;
       CRC        : Interfaces.Unsigned_32;
       Payload    : Byte_Array;
-      Plain_Size : Interfaces.Unsigned_32) return Byte_Array
+      Plain_Size : Interfaces.Unsigned_32;
+      --  Extra-field bytes to carry in the *central* record only. Used for
+      --  WinZip-AES (method 99), whose 0x9901 field names the real compression
+      --  method and key strength the codec bridge needs to decrypt; empty for
+      --  every other method, keeping those images byte-identical to before.
+      Central_Extra : Byte_Array := [1 .. 0 => 0]) return Byte_Array
    is
       Name_Len       : constant Natural := Entry_Name'Length;
       Payload_Len    : constant Natural := Payload'Length;
+      Extra_Len      : constant Natural := Central_Extra'Length;
       Central_Offset : constant Natural := 30 + Name_Len + Payload_Len;
-      Central_Size   : constant Natural := 46 + Name_Len;
+      Central_Size   : constant Natural := 46 + Name_Len + Extra_Len;
       EOCD_Offset    : constant Natural := Central_Offset + Central_Size;
       Image          : Byte_Array (1 .. EOCD_Offset + 22) := [others => 0];
    begin
@@ -145,8 +151,13 @@ package body Zlib.ZIP_Streaming_Extraction is
       Put_U32 (Image, Central_Offset + 21, Interfaces.Unsigned_32 (Payload_Len));
       Put_U32 (Image, Central_Offset + 25, Plain_Size);
       Put_U16 (Image, Central_Offset + 29, Interfaces.Unsigned_16 (Name_Len));
+      Put_U16 (Image, Central_Offset + 31, Interfaces.Unsigned_16 (Extra_Len));
       Put_U32 (Image, Central_Offset + 43, 0);
       Put_Name (Image, Central_Offset + 47, Entry_Name);
+      for I in 1 .. Extra_Len loop
+         Image (Central_Offset + 46 + Name_Len + I) :=
+           Central_Extra (Central_Extra'First + I - 1);
+      end loop;
 
       Put_U32 (Image, EOCD_Offset + 1, 16#0605_4B50#);
       Put_U16 (Image, EOCD_Offset + 9, 1);
@@ -580,9 +591,27 @@ package body Zlib.ZIP_Streaming_Extraction is
       end if;
 
       declare
+         --  WinZip-AES (method 99) keeps the real compression method and key
+         --  strength in its 0x9901 extra field. That field is dropped from the
+         --  synthetic image for every other method, so carry the local extra
+         --  bytes through only here, where the codec bridge needs them to
+         --  decrypt. Empty for all other methods -> those images are unchanged.
+         Local_Extra_Off : constant Interfaces.Unsigned_64 :=
+           Local_Offset + 30 + Interfaces.Unsigned_64 (U16_At (Header, 26));
+         Local_Extra_Len : constant Natural :=
+           (if Method = 99 then Natural (U16_At (Header, 28)) else 0);
+         Extra   : Byte_Array (1 .. Local_Extra_Len);
          Payload : Byte_Array (1 .. Natural (Comp_Size));
          Read_Ok : Boolean;
       begin
+         if Local_Extra_Len > 0 then
+            Read_At (File, Local_Extra_Off, Extra, Read_Ok);
+            if not Read_Ok then
+               Status := Unexpected_End_Of_Input;
+               return;
+            end if;
+         end if;
+
          Read_At (File, Data_Start, Payload, Read_Ok);
          if not Read_Ok then
             Status := Unexpected_End_Of_Input;
@@ -592,13 +621,14 @@ package body Zlib.ZIP_Streaming_Extraction is
          declare
             Image : constant Byte_Array :=
               Single_Entry_Image
-                (Entry_Name => Entry_Name,
-                 Flags      => Flags,
-                 Mod_Time   => U16_At (Header, 10),
-                 Method     => Method,
-                 CRC        => Expected_CRC,
-                 Payload    => Payload,
-                 Plain_Size => Interfaces.Unsigned_32 (Unc_Size));
+                (Entry_Name    => Entry_Name,
+                 Flags         => Flags,
+                 Mod_Time      => U16_At (Header, 10),
+                 Method        => Method,
+                 CRC           => Expected_CRC,
+                 Payload       => Payload,
+                 Plain_Size    => Interfaces.Unsigned_32 (Unc_Size),
+                 Central_Extra => Extra);
             Decoded : constant Byte_Array :=
               Extract_Image (Image, Entry_Name, Password, Status);
          begin

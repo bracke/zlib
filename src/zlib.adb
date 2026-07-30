@@ -51,6 +51,7 @@ with Zlib.Seven_Zip_Listing;
 with Zlib.Seven_Zip_Volumes;
 with Zlib.PPMd7;
 with Zlib.Seven_Zip_AES;
+with Zlib.Zip_AES;
 with Zlib.Seven_Zip_Methods; use Zlib.Seven_Zip_Methods;
 with Zlib.Seven_Zip_Numbers;
 with Zlib.Seven_Zip_Paths;
@@ -5212,6 +5213,282 @@ package body Zlib is
          return Empty;
    end ZIP_Traditional_Decrypted_External_Image;
 
+   --  Decrypt one WinZip-AES member (compression method 99) into a synthetic
+   --  single-entry image carrying the member's *actual* method with the
+   --  encryption flag cleared, exactly as the traditional-crypto path above
+   --  does. That image then goes back through Extract_ZIP, so a decrypted
+   --  Stored or Deflate member decodes through the ordinary reader.
+   --
+   --  Status is used to steer the caller: Unsupported_Method means "this is not
+   --  an AES entry" (the named member was absent, or present but not method 99)
+   --  and the caller should try its other paths; any other status is a definite
+   --  verdict on an AES entry (Ok, Invalid_Password, Invalid_Checksum,
+   --  Invalid_Header for a malformed 0x9901 field, Unexpected_End_Of_Input for
+   --  truncation) and must not fall through.
+   function ZIP_AES_Decrypted_External_Image
+     (Archive_Image : Byte_Array;
+      Entry_Name    : String;
+      Password      : String;
+      Status        : out Status_Code) return Byte_Array
+   is
+      Empty : constant Byte_Array (1 .. 0) := [others => 0];
+      Pos   : Natural := Archive_Image'First;
+   begin
+      Status := Unsupported_Method;
+
+      if Password'Length = 0
+        or else Entry_Name'Length = 0
+        or else Archive_Image'Length < 46
+      then
+         return Empty;
+      end if;
+
+      while Pos <= Archive_Image'Last - 45 loop
+         if ZIP_U32_At (Archive_Image, Pos) = 16#0201_4B50# then
+            declare
+               Method          : constant Interfaces.Unsigned_16 :=
+                 ZIP_U16_At (Archive_Image, Pos + 10);
+               Crc             : constant Interfaces.Unsigned_32 :=
+                 ZIP_U32_At (Archive_Image, Pos + 16);
+               Compressed_32   : constant Interfaces.Unsigned_32 :=
+                 ZIP_U32_At (Archive_Image, Pos + 20);
+               Uncompressed_32 : constant Interfaces.Unsigned_32 :=
+                 ZIP_U32_At (Archive_Image, Pos + 24);
+               Name_Len        : constant Natural :=
+                 Natural (ZIP_U16_At (Archive_Image, Pos + 28));
+               Extra_Len       : constant Natural :=
+                 Natural (ZIP_U16_At (Archive_Image, Pos + 30));
+               Comment_Len     : constant Natural :=
+                 Natural (ZIP_U16_At (Archive_Image, Pos + 32));
+               Local_Offset_32 : constant Interfaces.Unsigned_32 :=
+                 ZIP_U32_At (Archive_Image, Pos + 42);
+               Name_First      : constant Natural := Pos + 46;
+               Record_After    : constant Natural :=
+                 Name_First + Name_Len + Extra_Len + Comment_Len;
+            begin
+               if Record_After - 1 > Archive_Image'Last then
+                  Status := Unexpected_End_Of_Input;
+                  return Empty;
+               end if;
+
+               if ZIP_Name_Equals
+                 (Archive_Image, Name_First, Name_Len, Entry_Name)
+               then
+                  --  Method 99 is the WinZip-AES marker; the real compression
+                  --  method lives in the 0x9901 extra field. Any other method
+                  --  is not an AES entry -- hand it back to the caller.
+                  if Method /= 99 then
+                     Status := Unsupported_Method;
+                     return Empty;
+                  end if;
+
+                  declare
+                     AES : constant Zlib.Zip_AES.AES_Params :=
+                       Zlib.Zip_AES.Parse_Extra
+                         (Archive_Image, Name_First + Name_Len, Extra_Len);
+                  begin
+                     --  Method 99 with no usable 0x9901 field is a malformed
+                     --  entry, not something another path can decode.
+                     if not AES.Present or else not AES.Valid then
+                        Status := Invalid_Header;
+                        return Empty;
+                     end if;
+
+                     declare
+                        Compressed   : Interfaces.Unsigned_64 := 0;
+                        Uncompressed : Interfaces.Unsigned_64 := 0;
+                        Local_Offset : Interfaces.Unsigned_64 := 0;
+                     begin
+                        if not Resolve_ZIP64_Central_Fields
+                          (Archive_Image,
+                           Name_First + Name_Len,
+                           Extra_Len,
+                           Compressed_32,
+                           Uncompressed_32,
+                           Local_Offset_32,
+                           Compressed,
+                           Uncompressed,
+                           Local_Offset)
+                          or else Compressed > Interfaces.Unsigned_64 (Natural'Last)
+                          or else Uncompressed >
+                            Interfaces.Unsigned_64 (Natural'Last)
+                          or else Local_Offset >
+                            Interfaces.Unsigned_64 (Natural'Last)
+                        then
+                           Status := Unexpected_End_Of_Input;
+                           return Empty;
+                        end if;
+
+                        declare
+                           Local : constant Natural :=
+                             Archive_Image'First + Natural (Local_Offset);
+                        begin
+                           if Local < Archive_Image'First
+                             or else Local + 29 > Archive_Image'Last
+                             or else ZIP_U32_At (Archive_Image, Local) /=
+                               16#0403_4B50#
+                             or else ZIP_U16_At (Archive_Image, Local + 8) /=
+                               Method
+                           then
+                              Status := Unexpected_End_Of_Input;
+                              return Empty;
+                           end if;
+
+                           declare
+                              Local_Name_Len  : constant Natural :=
+                                Natural (ZIP_U16_At (Archive_Image, Local + 26));
+                              Local_Extra_Len : constant Natural :=
+                                Natural (ZIP_U16_At (Archive_Image, Local + 28));
+                              Payload_First   : constant Natural :=
+                                Local + 30 + Local_Name_Len + Local_Extra_Len;
+                              Wire_Len        : constant Natural :=
+                                Natural (Compressed);
+                              Plain_Len       : constant Natural :=
+                                Natural (Uncompressed);
+                              Method_Actual   : constant Interfaces.Unsigned_16 :=
+                                AES.Actual_Method;
+                           begin
+                              if Payload_First > Archive_Image'Last
+                                or else Wire_Len = 0
+                                or else Wire_Len - 1 >
+                                  Archive_Image'Last - Payload_First
+                              then
+                                 Status := Unexpected_End_Of_Input;
+                                 return Empty;
+                              end if;
+
+                              declare
+                                 Wire : Byte_Array (1 .. Wire_Len);
+                                 Decrypt_Status : Status_Code := Invalid_Header;
+                              begin
+                                 for I in Wire'Range loop
+                                    Wire (I) :=
+                                      Archive_Image (Payload_First + I - 1);
+                                 end loop;
+
+                                 declare
+                                    Plain : constant Byte_Array :=
+                                      Zlib.Zip_AES.Decrypt
+                                        (Wire, AES.Strength, Password,
+                                         Decrypt_Status);
+                                 begin
+                                    if Decrypt_Status /= Ok then
+                                       Status := Decrypt_Status;
+                                       return Empty;
+                                    end if;
+
+                                    declare
+                                       Payload_Len    : constant Natural :=
+                                         Plain'Length;
+                                       Central_Offset : constant Natural :=
+                                         30 + Entry_Name'Length + Payload_Len;
+                                       Central_Size   : constant Natural :=
+                                         46 + Entry_Name'Length;
+                                       EOCD_Offset    : constant Natural :=
+                                         Central_Offset + Central_Size;
+                                       Total          : constant Natural :=
+                                         EOCD_Offset + 22;
+                                       Synthetic      : Byte_Array (1 .. Total) :=
+                                         [others => 0];
+                                    begin
+                                       ZIP_Put_U32 (Synthetic, 1, 16#0403_4B50#);
+                                       ZIP_Put_U16 (Synthetic, 5, 20);
+                                       ZIP_Put_U16 (Synthetic, 7, 0);
+                                       ZIP_Put_U16 (Synthetic, 9, Method_Actual);
+                                       ZIP_Put_U32 (Synthetic, 15, Crc);
+                                       ZIP_Put_U32
+                                         (Synthetic, 19,
+                                          Interfaces.Unsigned_32 (Payload_Len));
+                                       ZIP_Put_U32
+                                         (Synthetic, 23,
+                                          Interfaces.Unsigned_32 (Plain_Len));
+                                       ZIP_Put_U16
+                                         (Synthetic, 27,
+                                          Interfaces.Unsigned_16
+                                            (Entry_Name'Length));
+                                       ZIP_Put_U16 (Synthetic, 29, 0);
+                                       ZIP_Put_Name (Synthetic, 31, Entry_Name);
+                                       for I in 1 .. Payload_Len loop
+                                          Synthetic
+                                            (30 + Entry_Name'Length + I) :=
+                                            Plain (Plain'First + I - 1);
+                                       end loop;
+
+                                       ZIP_Put_U32
+                                         (Synthetic, Central_Offset + 1,
+                                          16#0201_4B50#);
+                                       ZIP_Put_U16
+                                         (Synthetic, Central_Offset + 5, 20);
+                                       ZIP_Put_U16
+                                         (Synthetic, Central_Offset + 7, 20);
+                                       ZIP_Put_U16
+                                         (Synthetic, Central_Offset + 9, 0);
+                                       ZIP_Put_U16
+                                         (Synthetic, Central_Offset + 11,
+                                          Method_Actual);
+                                       ZIP_Put_U32
+                                         (Synthetic, Central_Offset + 17, Crc);
+                                       ZIP_Put_U32
+                                         (Synthetic, Central_Offset + 21,
+                                          Interfaces.Unsigned_32 (Payload_Len));
+                                       ZIP_Put_U32
+                                         (Synthetic, Central_Offset + 25,
+                                          Interfaces.Unsigned_32 (Plain_Len));
+                                       ZIP_Put_U16
+                                         (Synthetic, Central_Offset + 29,
+                                          Interfaces.Unsigned_16
+                                            (Entry_Name'Length));
+                                       ZIP_Put_U32
+                                         (Synthetic, Central_Offset + 43, 0);
+                                       ZIP_Put_Name
+                                         (Synthetic, Central_Offset + 47,
+                                          Entry_Name);
+
+                                       ZIP_Put_U32
+                                         (Synthetic, EOCD_Offset + 1,
+                                          16#0605_4B50#);
+                                       ZIP_Put_U16
+                                         (Synthetic, EOCD_Offset + 9, 1);
+                                       ZIP_Put_U16
+                                         (Synthetic, EOCD_Offset + 11, 1);
+                                       ZIP_Put_U32
+                                         (Synthetic, EOCD_Offset + 13,
+                                          Interfaces.Unsigned_32 (Central_Size));
+                                       ZIP_Put_U32
+                                         (Synthetic, EOCD_Offset + 17,
+                                          Interfaces.Unsigned_32 (Central_Offset));
+                                       Status := Ok;
+                                       return Synthetic;
+                                    end;
+                                 end;
+                              end;
+                           end;
+                        end;
+                     end;
+                  end;
+               end if;
+
+               Pos := Record_After;
+            end;
+         else
+            Pos := Pos + 1;
+         end if;
+      end loop;
+
+      Status := Unsupported_Method;
+      return Empty;
+   exception
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
+      when Constraint_Error =>
+         Status := Unsupported_Method;
+         return Empty;
+      when others =>
+         Status := Unsupported_Method;
+         return Empty;
+   end ZIP_AES_Decrypted_External_Image;
+
    function Extract_ZIP_External_Entry
      (Archive_Image : Byte_Array;
       Entry_Name    : String;
@@ -5233,6 +5510,24 @@ package body Zlib is
       end if;
 
       if Password'Length /= 0 then
+         --  WinZip-AES (method 99) first: it is the one strong scheme this
+         --  reader decrypts. An Unsupported_Method verdict means the named
+         --  entry is not AES, so fall through to the traditional path; any
+         --  other verdict is definitive.
+         declare
+            AES_Status : Status_Code := Unsupported_Method;
+            AES_Image  : constant Byte_Array :=
+              ZIP_AES_Decrypted_External_Image
+                (Archive_Image, Entry_Name, Password, AES_Status);
+         begin
+            if AES_Status = Ok then
+               return Extract_ZIP (AES_Image, Entry_Name, Status);
+            elsif AES_Status /= Unsupported_Method then
+               Status := AES_Status;
+               return Empty;
+            end if;
+         end;
+
          declare
             Decode_Status : Status_Code := Unsupported_Method;
             Decode_Image  : constant Byte_Array :=

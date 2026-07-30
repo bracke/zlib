@@ -646,30 +646,56 @@ package Zlib is
    function Is_Valid (Metadata : GZip_Metadata) return Boolean;
    --  Whether Metadata is internally consistent (e.g. no NUL in a name, FEXTRA
    --  within the 65_535 limit). Set_* mark it invalid on a rejected value.
+   --  @param Metadata parsed gzip header metadata
+   --  @return True when Metadata holds no rejected field
    function Has_Name (Metadata : GZip_Metadata) return Boolean;
    --  Whether an FNAME field is present.
+   --  @param Metadata parsed gzip header metadata
+   --  @return True when an FNAME field was read
    function Name (Metadata : GZip_Metadata) return String;
    --  The FNAME file name, or "" when absent.
+   --  @param Metadata parsed gzip header metadata
+   --  @return the FNAME file name, or "" when absent
    function Has_Comment (Metadata : GZip_Metadata) return Boolean;
    --  Whether an FCOMMENT field is present.
+   --  @param Metadata parsed gzip header metadata
+   --  @return True when an FCOMMENT field was read
    function Comment (Metadata : GZip_Metadata) return String;
    --  The FCOMMENT text, or "" when absent.
+   --  @param Metadata parsed gzip header metadata
+   --  @return the FCOMMENT text, or "" when absent
    function Has_MTime (Metadata : GZip_Metadata) return Boolean;
    --  Whether an MTIME was read (Read_GZip_Header always reads one).
+   --  @param Metadata parsed gzip header metadata
+   --  @return True when an MTIME field was read
    function MTime (Metadata : GZip_Metadata) return Interfaces.Unsigned_32;
    --  The MTIME field (Unix seconds; 0 means "no timestamp").
+   --  @param Metadata parsed gzip header metadata
+   --  @return the MTIME field in Unix seconds (0 means none)
    function Has_OS (Metadata : GZip_Metadata) return Boolean;
    --  Whether an OS byte was read.
+   --  @param Metadata parsed gzip header metadata
+   --  @return True when an OS byte was read
    function OS (Metadata : GZip_Metadata) return Byte;
    --  The OS identifier byte (255 = unknown).
+   --  @param Metadata parsed gzip header metadata
+   --  @return the OS identifier byte (255 = unknown)
    function Has_XFL (Metadata : GZip_Metadata) return Boolean;
    --  Whether an XFL byte was read.
+   --  @param Metadata parsed gzip header metadata
+   --  @return True when an XFL byte was read
    function XFL (Metadata : GZip_Metadata) return Byte;
    --  The XFL extra-flags byte.
+   --  @param Metadata parsed gzip header metadata
+   --  @return the XFL extra-flags byte
    function Has_Extra (Metadata : GZip_Metadata) return Boolean;
    --  Whether an FEXTRA field is present.
+   --  @param Metadata parsed gzip header metadata
+   --  @return True when an FEXTRA field was read
    function Extra (Metadata : GZip_Metadata) return Byte_Array;
    --  The raw FEXTRA field bytes, or an empty array when absent.
+   --  @param Metadata parsed gzip header metadata
+   --  @return the raw FEXTRA bytes, or an empty array when absent
 
    function GZip
      (Input  : Byte_Array;
@@ -1537,8 +1563,11 @@ package Zlib is
    --  metadata. ZIP-LZMA entries emitted by this library, Zstandard entries,
    --  and default-parameter ZIP PPMd entries are also decoded in-process when
    --  they use classic or ZIP64 size metadata. Traditional PKZIP encryption is
-   --  supported for those methods when Password is supplied. Strong/AES ZIP
-   --  encryption fails closed with Unsupported_Method.
+   --  supported for those methods when Password is supplied. WinZip-AES
+   --  (method 99) entries are also decrypted when Password is supplied: the
+   --  0x9901 extra field selects the key strength and real compression method,
+   --  the payload is authenticated with its truncated HMAC-SHA1, and a wrong
+   --  password or corrupt body fails closed (Invalid_Password / Invalid_Checksum).
    --  @param Archive_Image complete logical ZIP archive image
    --  @param Entry_Name archive entry path to extract
    --  @param Password optional ZIP password for encrypted entries

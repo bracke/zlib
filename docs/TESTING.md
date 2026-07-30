@@ -41,6 +41,7 @@ The expected suite categories are:
 - `zlib_bit_writer_tests`
 - `zlib_bits_tests`
 - `zlib_block_chooser_tests`
+- `zlib_cab_tests`
 - `zlib_public_tests`
 - `zlib_compression_conformance_tests`
 - `zlib_compression_level_tests`
@@ -120,6 +121,7 @@ The expected suite categories are:
 - `zlib_streaming_raw_deflate_tests`
 - `zlib_wrapper_tests`
 - `zlib_wrapper_mode_conformance_tests`
+- `zlib_zip_aes_tests`
 - `zlib_zip_external_codec_tests`
 
 `tests/src/tests.adb` loads `All_Suites`, which loads `Zlib_Suite`.
@@ -308,6 +310,25 @@ legacy minimal gzip header remains unchanged, metadata fields are emitted only
 when requested, invalid NUL-containing metadata is rejected, trailer CRC32/ISIZE
 remain payload-only, and streaming metadata output makes progress with one-byte
 output buffers.
+
+Gzip *header* parsing (the read side: `Read_GZip_Header` plus the `Is_Valid` /
+`Name` / `Comment` / `MTime` / `OS` / `XFL` / `Extra` accessors) is covered by
+`zlib_gzip_broader_compat_tests`, which feeds headers carrying every optional
+field combination and rejects malformed ones.
+
+## Container format readers
+
+`zlib_cab_tests` covers `List_CAB_Entries` / `Extract_CAB`: the Microsoft
+Cabinet header and folder/file records, single-folder Store and MSZIP (raw
+Deflate with the two-byte `CK` block prefix) decompression, and the
+`Unsupported_Method` fallback for multi-folder or Quantum/LZX cabinets outside
+the supported scope.
+
+`zlib_zip_aes_tests` covers WinZip-AES reading (method 99): parsing the 0x9901
+extra field, PBKDF2-HMAC-SHA1 key derivation, the two-byte password verifier,
+the 10-byte truncated HMAC-SHA1 authentication tag, and AES-CTR decryption for
+the AES-128/192/256 strengths, including `Invalid_Password` and
+`Password_Required` status handling.
 
 ## Streaming file APIs
 
