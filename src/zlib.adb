@@ -9778,8 +9778,6 @@ package body Zlib is
 
       declare
          File_Size : constant Natural := Natural (SIO.Size (File));
-         Scan_Last : constant Natural :=
-           Natural'Min (File_Size, Seven_Zip_Prefix_Scan) - 1;
       begin
          if File_Size < 33 then
             SIO.Close (File);
@@ -9787,9 +9785,57 @@ package body Zlib is
          end if;
 
          declare
-            --  The signature may sit behind an SFX stub, so a bounded prefix
-            --  is scanned; anything beyond it falls back.
-            Prefix : constant Byte_Array := Read_Region (0, Scan_Last);
+            --  The signature may sit behind an SFX stub, so a bounded prefix is
+            --  searched for it -- in windows, and not read whole.
+            --
+            --  How far this is willing to search is a megabyte. Reading that in
+            --  one piece put a megabyte on the caller's stack before any work
+            --  began, so extracting a single small member cost the width of the
+            --  search rather than the size of what was being extracted, and a
+            --  task with a megabyte to spend ran out on the first read.
+            --
+            --  What is kept afterwards is 33 bytes: the signature and the start
+            --  header behind it, which is all any of this is read for.
+            Scan_Window : constant := 64 * 1024;
+            Scan_Limit  : constant Natural :=
+              Natural'Min (File_Size, Seven_Zip_Prefix_Scan);
+
+            function Signature_Offset return Natural;
+
+            function Signature_Offset return Natural is
+               First : Natural := 0;
+            begin
+               loop
+                  declare
+                     Last : constant Natural :=
+                       Natural'Min (Scan_Limit, First + Scan_Window) - 1;
+                     Chunk : constant Byte_Array := Read_Region (First, Last);
+                     Found : Natural := 0;
+                  begin
+                     exit when Chunk'Length = 0;
+
+                     --  Read_Region indexes by position in the file, so what
+                     --  comes back is already the offset in the archive.
+                     if Seven_Zip_Find_Signature (Chunk, Found) then
+                        return Found;
+                     end if;
+                  end;
+
+                  exit when First + Scan_Window >= Scan_Limit;
+
+                  --  Overlap by the start header's length, so a signature lying
+                  --  across a window boundary is still seen whole.
+                  First := First + Scan_Window - 32;
+               end loop;
+
+               return File_Size;
+            end Signature_Offset;
+
+            Signature_At : constant Natural := Signature_Offset;
+            Prefix : constant Byte_Array :=
+              (if Signature_At + 32 < File_Size
+               then Read_Region (Signature_At, Signature_At + 32)
+               else Empty);
             F      : Natural := 0;
             Info   : Zlib.Seven_Zip_Container.Start_Header_Info;
          begin
