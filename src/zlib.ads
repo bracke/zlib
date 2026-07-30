@@ -1105,10 +1105,16 @@ package Zlib is
       Uncompressed_Size : Interfaces.Unsigned_64 := 0;
       Compressed_Size   : Interfaces.Unsigned_64 := 0;
       CRC_32            : Interfaces.Unsigned_32 := 0;
+      Metadata          : Ada.Strings.Unbounded.Unbounded_String;
    end record;
    --  One catalogued archive member, shared by the ZIP and 7z listing APIs.
    --  Compression is the raw ZIP method id (0 Stored, 8 Deflate, ...) for ZIP
    --  entries and 0 for 7z entries (whose coder is folder-level, not per file).
+   --  Metadata carries format-specific fields the core record has no column for
+   --  (owner, mode, timestamps, a header offset, ...) as a ";"-separated
+   --  "key=value" string; it is empty for the ZIP and 7z listers and populated
+   --  by the container readers (ar, cpio, ISO 9660, RAR) whose members carry
+   --  POSIX-style attributes.
 
    type Archive_Entry_Array is array (Positive range <>) of Archive_Entry;
    --  A catalogue of archive members, in stored order.
@@ -1276,6 +1282,40 @@ package Zlib is
    --  @param Entry_Name member name to extract
    --  @param Status Ok on success, otherwise a deterministic failure code
    --  @return extracted payload when Status is Ok
+
+   function List_Ar_File_Entries
+     (Archive_Path : String;
+      Status       : out Status_Code) return Archive_Entry_Array;
+   --  Catalogue every member of a Unix "ar" archive (the "!<arch>" common
+   --  variant behind .a static libraries and .deb packages) by reading only
+   --  the 60-byte member headers from the file on disk, so a large archive is
+   --  not held in memory. GNU "//" long names, BSD "#1/" in-band long names,
+   --  and the "/" symbol table are resolved. Members are stored uncompressed,
+   --  so Compression is 0 and the two size columns are equal; the per-member
+   --  CRC32 is left 0. Metadata carries "ar.size", "ar.header_offset", and the
+   --  header's mtime/uid/gid/mode; the symbol and long-name records also carry
+   --  "ar.record=1".
+   --  @param Archive_Path path to an .ar / .a / .deb-style archive file
+   --  @param Status Ok on success, otherwise a deterministic failure code
+   --  @return one Archive_Entry per member when Status is Ok
+
+   procedure Extract_Ar_File_Entry
+     (Archive_Path : String;
+      Entry_Name   : String;
+      Consumer     : not null access procedure
+        (Bytes    : Byte_Array;
+         Continue : in out Boolean);
+      Status       : out Status_Code);
+   --  Stream one named "ar" member's bytes to Consumer straight from the file,
+   --  without holding the member in memory. The member is located by the same
+   --  header walk List_Ar_File_Entries uses; an unknown name fails closed with
+   --  Invalid_Header. Setting Continue to False stops delivery and leaves
+   --  Status Ok, since a caller-requested stop is not an error.
+   --  @param Archive_Path path to an .ar / .a / .deb-style archive file
+   --  @param Entry_Name member name to stream
+   --  @param Consumer callback that receives payload byte chunks in order
+   --  @param Continue callback flag; set False to stop delivery
+   --  @param Status Ok on success, otherwise a deterministic failure code
 
    type Filter_Type is limited private;
    --  Streaming inflate filter state. The lifecycle contract is:

@@ -31,6 +31,7 @@ with Zlib.Stream_Bits;
 with Zlib.Stream_Inflate;
 with Zlib.Sliding_Window;
 with Zlib.Archive_Listing;
+with Zlib.Ar_Reader;
 with Zlib.Cab_Reader;
 with Zlib.Archive_Directory_Extraction;
 with Zlib.ZIP_Streaming_Extraction;
@@ -5797,7 +5798,8 @@ package body Zlib is
                      Compression       => Method,
                      Uncompressed_Size => Unc,
                      Compressed_Size   => Comp,
-                     CRC_32            => Crc);
+                     CRC_32            => Crc,
+                     Metadata          => <>);
                end;
                Pos := Name_First + Name_Len + Extra_Len + Cmt_Len;
             end;
@@ -5985,6 +5987,24 @@ package body Zlib is
    begin
       return Zlib.Cab_Reader.Extract_Entry (Archive_Image, Entry_Name, Status);
    end Extract_CAB;
+
+   function List_Ar_File_Entries
+     (Archive_Path : String;
+      Status       : out Status_Code) return Archive_Entry_Array is
+   begin
+      return Zlib.Ar_Reader.List_Entries (Archive_Path, Status);
+   end List_Ar_File_Entries;
+
+   procedure Extract_Ar_File_Entry
+     (Archive_Path : String;
+      Entry_Name   : String;
+      Consumer     : not null access procedure
+        (Bytes    : Byte_Array;
+         Continue : in out Boolean);
+      Status       : out Status_Code) is
+   begin
+      Zlib.Ar_Reader.Extract_Entry (Archive_Path, Entry_Name, Consumer, Status);
+   end Extract_Ar_File_Entry;
 
    function Compress_ZIP_Native_BZip2_File
      (Input_Path        : String;

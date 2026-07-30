@@ -1057,7 +1057,8 @@ package body Zlib.ZIP_Streaming_Extraction is
                   Compression       => Method,
                   Uncompressed_Size => Unc,
                   Compressed_Size   => Comp,
-                  CRC_32            => CRC);
+                  CRC_32            => CRC,
+                  Metadata          => <>);
 
                Pos := Name_First + Name_Len + Extra_Len + Cmt_Len;
             end;

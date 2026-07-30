@@ -37,6 +37,7 @@ wired into the release path.
 
 The expected suite categories are:
 
+- `zlib_ar_tests`
 - `zlib_auto_block_selection_tests`
 - `zlib_bit_writer_tests`
 - `zlib_bits_tests`
@@ -317,6 +318,14 @@ Gzip *header* parsing (the read side: `Read_GZip_Header` plus the `Is_Valid` /
 field combination and rejects malformed ones.
 
 ## Container format readers
+
+`zlib_ar_tests` covers `List_Ar_File_Entries` / `Extract_Ar_File_Entry`: it
+assembles a Unix "ar" archive on disk and checks the member catalogue (names,
+uncompressed sizes, `Compression` 0), the preserved `ar.size` / `ar.mode` /
+`ar.uid` / `ar.header_offset` metadata tokens, streamed payload round-trips
+(including odd-length members that need even-byte padding), the
+`Invalid_Header` fail-closed for an absent member, and rejection of a
+non-`!<arch>` signature.
 
 `zlib_cab_tests` covers `List_CAB_Entries` / `Extract_CAB`: the Microsoft
 Cabinet header and folder/file records, single-folder Store and MSZIP (raw

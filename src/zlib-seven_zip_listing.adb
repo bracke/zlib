@@ -527,7 +527,8 @@ package body Zlib.Seven_Zip_Listing is
                            Compression       => 0,
                            Uncompressed_Size => USz,
                            Compressed_Size   => 0,
-                           CRC_32            => Crc);
+                           CRC_32            => Crc,
+                           Metadata          => <>);
                      end;
                   end loop;
                   Status := Ok;
