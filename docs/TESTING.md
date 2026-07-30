@@ -47,6 +47,7 @@ The expected suite categories are:
 - `zlib_compression_conformance_tests`
 - `zlib_compression_level_tests`
 - `zlib_consumer_fixture_tests`
+- `zlib_cpio_tests`
 - `zlib_crc32_tests`
 - `zlib_cross_api_equivalence_tests`
 - `zlib_deflate_auto_tests`
@@ -326,6 +327,15 @@ uncompressed sizes, `Compression` 0), the preserved `ar.size` / `ar.mode` /
 (including odd-length members that need even-byte padding), the
 `Invalid_Header` fail-closed for an absent member, and rejection of a
 non-`!<arch>` signature.
+
+`zlib_cpio_tests` covers `List_Cpio_File_Entries` /
+`Extract_Cpio_File_Entry`: it assembles a "new ASCII" (newc) cpio archive on
+disk with a directory and a regular file terminated by the `TRAILER!!!`
+sentinel, and checks the catalogue (names, the `Is_Directory` flag, sizes),
+the preserved `cpio.mode` / `cpio.uid` / `cpio.header_offset` metadata,
+streamed regular-file round-trips, the `Unsupported_Method` for a directory
+(no payload), the `Invalid_Header` for an absent member, and rejection of a
+non-`070701` signature.
 
 `zlib_cab_tests` covers `List_CAB_Entries` / `Extract_CAB`: the Microsoft
 Cabinet header and folder/file records, single-folder Store and MSZIP (raw

@@ -83,6 +83,7 @@ with Zlib_Fuzz_Smoke_Tests;
 with Zlib_Seven_Zip_Tests;
 with Zlib_Ar_Tests;
 with Zlib_Cab_Tests;
+with Zlib_Cpio_Tests;
 with Zlib_ZIP_AES_Tests;
 with Zlib_Seven_Zip_Filter_Tests;
 with Zlib_Seven_Zip_LZMA_Interop_Tests;
@@ -188,6 +189,7 @@ package body Zlib_Suite is
       Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_Fuzz_Smoke_Tests.Test_Case));
       Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_Seven_Zip_Tests.Test_Case));
       Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_Ar_Tests.Test_Case));
+      Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_Cpio_Tests.Test_Case));
       Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_Cab_Tests.Test_Case));
       Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_ZIP_AES_Tests.Test_Case));
       Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_Seven_Zip_Filter_Tests.Test_Case));

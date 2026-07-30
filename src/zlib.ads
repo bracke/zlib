@@ -1317,6 +1317,40 @@ package Zlib is
    --  @param Continue callback flag; set False to stop delivery
    --  @param Status Ok on success, otherwise a deterministic failure code
 
+   function List_Cpio_File_Entries
+     (Archive_Path : String;
+      Status       : out Status_Code) return Archive_Entry_Array;
+   --  Catalogue every member of a cpio archive in the "new ASCII" formats
+   --  ("070701" newc and "070702" CRC) by reading only the 110-byte ASCII-hex
+   --  headers from the file on disk, so a large archive is not held in memory.
+   --  The "TRAILER!!!" sentinel ends the archive. Members are stored
+   --  uncompressed, so Compression is 0 and the two size columns are equal; the
+   --  per-member CRC32 is left 0. Is_Directory is set for directory members;
+   --  every member's file type lives in its mode, preserved in Metadata as
+   --  "cpio.mode" alongside "cpio.uid", "cpio.gid", "cpio.mtime", "cpio.links",
+   --  "cpio.check", and "cpio.header_offset".
+   --  @param Archive_Path path to a cpio (newc / CRC) archive file
+   --  @param Status Ok on success, otherwise a deterministic failure code
+   --  @return one Archive_Entry per member when Status is Ok
+
+   procedure Extract_Cpio_File_Entry
+     (Archive_Path : String;
+      Entry_Name   : String;
+      Consumer     : not null access procedure
+        (Bytes    : Byte_Array;
+         Continue : in out Boolean);
+      Status       : out Status_Code);
+   --  Stream one named cpio member's bytes to Consumer straight from the file.
+   --  Only regular files carry payload bytes; a directory, symlink, device,
+   --  FIFO, or socket member reports Unsupported_Method, and an unknown name
+   --  reports Invalid_Header. Setting Continue to False stops delivery and
+   --  leaves Status Ok, since a caller-requested stop is not an error.
+   --  @param Archive_Path path to a cpio (newc / CRC) archive file
+   --  @param Entry_Name member name to stream
+   --  @param Consumer callback that receives payload byte chunks in order
+   --  @param Continue callback flag; set False to stop delivery
+   --  @param Status Ok on success, otherwise a deterministic failure code
+
    type Filter_Type is limited private;
    --  Streaming inflate filter state. The lifecycle contract is:
    --  Closed before initialization, Open after Inflate_Init, Failed after a
