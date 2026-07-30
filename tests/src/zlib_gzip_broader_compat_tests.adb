@@ -382,8 +382,34 @@ package body Zlib_GZip_Broader_Compat_Tests is
                  "gzip header FCOMMENT roundtrips");
          Assert (Zlib.MTime (Read_Md) = 16#12345678#,
                  "gzip header MTIME roundtrips");
+         --  10-byte fixed header + "hello.txt"+NUL (10) + "a comment"+NUL (10).
+         Assert (Zlib.Header_Length (Read_Md) = 30,
+                 "gzip header length is the offset of the first Deflate byte");
+         Assert (not Zlib.Has_Header_CRC (Read_Md),
+                 "this header carries no FHCRC field");
       end;
    end Test_Read_GZip_Header_Roundtrip;
+
+   procedure Test_Read_GZip_Header_HCRC (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Read_Md : Zlib.GZip_Metadata;
+      RStatus : Zlib.Status_Code;
+      Bad     : Zlib.Byte_Array := GZip_All_Optional;
+   begin
+      --  The all-optional fixture carries a valid FHCRC field.
+      Zlib.Read_GZip_Header (GZip_All_Optional, Read_Md, RStatus);
+      Assert (RStatus = Zlib.Ok, "a valid FHCRC header must read");
+      Assert (Zlib.Has_Header_CRC (Read_Md), "FHCRC presence is reported");
+      --  fixed 10 + FEXTRA (2+2) + FNAME (2) + FCOMMENT (2) + FHCRC (2) = 20.
+      Assert (Zlib.Header_Length (Read_Md) = 20,
+              "header length spans every optional field");
+
+      --  Corrupt the first FHCRC byte (array index 19) so the checksum fails.
+      Bad (19) := Bad (19) xor 16#FF#;
+      Zlib.Read_GZip_Header (Bad, Read_Md, RStatus);
+      Assert (RStatus = Zlib.Invalid_Checksum,
+              "a wrong FHCRC is rejected as Invalid_Checksum");
+   end Test_Read_GZip_Header_HCRC;
 
    procedure Test_Read_GZip_Header_Truncated (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
@@ -448,6 +474,8 @@ package body Zlib_GZip_Broader_Compat_Tests is
       Register_Routine (T, Test_Invalid_Extra_Length_Rejected'Access, "invalid extra length rejected");
       Register_Routine
         (T, Test_Read_GZip_Header_Roundtrip'Access, "gzip header read roundtrips name/comment/mtime");
+      Register_Routine
+        (T, Test_Read_GZip_Header_HCRC'Access, "gzip header read validates FHCRC and reports length");
       Register_Routine
         (T, Test_Read_GZip_Header_Truncated'Access, "gzip header read rejects a truncated header");
       Register_Routine

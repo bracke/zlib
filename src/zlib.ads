@@ -696,6 +696,18 @@ package Zlib is
    --  The raw FEXTRA field bytes, or an empty array when absent.
    --  @param Metadata parsed gzip header metadata
    --  @return the raw FEXTRA bytes, or an empty array when absent
+   function Has_Header_CRC (Metadata : GZip_Metadata) return Boolean;
+   --  Whether an FHCRC header-checksum field was present. Read_GZip_Header
+   --  validates the checksum and fails with Invalid_Checksum on a mismatch, so
+   --  a True here means the header CRC-16 was present and correct.
+   --  @param Metadata parsed gzip header metadata
+   --  @return True when a valid FHCRC field was read
+   function Header_Length (Metadata : GZip_Metadata) return Natural;
+   --  The gzip header length in bytes: the offset of the first Deflate byte,
+   --  i.e. the fixed 10-byte header plus any FEXTRA, FNAME, FCOMMENT, and FHCRC
+   --  fields. 0 for metadata that was never read from an input.
+   --  @param Metadata parsed gzip header metadata
+   --  @return the header length in bytes, or 0 when not read from an input
 
    function GZip
      (Input  : Byte_Array;
@@ -2658,6 +2670,7 @@ private
       MTime       : Interfaces.Unsigned_32 := 0;
       OS          : Byte := 255;
       XFL         : Byte := 0;
+      Header_Len  : Natural := 0;
       Valid       : Boolean := True;
    end record;
 
@@ -2765,6 +2778,7 @@ private
          MTime       => 0,
          OS          => 255,
          XFL         => 0,
+         Header_Len  => 0,
          Valid       => True);
       GZip_Header_CRC      : Interfaces.Unsigned_32 := 16#FFFF_FFFF#;
       Metadata_Index       : Natural := 1;

@@ -240,6 +240,7 @@ package body Zlib is
          MTime       => 0,
          OS          => 255,
          XFL         => 0,
+         Header_Len  => 0,
          Valid       => True);
    end No_GZip_Metadata;
 
@@ -388,6 +389,16 @@ package body Zlib is
       return Result;
    end Extra;
 
+   function Has_Header_CRC (Metadata : GZip_Metadata) return Boolean is
+   begin
+      return Metadata.Header_CRC;
+   end Has_Header_CRC;
+
+   function Header_Length (Metadata : GZip_Metadata) return Natural is
+   begin
+      return Metadata.Header_Len;
+   end Header_Length;
+
    procedure Read_GZip_Header
      (Input    : Byte_Array;
       Metadata : out GZip_Metadata;
@@ -508,10 +519,31 @@ package body Zlib is
             Status := Unexpected_End_Of_Input;
             return;
          end if;
+         --  The FHCRC field is the low 16 bits of the CRC-32 of every header
+         --  byte before it; validate it rather than merely skipping it.
+         declare
+            Expected : constant Natural :=
+              Natural (At_Off (Pos)) + Natural (At_Off (Pos + 1)) * 256;
+            CRC      : CryptoLib.Checksums.CRC32_State;
+         begin
+            CryptoLib.Checksums.CRC32_Reset (CRC);
+            for I in 0 .. Pos - 1 loop
+               CryptoLib.Checksums.CRC32_Update
+                 (CRC, Ada.Streams.Stream_Element (At_Off (I)));
+            end loop;
+            if Natural (CryptoLib.Checksums.CRC32_Value (CRC) mod 65_536)
+              /= Expected
+            then
+               Metadata.Valid := False;
+               Status := Invalid_Checksum;
+               return;
+            end if;
+         end;
          Metadata.Header_CRC := True;
          Pos := Pos + 2;
       end if;
 
+      Metadata.Header_Len := Pos;
       Status := Ok;
    end Read_GZip_Header;
 
