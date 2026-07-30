@@ -7,7 +7,8 @@ maintainers = ["Bent Bracke <bent@bracke.dk>"]
 maintainers-logins = ["bracke"]
 licenses = "MIT"
 website = ""
-tags = ["zlib", "deflate", "gzip", "compression", "ada"]
+long-description = "zlib is a standalone Ada implementation of zlib-wrapped Deflate, implicit multi-member gzip inflate, gzip output, explicit raw Deflate, and native stored-file 7z archive output and extraction, with wrapper-strict deterministic compression. It depends on no system zlib, no C runtime compression library and no generated fixtures, and it is specific to no consumer: the same crate serves an archiver, an HTTP client and a Git implementation without any of them appearing in it."
+tags = ["zlib", "deflate", "gzip", "compression", "7z"]
 
 [[depends-on]]
 gnat_native = "^15"
