@@ -170,15 +170,31 @@ package body Zlib.Cpio_Reader is
                return;
             end if;
 
-            Mode      := Hex_Value (Text (15 .. 22), Ok);
-            if Ok then UID := Hex_Value (Text (23 .. 30), Ok); end if;
-            if Ok then GID := Hex_Value (Text (31 .. 38), Ok); end if;
-            if Ok then Links := Hex_Value (Text (39 .. 46), Ok); end if;
-            if Ok then MTime := Hex_Value (Text (47 .. 54), Ok); end if;
-            if Ok then File_Size := Hex_Value (Text (55 .. 62), Ok); end if;
-            if Ok then Name_Size := Hex_Value (Text (95 .. 102), Ok); end if;
-            if Ok and then Name_Size = 0 then Ok := False; end if;
-            if Ok then Check := Hex_Value (Text (103 .. 110), Ok); end if;
+            Mode := Hex_Value (Text (15 .. 22), Ok);
+            if Ok then
+               UID := Hex_Value (Text (23 .. 30), Ok);
+            end if;
+            if Ok then
+               GID := Hex_Value (Text (31 .. 38), Ok);
+            end if;
+            if Ok then
+               Links := Hex_Value (Text (39 .. 46), Ok);
+            end if;
+            if Ok then
+               MTime := Hex_Value (Text (47 .. 54), Ok);
+            end if;
+            if Ok then
+               File_Size := Hex_Value (Text (55 .. 62), Ok);
+            end if;
+            if Ok then
+               Name_Size := Hex_Value (Text (95 .. 102), Ok);
+            end if;
+            if Ok and then Name_Size = 0 then
+               Ok := False;
+            end if;
+            if Ok then
+               Check := Hex_Value (Text (103 .. 110), Ok);
+            end if;
             if not Ok then
                Fail (Invalid_Header);
                return;
