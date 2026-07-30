@@ -87,6 +87,7 @@ The expected suite categories are:
 - `zlib_raw_compression_api_tests`
 - `zlib_raw_cross_wrapper_conformance_tests`
 - `zlib_raw_release_tests`
+- `zlib_rar_tests`
 - `zlib_release_contract_tests`
 - `zlib_seven_zip_filter_tests`
 - `zlib_seven_zip_lzma_interop_tests`
@@ -345,6 +346,15 @@ payload) and checks the catalogue (the `;version` suffix stripped, `.`/`..`
 skipped, the `iso9660` metadata tag), streamed payload round-trips, the
 `Invalid_Header` for an absent member, and rejection of a non-`CD001`
 descriptor.
+
+`zlib_rar_tests` covers `List_Rar_File_Entries` / `Extract_Rar_File_Entry`:
+it assembles a single-file RAR 4.x archive (marker, a stored file header with
+a real CryptoLib CRC-32, its data, and an End_Of_Archive block) and checks the
+catalogue (name, `Compression` 0, size, CRC, the `rar.method=0x30` metadata),
+a streamed payload that verifies its CRC, `Invalid_Checksum` on a corrupted
+CRC, `Unsupported_Method` for a compressed (non-`Store`) member, the
+`Invalid_Header` for an absent member, and rejection of a non-RAR4 marker as
+`Unsupported_Method`.
 
 `zlib_cab_tests` covers `List_CAB_Entries` / `Extract_CAB`: the Microsoft
 Cabinet header and folder/file records, single-folder Store and MSZIP (raw

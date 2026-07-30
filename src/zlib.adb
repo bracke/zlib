@@ -35,6 +35,7 @@ with Zlib.Ar_Reader;
 with Zlib.Cab_Reader;
 with Zlib.Cpio_Reader;
 with Zlib.Iso_Reader;
+with Zlib.Rar_Reader;
 with Zlib.Archive_Directory_Extraction;
 with Zlib.ZIP_Streaming_Extraction;
 with Zlib.Seven_Zip_BCJ2_Writing;
@@ -6045,6 +6046,25 @@ package body Zlib is
       Zlib.Iso_Reader.Extract_Entry
         (Archive_Path, Entry_Name, Consumer, Status);
    end Extract_Iso_File_Entry;
+
+   function List_Rar_File_Entries
+     (Archive_Path : String;
+      Status       : out Status_Code) return Archive_Entry_Array is
+   begin
+      return Zlib.Rar_Reader.List_Entries (Archive_Path, Status);
+   end List_Rar_File_Entries;
+
+   procedure Extract_Rar_File_Entry
+     (Archive_Path : String;
+      Entry_Name   : String;
+      Consumer     : not null access procedure
+        (Bytes    : Byte_Array;
+         Continue : in out Boolean);
+      Status       : out Status_Code) is
+   begin
+      Zlib.Rar_Reader.Extract_Entry
+        (Archive_Path, Entry_Name, Consumer, Status);
+   end Extract_Rar_File_Entry;
 
    function Compress_ZIP_Native_BZip2_File
      (Input_Path        : String;

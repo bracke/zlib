@@ -1383,6 +1383,40 @@ package Zlib is
    --  @param Continue callback flag; set False to stop delivery
    --  @param Status Ok on success, otherwise a deterministic failure code
 
+   function List_Rar_File_Entries
+     (Archive_Path : String;
+      Status       : out Status_Code) return Archive_Entry_Array;
+   --  Catalogue every file header of a RAR 4.x archive by walking its block
+   --  chain on disk (marker, headers, End_Of_Archive), reading only the
+   --  headers. Compression is 0 for a stored ("Store", method 0x30) member and
+   --  the raw RAR method id (0x31..0x35) for a compressed one; CRC_32 is the
+   --  header's file CRC. Metadata carries "rar.version", "rar.method", and
+   --  "rar.header_offset", plus "rar.encrypted=1" for an encrypted member. RAR5
+   --  is reported as Unsupported_Method.
+   --  @param Archive_Path path to a RAR 4.x archive file
+   --  @param Status Ok on success, otherwise a deterministic failure code
+   --  @return one Archive_Entry per file header when Status is Ok
+
+   procedure Extract_Rar_File_Entry
+     (Archive_Path : String;
+      Entry_Name   : String;
+      Consumer     : not null access procedure
+        (Bytes    : Byte_Array;
+         Continue : in out Boolean);
+      Status       : out Status_Code);
+   --  Stream one named RAR member's bytes to Consumer straight from its data
+   --  area, verifying the header CRC-32 (a mismatch reports Invalid_Checksum).
+   --  Only a stored, unencrypted regular file can be produced; a compressed,
+   --  encrypted, or directory member reports Unsupported_Method, and an unknown
+   --  name reports Invalid_Header. Setting Continue to False stops delivery and
+   --  leaves Status Ok (and skips the checksum), since a caller-requested stop
+   --  is not an error.
+   --  @param Archive_Path path to a RAR 4.x archive file
+   --  @param Entry_Name member name to stream
+   --  @param Consumer callback that receives payload byte chunks in order
+   --  @param Continue callback flag; set False to stop delivery
+   --  @param Status Ok on success, otherwise a deterministic failure code
+
    type Filter_Type is limited private;
    --  Streaming inflate filter state. The lifecycle contract is:
    --  Closed before initialization, Open after Inflate_Init, Failed after a
