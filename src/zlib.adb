@@ -312,6 +312,203 @@ package body Zlib is
       Metadata.Header_CRC := Enabled;
    end Set_Header_CRC;
 
+   function Is_Valid (Metadata : GZip_Metadata) return Boolean is
+   begin
+      return Metadata.Valid;
+   end Is_Valid;
+
+   function Has_Name (Metadata : GZip_Metadata) return Boolean is
+   begin
+      return Metadata.Has_Name;
+   end Has_Name;
+
+   function Name (Metadata : GZip_Metadata) return String is
+   begin
+      return US.To_String (Metadata.Name);
+   end Name;
+
+   function Has_Comment (Metadata : GZip_Metadata) return Boolean is
+   begin
+      return Metadata.Has_Comment;
+   end Has_Comment;
+
+   function Comment (Metadata : GZip_Metadata) return String is
+   begin
+      return US.To_String (Metadata.Comment);
+   end Comment;
+
+   function Has_MTime (Metadata : GZip_Metadata) return Boolean is
+   begin
+      return Metadata.Has_MTime;
+   end Has_MTime;
+
+   function MTime (Metadata : GZip_Metadata) return Interfaces.Unsigned_32 is
+   begin
+      return Metadata.MTime;
+   end MTime;
+
+   function Has_OS (Metadata : GZip_Metadata) return Boolean is
+   begin
+      return Metadata.Has_OS;
+   end Has_OS;
+
+   function OS (Metadata : GZip_Metadata) return Byte is
+   begin
+      return Metadata.OS;
+   end OS;
+
+   function Has_XFL (Metadata : GZip_Metadata) return Boolean is
+   begin
+      return Metadata.Has_XFL;
+   end Has_XFL;
+
+   function XFL (Metadata : GZip_Metadata) return Byte is
+   begin
+      return Metadata.XFL;
+   end XFL;
+
+   function Has_Extra (Metadata : GZip_Metadata) return Boolean is
+   begin
+      return Metadata.Has_Extra;
+   end Has_Extra;
+
+   function Extra (Metadata : GZip_Metadata) return Byte_Array is
+      Text   : constant String := US.To_String (Metadata.Extra);
+      Result : Byte_Array (0 .. Text'Length - 1);
+   begin
+      for I in Text'Range loop
+         Result (I - Text'First) := Byte (Character'Pos (Text (I)));
+      end loop;
+      return Result;
+   end Extra;
+
+   procedure Read_GZip_Header
+     (Input    : Byte_Array;
+      Metadata : out GZip_Metadata;
+      Status   : out Status_Code)
+   is
+      FLG       : Byte;
+      Pos       : Natural;   --  offset (from Input'First) of the next byte
+      Truncated : Boolean := False;
+
+      function At_Off (K : Natural) return Byte is (Input (Input'First + K));
+
+      --  Read a NUL-terminated Latin-1 string starting at Pos, advancing Pos
+      --  past the terminator. Sets Truncated when no NUL is found before the
+      --  end of Input.
+      function Read_C_String return String is
+         Start : constant Natural := Pos;
+      begin
+         while Pos < Input'Length and then At_Off (Pos) /= 0 loop
+            Pos := Pos + 1;
+         end loop;
+         if Pos >= Input'Length then
+            Truncated := True;
+            return "";
+         end if;
+         declare
+            Text : String (1 .. Pos - Start);
+         begin
+            for I in 0 .. Pos - Start - 1 loop
+               Text (I + 1) := Character'Val (Integer (At_Off (Start + I)));
+            end loop;
+            Pos := Pos + 1;   --  skip the NUL
+            return Text;
+         end;
+      end Read_C_String;
+   begin
+      Metadata := No_GZip_Metadata;
+
+      if Input'Length < 10
+        or else At_Off (0) /= 16#1F#
+        or else At_Off (1) /= 16#8B#
+        or else At_Off (2) /= 16#08#
+      then
+         Metadata.Valid := False;
+         Status := Invalid_Header;
+         return;
+      end if;
+
+      FLG := At_Off (3);
+
+      Set_MTime
+        (Metadata,
+         Interfaces.Unsigned_32 (At_Off (4))
+         + Interfaces.Shift_Left (Interfaces.Unsigned_32 (At_Off (5)), 8)
+         + Interfaces.Shift_Left (Interfaces.Unsigned_32 (At_Off (6)), 16)
+         + Interfaces.Shift_Left (Interfaces.Unsigned_32 (At_Off (7)), 24));
+      Set_XFL (Metadata, At_Off (8));
+      Set_OS (Metadata, At_Off (9));
+
+      Pos := 10;
+
+      if (FLG and 16#04#) /= 0 then   --  FEXTRA
+         if Pos + 2 > Input'Length then
+            Metadata.Valid := False;
+            Status := Unexpected_End_Of_Input;
+            return;
+         end if;
+         declare
+            XLEN : constant Natural :=
+              Natural (At_Off (Pos)) + Natural (At_Off (Pos + 1)) * 256;
+         begin
+            Pos := Pos + 2;
+            if Pos + XLEN > Input'Length then
+               Metadata.Valid := False;
+               Status := Unexpected_End_Of_Input;
+               return;
+            end if;
+            declare
+               Field : Byte_Array (0 .. XLEN - 1);
+            begin
+               for I in 0 .. XLEN - 1 loop
+                  Field (I) := At_Off (Pos + I);
+               end loop;
+               Set_Extra (Metadata, Field);
+            end;
+            Pos := Pos + XLEN;
+         end;
+      end if;
+
+      if (FLG and 16#08#) /= 0 then   --  FNAME
+         declare
+            N : constant String := Read_C_String;
+         begin
+            if Truncated then
+               Metadata.Valid := False;
+               Status := Unexpected_End_Of_Input;
+               return;
+            end if;
+            Set_Name (Metadata, N);
+         end;
+      end if;
+
+      if (FLG and 16#10#) /= 0 then   --  FCOMMENT
+         declare
+            C : constant String := Read_C_String;
+         begin
+            if Truncated then
+               Metadata.Valid := False;
+               Status := Unexpected_End_Of_Input;
+               return;
+            end if;
+            Set_Comment (Metadata, C);
+         end;
+      end if;
+
+      if (FLG and 16#02#) /= 0 then   --  FHCRC
+         if Pos + 2 > Input'Length then
+            Metadata.Valid := False;
+            Status := Unexpected_End_Of_Input;
+            return;
+         end if;
+         Metadata.Header_CRC := True;
+         Pos := Pos + 2;
+      end if;
+
+      Status := Ok;
+   end Read_GZip_Header;
+
    function Stored_Raw_Deflate_Size
      (Uncompressed_Size : Interfaces.Unsigned_64;
       Compressed_Size   : out Interfaces.Unsigned_64) return Boolean

@@ -628,6 +628,49 @@ package Zlib is
    --  Enable or disable gzip FHCRC output.
    --  @param Metadata metadata object to update
    --  @param Enabled True to emit and validate a gzip header CRC field
+
+   procedure Read_GZip_Header
+     (Input    : Byte_Array;
+      Metadata : out GZip_Metadata;
+      Status   : out Status_Code);
+   --  Parse a gzip member's header without decompressing the payload -- the
+   --  read complement of the Set_* writers above. Recovers FNAME, FCOMMENT,
+   --  MTIME, OS, XFL, the FHCRC flag and the raw FEXTRA field into Metadata, so
+   --  a caller can present a .gz member's metadata cheaply.
+   --  @param Input the gzip member (header need only be complete, not the body)
+   --  @param Metadata receives the parsed header fields; No_GZip_Metadata on
+   --         failure
+   --  @param Status Ok, Invalid_Header (bad magic/compression method), or
+   --         Unexpected_End_Of_Input (header truncated before a declared field)
+
+   function Is_Valid (Metadata : GZip_Metadata) return Boolean;
+   --  Whether Metadata is internally consistent (e.g. no NUL in a name, FEXTRA
+   --  within the 65_535 limit). Set_* mark it invalid on a rejected value.
+   function Has_Name (Metadata : GZip_Metadata) return Boolean;
+   --  Whether an FNAME field is present.
+   function Name (Metadata : GZip_Metadata) return String;
+   --  The FNAME file name, or "" when absent.
+   function Has_Comment (Metadata : GZip_Metadata) return Boolean;
+   --  Whether an FCOMMENT field is present.
+   function Comment (Metadata : GZip_Metadata) return String;
+   --  The FCOMMENT text, or "" when absent.
+   function Has_MTime (Metadata : GZip_Metadata) return Boolean;
+   --  Whether an MTIME was read (Read_GZip_Header always reads one).
+   function MTime (Metadata : GZip_Metadata) return Interfaces.Unsigned_32;
+   --  The MTIME field (Unix seconds; 0 means "no timestamp").
+   function Has_OS (Metadata : GZip_Metadata) return Boolean;
+   --  Whether an OS byte was read.
+   function OS (Metadata : GZip_Metadata) return Byte;
+   --  The OS identifier byte (255 = unknown).
+   function Has_XFL (Metadata : GZip_Metadata) return Boolean;
+   --  Whether an XFL byte was read.
+   function XFL (Metadata : GZip_Metadata) return Byte;
+   --  The XFL extra-flags byte.
+   function Has_Extra (Metadata : GZip_Metadata) return Boolean;
+   --  Whether an FEXTRA field is present.
+   function Extra (Metadata : GZip_Metadata) return Byte_Array;
+   --  The raw FEXTRA field bytes, or an empty array when absent.
+
    function GZip
      (Input  : Byte_Array;
       Mode   : Compression_Mode := Auto;

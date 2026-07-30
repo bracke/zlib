@@ -1,5 +1,6 @@
 with Ada.Streams;
 with AUnit.Assertions; use AUnit.Assertions;
+with Interfaces; use type Interfaces.Unsigned_32;
 with Zlib;
 with Zlib_Fixture_Data;
 
@@ -357,6 +358,68 @@ package body Zlib_GZip_Broader_Compat_Tests is
       end;
    end Test_Invalid_Extra_Length_Rejected;
 
+   procedure Test_Read_GZip_Header_Roundtrip (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Status   : Zlib.Status_Code;
+      Write_Md : Zlib.GZip_Metadata := Zlib.No_GZip_Metadata;
+   begin
+      Zlib.Set_Name (Write_Md, "hello.txt");
+      Zlib.Set_Comment (Write_Md, "a comment");
+      Zlib.Set_MTime (Write_Md, 16#12345678#);
+      declare
+         GZ      : constant Zlib.Byte_Array :=
+           Zlib.GZip (F.Plain_Stored, Zlib.Stored, Write_Md, Status);
+         Read_Md : Zlib.GZip_Metadata;
+         RStatus : Zlib.Status_Code;
+      begin
+         Assert (Status = Zlib.Ok, "gzip with name/comment/mtime must write");
+         Zlib.Read_GZip_Header (GZ, Read_Md, RStatus);
+         Assert (RStatus = Zlib.Ok, "reading a valid gzip header must succeed");
+         Assert (Zlib.Has_Name (Read_Md) and then Zlib.Name (Read_Md) = "hello.txt",
+                 "gzip header FNAME roundtrips");
+         Assert (Zlib.Has_Comment (Read_Md)
+                 and then Zlib.Comment (Read_Md) = "a comment",
+                 "gzip header FCOMMENT roundtrips");
+         Assert (Zlib.MTime (Read_Md) = 16#12345678#,
+                 "gzip header MTIME roundtrips");
+      end;
+   end Test_Read_GZip_Header_Roundtrip;
+
+   procedure Test_Read_GZip_Header_Truncated (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Status   : Zlib.Status_Code;
+      Write_Md : Zlib.GZip_Metadata := Zlib.No_GZip_Metadata;
+   begin
+      Zlib.Set_Name (Write_Md, "truncated.bin");
+      declare
+         GZ      : constant Zlib.Byte_Array :=
+           Zlib.GZip (F.Plain_Stored, Zlib.Stored, Write_Md, Status);
+         Read_Md : Zlib.GZip_Metadata;
+         RStatus : Zlib.Status_Code;
+      begin
+         Assert (Status = Zlib.Ok, "setup gzip must write");
+         --  Cut two bytes into the FNAME field (fixed header is 10 bytes) so no
+         --  NUL terminator is present within the slice.
+         Zlib.Read_GZip_Header (GZ (GZ'First .. GZ'First + 11), Read_Md, RStatus);
+         Assert (RStatus = Zlib.Unexpected_End_Of_Input,
+                 "a header truncated inside FNAME is rejected as truncated");
+      end;
+   end Test_Read_GZip_Header_Truncated;
+
+   procedure Test_Read_GZip_Header_Not_GZip (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Not_GZ  : constant Zlib.Byte_Array :=
+        [1 => 16#50#, 2 => 16#4B#, 3 => 16#03#, 4 => 16#04#,
+         5 => 16#00#, 6 => 16#00#, 7 => 16#00#, 8 => 16#00#,
+         9 => 16#00#, 10 => 16#00#, 11 => 16#00#, 12 => 16#00#];
+      Read_Md : Zlib.GZip_Metadata;
+      RStatus : Zlib.Status_Code;
+   begin
+      Zlib.Read_GZip_Header (Not_GZ, Read_Md, RStatus);
+      Assert (RStatus = Zlib.Invalid_Header,
+              "a non-gzip buffer is rejected as an invalid header");
+   end Test_Read_GZip_Header_Not_GZip;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
@@ -383,5 +446,11 @@ package body Zlib_GZip_Broader_Compat_Tests is
         (T, Test_Invalid_NUL_Name_Comment_Rejected'Access,
          "invalid embedded NUL in name/comment rejected");
       Register_Routine (T, Test_Invalid_Extra_Length_Rejected'Access, "invalid extra length rejected");
+      Register_Routine
+        (T, Test_Read_GZip_Header_Roundtrip'Access, "gzip header read roundtrips name/comment/mtime");
+      Register_Routine
+        (T, Test_Read_GZip_Header_Truncated'Access, "gzip header read rejects a truncated header");
+      Register_Routine
+        (T, Test_Read_GZip_Header_Not_GZip'Access, "gzip header read rejects a non-gzip buffer");
    end Register_Tests;
 end Zlib_GZip_Broader_Compat_Tests;
