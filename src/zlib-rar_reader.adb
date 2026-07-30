@@ -31,13 +31,14 @@ package body Zlib.Rar_Reader is
    Method_Store : constant := 16#30#;
 
    type Member is record
-      Name        : Unbounded_String;
-      Data_Offset : Natural := 0;
-      Payload     : Natural := 0;
-      Streamable  : Boolean := False;
-      CRC         : Interfaces.Unsigned_32 := 0;
-      Meta        : Unbounded_String;
-      Compression : Interfaces.Unsigned_16 := 0;
+      Name         : Unbounded_String;
+      Data_Offset  : Natural := 0;
+      Payload      : Natural := 0;
+      Is_Directory : Boolean := False;
+      Streamable   : Boolean := False;
+      CRC          : Interfaces.Unsigned_32 := 0;
+      Meta         : Unbounded_String;
+      Compression  : Interfaces.Unsigned_16 := 0;
    end record;
 
    package Member_Vectors is new Ada.Containers.Vectors (Positive, Member);
@@ -306,16 +307,17 @@ package body Zlib.Rar_Reader is
                           & (if Encrypted then ";rar.encrypted=1" else "");
                      begin
                         Members.Append
-                          (Member'(Name        => To_Unbounded_String (Name),
-                                   Data_Offset => Data_Offset,
-                                   Payload     => Natural (Unpack_Size),
-                                   Streamable  =>
+                          (Member'(Name         => To_Unbounded_String (Name),
+                                   Data_Offset  => Data_Offset,
+                                   Payload      => Natural (Unpack_Size),
+                                   Is_Directory => Is_Dir,
+                                   Streamable   =>
                                      not Is_Dir and then Stored
                                      and then not Encrypted,
-                                   CRC         =>
+                                   CRC          =>
                                      Interfaces.Unsigned_32 (File_CRC),
-                                   Meta        => To_Unbounded_String (Meta),
-                                   Compression =>
+                                   Meta         => To_Unbounded_String (Meta),
+                                   Compression  =>
                                      (if Stored then 0
                                       else Interfaces.Unsigned_16 (Method))));
                      end;
@@ -367,7 +369,7 @@ package body Zlib.Rar_Reader is
       begin
          for M of Members loop
             Result (Index).Name := M.Name;
-            Result (Index).Is_Directory := False;
+            Result (Index).Is_Directory := M.Is_Directory;
             Result (Index).Compression := M.Compression;
             Result (Index).Uncompressed_Size :=
               Interfaces.Unsigned_64 (M.Payload);

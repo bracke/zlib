@@ -117,6 +117,61 @@ package body Zlib_Rar_Tests is
       return B.Data (0 .. B.Len - 1);
    end Build_Rar;
 
+   --  Build an archive whose first member is an (empty) directory header and
+   --  whose second is the stored file, to exercise the directory flag.
+   function Build_Rar_With_Dir return Zlib.Byte_Array is
+      B         : Byte_Buffer;
+      Dir_Name  : constant String := "subdir";
+      Dir_Body  : constant Natural := 25 + Dir_Name'Length;
+      Name_Len  : constant Natural := File_Name'Length;
+      Body_Size : constant Natural := 25 + Name_Len;
+   begin
+      Put_U8 (B, 16#52#); Put_U8 (B, 16#61#); Put_U8 (B, 16#72#);
+      Put_U8 (B, 16#21#); Put_U8 (B, 16#1A#); Put_U8 (B, 16#07#);
+      Put_U8 (B, 16#00#);
+
+      --  Directory header: flags 0x00E0, no data (PACK_SIZE 0).
+      Put_U16_LE (B, 0);
+      Put_U8 (B, 16#74#);
+      Put_U16_LE (B, 16#00E0#);
+      Put_U16_LE (B, 7 + Dir_Body);
+      Put_U32_LE (B, 0);                    --  PACK_SIZE
+      Put_U32_LE (B, 0);                    --  UNP_SIZE
+      Put_U8 (B, 0);
+      Put_U32_LE (B, 0);                    --  FILE_CRC
+      Put_U32_LE (B, 0);
+      Put_U8 (B, 20);
+      Put_U8 (B, Method_Store);
+      Put_U16_LE (B, Dir_Name'Length);
+      Put_U32_LE (B, 16#10#);               --  ATTR (directory)
+      Put_String (B, Dir_Name);
+
+      --  Stored file header.
+      Put_U16_LE (B, 0);
+      Put_U8 (B, 16#74#);
+      Put_U16_LE (B, 0);
+      Put_U16_LE (B, 7 + Body_Size);
+      Put_U32_LE (B, Interfaces.Unsigned_32 (Content'Length));
+      Put_U32_LE (B, Interfaces.Unsigned_32 (Content'Length));
+      Put_U8 (B, 0);
+      Put_U32_LE (B, CRC_Of (Content));
+      Put_U32_LE (B, 0);
+      Put_U8 (B, 20);
+      Put_U8 (B, Method_Store);
+      Put_U16_LE (B, Name_Len);
+      Put_U32_LE (B, 0);
+      Put_String (B, File_Name);
+      Put_String (B, Content);
+
+      --  End_Of_Archive.
+      Put_U16_LE (B, 0);
+      Put_U8 (B, 16#7B#);
+      Put_U16_LE (B, 0);
+      Put_U16_LE (B, 7);
+
+      return B.Data (0 .. B.Len - 1);
+   end Build_Rar_With_Dir;
+
    procedure Write_Fixture (Data : Zlib.Byte_Array) is
       File   : SIO.File_Type;
       Buffer : Ada.Streams.Stream_Element_Array
@@ -237,6 +292,27 @@ package body Zlib_Rar_Tests is
       Delete_Fixture;
    end Test_Compressed_Not_Streamable;
 
+   procedure Test_Directory_Flag (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Status : Zlib.Status_Code := Zlib.Invalid_Header;
+   begin
+      Write_Fixture (Build_Rar_With_Dir);
+      declare
+         Entries : constant Zlib.Archive_Entry_Array :=
+           Zlib.List_Rar_File_Entries (Fixture_Path, Status);
+      begin
+         Assert (Status = Zlib.Ok, "status not Ok");
+         Assert (Entries'Length = 2, "expected a directory and a file");
+         Assert (US.To_String (Entries (Entries'First).Name) = "subdir",
+                 "first member should be the directory");
+         Assert (Entries (Entries'First).Is_Directory,
+                 "the 0x00E0 flag should mark a directory");
+         Assert (not Entries (Entries'First + 1).Is_Directory,
+                 "the stored file is not a directory");
+      end;
+      Delete_Fixture;
+   end Test_Directory_Flag;
+
    procedure Test_Missing (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       Status : Zlib.Status_Code := Zlib.Ok;
@@ -296,6 +372,9 @@ package body Zlib_Rar_Tests is
       Register_Routine
         (T, Test_Compressed_Not_Streamable'Access,
          "a compressed RAR member reports Unsupported_Method");
+      Register_Routine
+        (T, Test_Directory_Flag'Access,
+         "a RAR directory header is flagged as a directory");
       Register_Routine
         (T, Test_Missing'Access,
          "extracting an absent RAR member fails closed");
