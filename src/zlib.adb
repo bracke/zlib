@@ -448,6 +448,13 @@ package body Zlib is
 
       FLG := At_Off (3);
 
+      --  RFC 1952 reserves FLG bits 5..7; a conforming header leaves them zero.
+      if (FLG and 16#E0#) /= 0 then
+         Metadata.Valid := False;
+         Status := Invalid_Header;
+         return;
+      end if;
+
       Set_MTime
         (Metadata,
          Interfaces.Unsigned_32 (At_Off (4))

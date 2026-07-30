@@ -432,6 +432,21 @@ package body Zlib_GZip_Broader_Compat_Tests is
       end;
    end Test_Read_GZip_Header_Truncated;
 
+   procedure Test_Read_GZip_Header_Reserved (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Read_Md : Zlib.GZip_Metadata;
+      RStatus : Zlib.Status_Code;
+      --  A minimal gzip header with a reserved FLG bit (0x20) set.
+      Reserved : constant Zlib.Byte_Array :=
+        [1 => 16#1F#, 2 => 16#8B#, 3 => 16#08#, 4 => 16#20#,
+         5 => 16#00#, 6 => 16#00#, 7 => 16#00#, 8 => 16#00#,
+         9 => 16#00#, 10 => 16#FF#, 11 => 16#00#, 12 => 16#00#];
+   begin
+      Zlib.Read_GZip_Header (Reserved, Read_Md, RStatus);
+      Assert (RStatus = Zlib.Invalid_Header,
+              "a header with a reserved FLG bit is rejected");
+   end Test_Read_GZip_Header_Reserved;
+
    procedure Test_Read_GZip_Header_Not_GZip (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       Not_GZ  : constant Zlib.Byte_Array :=
@@ -478,6 +493,8 @@ package body Zlib_GZip_Broader_Compat_Tests is
         (T, Test_Read_GZip_Header_HCRC'Access, "gzip header read validates FHCRC and reports length");
       Register_Routine
         (T, Test_Read_GZip_Header_Truncated'Access, "gzip header read rejects a truncated header");
+      Register_Routine
+        (T, Test_Read_GZip_Header_Reserved'Access, "gzip header read rejects a reserved FLG bit");
       Register_Routine
         (T, Test_Read_GZip_Header_Not_GZip'Access, "gzip header read rejects a non-gzip buffer");
    end Register_Tests;
