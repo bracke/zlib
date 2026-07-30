@@ -75,6 +75,7 @@ The expected suite categories are:
 - `zlib_inflate_raw_api_tests`
 - `zlib_inflate_with_header_tests`
 - `zlib_interop_fixture_tests`
+- `zlib_iso_tests`
 - `zlib_lazy_compression_tests`
 - `zlib_lazy_matcher_tests`
 - `zlib_lz77_matcher_tests`
@@ -336,6 +337,14 @@ the preserved `cpio.mode` / `cpio.uid` / `cpio.header_offset` metadata,
 streamed regular-file round-trips, the `Unsupported_Method` for a directory
 (no payload), the `Invalid_Header` for an absent member, and rejection of a
 non-`070701` signature.
+
+`zlib_iso_tests` covers `List_Iso_File_Entries` / `Extract_Iso_File_Entry`:
+it assembles a minimal ISO 9660 image (system area, a `CD001` primary volume
+descriptor, a root directory with `.`/`..`/a file record, and the file
+payload) and checks the catalogue (the `;version` suffix stripped, `.`/`..`
+skipped, the `iso9660` metadata tag), streamed payload round-trips, the
+`Invalid_Header` for an absent member, and rejection of a non-`CD001`
+descriptor.
 
 `zlib_cab_tests` covers `List_CAB_Entries` / `Extract_CAB`: the Microsoft
 Cabinet header and folder/file records, single-folder Store and MSZIP (raw

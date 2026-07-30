@@ -1351,6 +1351,38 @@ package Zlib is
    --  @param Continue callback flag; set False to stop delivery
    --  @param Status Ok on success, otherwise a deterministic failure code
 
+   function List_Iso_File_Entries
+     (Archive_Path : String;
+      Status       : out Status_Code) return Archive_Entry_Array;
+   --  Catalogue every file and directory of an ISO 9660 ("CD001") image by
+   --  walking the directory tree from the root record in the primary volume
+   --  descriptor, reading only the directory extents (2 KiB metadata sectors)
+   --  from the file on disk. Only the plain ISO 9660 name is read (Rock Ridge
+   --  and Joliet are ignored), and the ";version" suffix is stripped. Names are
+   --  full "/"-joined paths; Is_Directory marks directories. Members are stored
+   --  uncompressed, so Compression is 0, the two size columns are equal, and the
+   --  per-member CRC32 is left 0. Metadata is "iso9660".
+   --  @param Archive_Path path to an ISO 9660 image file
+   --  @param Status Ok on success, otherwise a deterministic failure code
+   --  @return one Archive_Entry per file and directory when Status is Ok
+
+   procedure Extract_Iso_File_Entry
+     (Archive_Path : String;
+      Entry_Name   : String;
+      Consumer     : not null access procedure
+        (Bytes    : Byte_Array;
+         Continue : in out Boolean);
+      Status       : out Status_Code);
+   --  Stream one named ISO 9660 file's bytes to Consumer straight from its data
+   --  extent. A directory member reports Unsupported_Method and an unknown name
+   --  reports Invalid_Header. Setting Continue to False stops delivery and
+   --  leaves Status Ok, since a caller-requested stop is not an error.
+   --  @param Archive_Path path to an ISO 9660 image file
+   --  @param Entry_Name full "/"-joined member path to stream
+   --  @param Consumer callback that receives payload byte chunks in order
+   --  @param Continue callback flag; set False to stop delivery
+   --  @param Status Ok on success, otherwise a deterministic failure code
+
    type Filter_Type is limited private;
    --  Streaming inflate filter state. The lifecycle contract is:
    --  Closed before initialization, Open after Inflate_Init, Failed after a
