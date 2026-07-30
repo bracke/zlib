@@ -31,6 +31,7 @@ with Zlib.Stream_Bits;
 with Zlib.Stream_Inflate;
 with Zlib.Sliding_Window;
 with Zlib.Archive_Listing;
+with Zlib.Cab_Reader;
 with Zlib.Archive_Directory_Extraction;
 with Zlib.ZIP_Streaming_Extraction;
 with Zlib.Seven_Zip_BCJ2_Writing;
@@ -5674,6 +5675,21 @@ package body Zlib is
          Status := Unsupported_Method;
          return Empty;
    end Extract_ZIP;
+
+   function List_CAB_Entries
+     (Archive_Image : Byte_Array;
+      Status        : out Status_Code) return Archive_Entry_Array is
+   begin
+      return Zlib.Cab_Reader.List_Entries (Archive_Image, Status);
+   end List_CAB_Entries;
+
+   function Extract_CAB
+     (Archive_Image : Byte_Array;
+      Entry_Name    : String;
+      Status        : out Status_Code) return Byte_Array is
+   begin
+      return Zlib.Cab_Reader.Extract_Entry (Archive_Image, Entry_Name, Status);
+   end Extract_CAB;
 
    function Compress_ZIP_Native_BZip2_File
      (Input_Path        : String;

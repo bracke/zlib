@@ -1108,6 +1108,19 @@ package Zlib is
    --  @param Status Ok on success, otherwise a deterministic failure code
    --  @return one Archive_Entry per file when Status is Ok
 
+   function List_CAB_Entries
+     (Archive_Image : Byte_Array;
+      Status        : out Status_Code) return Archive_Entry_Array;
+   --  Catalogue every member of a Microsoft Cabinet (.cab / MSCF) archive,
+   --  without decompressing payloads. Only the single-folder, single-block
+   --  layout with Store or MSZIP compression is supported; other layouts fail
+   --  closed (Unsupported_Method). Compression is 8 for MSZIP members and 0 for
+   --  stored members; the per-file CRC32 is left 0 (a cabinet checksums each
+   --  data block, not each file).
+   --  @param Archive_Image complete .cab archive image
+   --  @param Status Ok on success, otherwise a deterministic failure code
+   --  @return one Archive_Entry per file when Status is Ok
+
    function List_Archive_Entries
      (Archive_Image : Byte_Array;
       Password      : String;
@@ -1223,6 +1236,18 @@ package Zlib is
    --  uncompressed CRC32 is verified.
    --  @param Archive_Image complete ZIP archive image
    --  @param Entry_Name central-directory entry name to extract
+   --  @param Status Ok on success, otherwise a deterministic failure code
+   --  @return extracted payload when Status is Ok
+
+   function Extract_CAB
+     (Archive_Image : Byte_Array;
+      Entry_Name    : String;
+      Status        : out Status_Code) return Byte_Array;
+   --  Extract one .cab member by name, decoding a Store or MSZIP folder in
+   --  process (MSZIP is raw Deflate behind a 'CK' block signature). Layouts
+   --  outside the supported single-folder, single-block set fail closed.
+   --  @param Archive_Image complete .cab archive image
+   --  @param Entry_Name member name to extract
    --  @param Status Ok on success, otherwise a deterministic failure code
    --  @return extracted payload when Status is Ok
 
