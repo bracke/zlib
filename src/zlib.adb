@@ -10,6 +10,7 @@ with System.Address_To_Access_Conversions;
 
 with CryptoLib.Checksums;
 with Zlib.Block_Chooser; use Zlib.Block_Chooser;
+with Zlib.Fast_Inflate;
 with Zlib.Fixed_Compress;
 with Zlib.Deflate_Tables;
 with Zlib.Huffman_Builder;
@@ -3475,6 +3476,24 @@ package body Zlib is
      (Input : Byte_Array; Status : out Status_Code) return Byte_Array is
    begin
       if Looks_Like_Zlib_Header (Input) then
+         --  A whole stream, decoded at once; one the fast decoder declines
+         --  -- a dictionary, bytes after it, anything wrong -- by the
+         --  streaming decoder, which says what.
+         begin
+            declare
+               Done   : Boolean;
+               Result : constant Byte_Array := Zlib.Fast_Inflate.Decode_Zlib (Input, Done);
+            begin
+               if Done then
+                  Status := Ok;
+                  return Result;
+               end if;
+            end;
+         exception
+            --  Too large to hold here: the streaming decoder says so.
+            when Storage_Error =>
+               null;
+         end;
          return Inflate_With_Header (Input, Zlib_Header, Status);
       elsif Looks_Like_GZip_Header (Input) then
          return Inflate_With_Header (Input, GZip, Multi_Member, Status);
