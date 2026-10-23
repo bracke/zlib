@@ -80,8 +80,9 @@ procedure Check_Zlib is
          Dir     => Root,
          Program => Alr_Path,
          Args    =>
-           [new String'("exec"), new String'("--"), new String'("gnatls"),
-            new String'("--version")],
+           GNAT.OS_Lib.Argument_List'
+             [new String'("exec"), new String'("--"), new String'("gnatls"),
+              new String'("--version")],
          Output  => Output,
          Quiet   => True);
 
