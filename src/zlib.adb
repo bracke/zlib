@@ -1,5 +1,6 @@
 with Ada.Containers.Vectors;
 with Ada.Exceptions;
+with Ada.Finalization;
 with Ada.Directories;
 with Ada.Streams; use Ada.Streams;
 with Ada.Streams.Stream_IO; use Ada.Streams.Stream_IO;
@@ -11437,6 +11438,30 @@ package body Zlib is
    Streaming_File_Buffer_Size : constant Ada.Streams.Stream_Element_Offset :=
      65_536;
 
+   --  A file streaming buffer held on the heap and let go when its holder
+   --  ends, however its scope ends. Two in a deflater's frame beside its
+   --  filter made it 278 KB, past an eighth of a task's default stack.
+   type Stream_Buffer_Access is access Ada.Streams.Stream_Element_Array;
+   procedure Free is new Ada.Unchecked_Deallocation
+     (Ada.Streams.Stream_Element_Array, Stream_Buffer_Access);
+
+   type Stream_Buffer_Room is new Ada.Finalization.Limited_Controlled with record
+      Data : Stream_Buffer_Access;
+   end record;
+
+   overriding procedure Initialize (Item : in out Stream_Buffer_Room);
+   overriding procedure Finalize (Item : in out Stream_Buffer_Room);
+
+   overriding procedure Initialize (Item : in out Stream_Buffer_Room) is
+   begin
+      Item.Data := new Ada.Streams.Stream_Element_Array (1 .. Streaming_File_Buffer_Size);
+   end Initialize;
+
+   overriding procedure Finalize (Item : in out Stream_Buffer_Room) is
+   begin
+      Free (Item.Data);
+   end Finalize;
+
    procedure Write_Produced
      (File   : in out SIO.File_Type;
       Buffer : Ada.Streams.Stream_Element_Array;
@@ -11467,10 +11492,10 @@ package body Zlib is
       Input_File    : SIO.File_Type;
       Output_File   : SIO.File_Type;
       Filter        : Filter_Type;
-      In_Buffer     :
-        Ada.Streams.Stream_Element_Array (1 .. Streaming_File_Buffer_Size);
-      Out_Buffer    :
-        Ada.Streams.Stream_Element_Array (1 .. Streaming_File_Buffer_Size);
+      In_Buffer_Room : Stream_Buffer_Room;
+      In_Buffer     : Ada.Streams.Stream_Element_Array renames In_Buffer_Room.Data.all;
+      Out_Buffer_Room : Stream_Buffer_Room;
+      Out_Buffer    : Ada.Streams.Stream_Element_Array renames Out_Buffer_Room.Data.all;
       Last_Read     : Ada.Streams.Stream_Element_Offset;
       In_Last       : Ada.Streams.Stream_Element_Offset;
       Out_Last      : Ada.Streams.Stream_Element_Offset;
@@ -11701,10 +11726,10 @@ package body Zlib is
       Input_File    : SIO.File_Type;
       Output_File   : SIO.File_Type;
       Filter        : Compression_Filter_Type;
-      In_Buffer     :
-        Ada.Streams.Stream_Element_Array (1 .. Streaming_File_Buffer_Size);
-      Out_Buffer    :
-        Ada.Streams.Stream_Element_Array (1 .. Streaming_File_Buffer_Size);
+      In_Buffer_Room : Stream_Buffer_Room;
+      In_Buffer     : Ada.Streams.Stream_Element_Array renames In_Buffer_Room.Data.all;
+      Out_Buffer_Room : Stream_Buffer_Room;
+      Out_Buffer    : Ada.Streams.Stream_Element_Array renames Out_Buffer_Room.Data.all;
       Last_Read     : Ada.Streams.Stream_Element_Offset;
       In_Last       : Ada.Streams.Stream_Element_Offset;
       Out_Last      : Ada.Streams.Stream_Element_Offset;
@@ -11921,10 +11946,10 @@ package body Zlib is
    is
       Input_File    : SIO.File_Type;
       Filter        : Compression_Filter_Type;
-      In_Buffer     :
-        Ada.Streams.Stream_Element_Array (1 .. Streaming_File_Buffer_Size);
-      Out_Buffer    :
-        Ada.Streams.Stream_Element_Array (1 .. Streaming_File_Buffer_Size);
+      In_Buffer_Room : Stream_Buffer_Room;
+      In_Buffer     : Ada.Streams.Stream_Element_Array renames In_Buffer_Room.Data.all;
+      Out_Buffer_Room : Stream_Buffer_Room;
+      Out_Buffer    : Ada.Streams.Stream_Element_Array renames Out_Buffer_Room.Data.all;
       Last_Read     : Ada.Streams.Stream_Element_Offset;
       In_Last       : Ada.Streams.Stream_Element_Offset;
       Out_Last      : Ada.Streams.Stream_Element_Offset;
