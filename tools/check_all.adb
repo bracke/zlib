@@ -41,8 +41,9 @@ procedure Check_All is
          Dir     => Root,
          Program => Alr,
          Args    =>
-           [new String'("exec"), new String'("--"), new String'("gnatls"),
-            new String'("--version")],
+           GNAT.OS_Lib.Argument_List'
+             [new String'("exec"), new String'("--"), new String'("gnatls"),
+              new String'("--version")],
          Output  => Output,
          Quiet   => True);
 

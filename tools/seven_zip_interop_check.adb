@@ -257,7 +257,7 @@ procedure Seven_Zip_Interop_Check is
       Code :=
         Project_Tools.Processes.Run_Status
           ("7z probe RISCV", Case_Dir, Seven_Zip,
-           [new String'("a"), new String'("-t7z"), new String'("-m0=RISCV"),
+           GNAT.OS_Lib.Argument_List'[new String'("a"), new String'("-t7z"), new String'("-m0=RISCV"),
             new String'("-m1=LZMA"), new String'(Archive_Path),
             new String'(Entry_Name)],
            Quiet => True);
