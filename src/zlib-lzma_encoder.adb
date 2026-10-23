@@ -1,3 +1,4 @@
+with Ada.Unchecked_Deallocation;
 with Interfaces;
 with Zlib.Bit_Writer;
 with Zlib.LZMA_Literals;
@@ -7,6 +8,13 @@ with Zlib.LZMA_Range_Encoder;
 with Zlib.LZMA_Repetitions;
 
 package body Zlib.LZMA_Encoder is
+   --  The encoder's tables live on the heap: the parser's 32 Ki-entry
+   --  optimum array is 1.5 MiB and the match chain grows with the input, more
+   --  than a thread stack holds.
+   type Pos_Table_Access is access Zlib.LZMA_Match_Finder.Pos_Table;
+   type Opt_Array_Access is access Zlib.LZMA_Parser.Opt_Array;
+   procedure Free is new Ada.Unchecked_Deallocation (Zlib.LZMA_Match_Finder.Pos_Table, Pos_Table_Access);
+   procedure Free is new Ada.Unchecked_Deallocation (Zlib.LZMA_Parser.Opt_Array, Opt_Array_Access);
    LZMA_Num_States      : constant Natural := Zlib.LZMA_Core.Num_States;
    LZMA_Literal_Probs   : constant Natural := Zlib.LZMA_Core.Literal_Probs;
    LZMA_Num_Pos_States_Max : constant Natural := Zlib.LZMA_Core.Num_Pos_States_Max;
@@ -105,8 +113,10 @@ package body Zlib.LZMA_Encoder is
       Hash_Bits    : constant Natural := Zlib.LZMA_Match_Finder.Hash_Bits;
       Dict_Sz   : constant Natural := Natural (LZMA_Default_Dict);
       subtype Pos_Table is Zlib.LZMA_Match_Finder.Pos_Table;
-      Head  : Pos_Table (0 .. 2 ** Hash_Bits - 1) := [others => 0];
-      Chain : Pos_Table (1 .. Natural'Max (Plain'Length, 1)) := [others => 0];
+      Head_Store  : Pos_Table_Access := new Pos_Table'(0 .. 2 ** Hash_Bits - 1 => 0);
+      Chain_Store : Pos_Table_Access := new Pos_Table'(1 .. Natural'Max (Plain'Length, 1) => 0);
+      Head        : Pos_Table renames Head_Store.all;
+      Chain       : Pos_Table renames Chain_Store.all;
 
       function Match_Length (I, D : Natural) return Natural is
         (Zlib.LZMA_Match_Finder.Match_Length (Plain, I, D));
@@ -256,7 +266,8 @@ package body Zlib.LZMA_Encoder is
       subtype Rep_Quad is Zlib.LZMA_Core.Rep_Quad;
       --  The parser starts with stock-sized 8 KiB passes, then extends a pass
       --  when a nice-length match would otherwise be cut at the boundary.
-      Opt : Zlib.LZMA_Parser.Opt_Array (0 .. Max_Seg_Len);
+      Opt_Store : Opt_Array_Access := new Zlib.LZMA_Parser.Opt_Array (0 .. Max_Seg_Len);
+      Opt       : Zlib.LZMA_Parser.Opt_Array renames Opt_Store.all;
    begin
       Zlib.Bit_Writer.Reset (E.Writer);
       LZMA_Init_Probs (Is_Match);
@@ -442,7 +453,11 @@ package body Zlib.LZMA_Encoder is
          end;
       end loop;
 
-      return Zlib.LZMA_Range_Encoder.Finish (E);
+      return Result : constant Byte_Array := Zlib.LZMA_Range_Encoder.Finish (E) do
+         Free (Head_Store);
+         Free (Chain_Store);
+         Free (Opt_Store);
+      end return;
    end Encode_Bounded;
 
 end Zlib.LZMA_Encoder;
