@@ -69,8 +69,18 @@ private
       Symbol : Symbol_Value := 0;
       Length : Code_Length := 0;
    end record;
+   --  Two bytes an entry (1 + 9 + 4 bits): a table is 64 KiB, not the
+   --  384 KiB of word-sized fields, so a decoder holding two of them fits
+   --  a 1 MiB thread stack (Windows' main stack) with room to spare.
+   for Decode_E use record
+      Used   at 0 range 0 .. 0;
+      Symbol at 0 range 1 .. 9;
+      Length at 0 range 10 .. 13;
+   end record;
+   for Decode_E'Size use 16;
 
    type Lookup_Array is array (Natural range 0 .. Table_Size - 1) of Decode_E;
+   for Lookup_Array'Component_Size use 16;
 
    type Decode_Table is record
       Lookup     : Lookup_Array;

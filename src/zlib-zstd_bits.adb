@@ -1,3 +1,5 @@
+with Ada.Unchecked_Deallocation;
+
 package body Zlib.Zstd_Bits is
 
    use type Interfaces.Unsigned_32;
@@ -244,7 +246,11 @@ package body Zlib.Zstd_Bits is
       Length  : constant Natural := Total / 8;
       Padding : constant Natural := Total - Payload - 1;
 
-      Result : Byte_Array (1 .. Length) := [others => 0];
+      --  On the heap: the stream can be as long as the input, far more
+      --  than a thread stack holds.
+      type Bytes_Access is access Byte_Array;
+      procedure Free is new Ada.Unchecked_Deallocation (Byte_Array, Bytes_Access);
+      Result : Bytes_Access := new Byte_Array'(1 .. Length => 0);
       Cursor : Natural := Padding + 1;
 
       procedure Put (Index : Natural; Bit : Boolean);
@@ -277,7 +283,9 @@ package body Zlib.Zstd_Bits is
          end;
       end loop;
 
-      return Result;
+      return Output : constant Byte_Array := Result.all do
+         Free (Result);
+      end return;
    end Finish;
 
 end Zlib.Zstd_Bits;

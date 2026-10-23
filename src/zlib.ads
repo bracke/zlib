@@ -2685,6 +2685,9 @@ private
 
    type Dynamic_Bit_Buffer is
      array (Natural range 0 .. Max_Dynamic_Pending_Bits - 1) of Boolean;
+   --  A bit each: 87.5 KiB, where a byte each made every compression filter
+   --  700 KiB -- most of a 1 MiB thread stack -- and each block clear 700 KiB.
+   for Dynamic_Bit_Buffer'Component_Size use 1;
 
    type Stored_Compress_State is
      (Need_Zlib_Header_0,
