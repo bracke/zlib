@@ -3582,7 +3582,7 @@ package body Zlib is
          end;
       end if;
 
-      SIO.Open (File, SIO.In_File, Path);
+      SIO.Open (File, SIO.In_File, Path, Form => "shared=no");
 
       declare
          Size : constant Natural := Natural (SIO.Size (File));
@@ -3916,7 +3916,7 @@ package body Zlib is
    is
       File : SIO.File_Type;
    begin
-      SIO.Create (File, SIO.Out_File, Path);
+      SIO.Create (File, SIO.Out_File, Path, Form => "shared=no");
 
       if Data'Length > 0 then
          declare
@@ -6435,7 +6435,7 @@ package body Zlib is
            Stream_Element (Payload (Index));
       end loop;
 
-      Create (Output, Out_File, Output_Path);
+      Create (Output, Out_File, Output_Path, Form => "shared=no");
       if Payload'Length > 0 then
          Write (Output, Data);
       end if;
@@ -10421,7 +10421,7 @@ package body Zlib is
          return Empty;
       end if;
 
-      SIO.Open (File, SIO.In_File, Archive_Path);
+      SIO.Open (File, SIO.In_File, Archive_Path, Form => "shared=no");
 
       declare
          File_Size : constant Natural := Natural (SIO.Size (File));
@@ -10635,7 +10635,7 @@ package body Zlib is
          return No;
       end if;
 
-      SIO.Open (File, SIO.In_File, Archive_Path);
+      SIO.Open (File, SIO.In_File, Archive_Path, Form => "shared=no");
 
       declare
          File_Size : constant Natural := Natural (SIO.Size (File));
@@ -11506,7 +11506,7 @@ package body Zlib is
       Status := Ok;
 
       begin
-         SIO.Open (Input_File, SIO.In_File, Input_Path);
+         SIO.Open (Input_File, SIO.In_File, Input_Path, Form => "shared=no");
       exception
          --  A memory limit is not a data, method or file error.
          when Storage_Error =>
@@ -11518,7 +11518,7 @@ package body Zlib is
       end;
 
       begin
-         SIO.Create (Output_File, SIO.Out_File, Output_Path);
+         SIO.Create (Output_File, SIO.Out_File, Output_Path, Form => "shared=no");
       exception
          --  A memory limit is not a data, method or file error.
          when Storage_Error =>
@@ -11739,7 +11739,7 @@ package body Zlib is
       Status := Ok;
 
       begin
-         SIO.Open (Input_File, SIO.In_File, Input_Path);
+         SIO.Open (Input_File, SIO.In_File, Input_Path, Form => "shared=no");
       exception
          when others =>
             Status := Input_File_Error;
@@ -11747,7 +11747,7 @@ package body Zlib is
       end;
 
       begin
-         SIO.Create (Output_File, SIO.Out_File, Output_Path);
+         SIO.Create (Output_File, SIO.Out_File, Output_Path, Form => "shared=no");
       exception
          when others =>
             if SIO.Is_Open (Input_File) then
@@ -11975,7 +11975,7 @@ package body Zlib is
       Compressed_Size := 0;
 
       begin
-         SIO.Open (Input_File, SIO.In_File, Input_Path);
+         SIO.Open (Input_File, SIO.In_File, Input_Path, Form => "shared=no");
       exception
          --  A memory limit is not a data, method or file error.
          when Storage_Error =>

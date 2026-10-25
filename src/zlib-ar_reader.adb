@@ -169,7 +169,7 @@ package body Zlib.Ar_Reader is
       end if;
 
       Ada.Streams.Stream_IO.Open
-        (File, Ada.Streams.Stream_IO.In_File, Archive_Path);
+        (File, Ada.Streams.Stream_IO.In_File, Archive_Path, Form => "shared=no");
 
       declare
          Magic : Ada.Streams.Stream_Element_Array (1 .. Global_Header_Size);
@@ -421,7 +421,7 @@ package body Zlib.Ar_Reader is
       end if;
 
       Ada.Streams.Stream_IO.Open
-        (File, Ada.Streams.Stream_IO.In_File, Archive_Path);
+        (File, Ada.Streams.Stream_IO.In_File, Archive_Path, Form => "shared=no");
       Ada.Streams.Stream_IO.Set_Index
         (File, Ada.Streams.Stream_IO.Count (Data_Offset + 1));
 

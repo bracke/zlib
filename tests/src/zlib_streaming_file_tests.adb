@@ -189,6 +189,23 @@ package body Zlib_Streaming_File_Tests is
       Assert (Status = Zlib.Ok, "Inflate_File_Streaming zlib must succeed");
 
       Assert_Equal (Read_Bytes (Inflated_Path), Input, "zlib streaming file roundtrip");
+
+      --  Held open elsewhere in the program -- another task reading it --
+      --  the input is read all the same: the run time refuses a second
+      --  open of a file under its default form.
+      declare
+         Held : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Delete_If_Exists (Inflated_Path);
+         Ada.Streams.Stream_IO.Open (Held, Ada.Streams.Stream_IO.In_File, Compressed_Path);
+         Zlib.Inflate_File_Streaming
+           (Input_Path  => Compressed_Path,
+            Output_Path => Inflated_Path,
+            Header      => Zlib.Zlib_Header,
+            Status      => Status);
+         Ada.Streams.Stream_IO.Close (Held);
+         Assert (Status = Zlib.Ok, "Inflate_File_Streaming must read an input held open elsewhere");
+      end;
       Delete_If_Exists (Plain_Path);
       Delete_If_Exists (Compressed_Path);
       Delete_If_Exists (Inflated_Path);

@@ -163,7 +163,7 @@ package body Zlib.Rar_Reader is
       end if;
 
       Ada.Streams.Stream_IO.Open
-        (File, Ada.Streams.Stream_IO.In_File, Archive_Path);
+        (File, Ada.Streams.Stream_IO.In_File, Archive_Path, Form => "shared=no");
 
       declare
          Marker : Ada.Streams.Stream_Element_Array (1 .. Marker_Size);
@@ -426,7 +426,7 @@ package body Zlib.Rar_Reader is
 
       CryptoLib.Checksums.CRC32_Reset (CRC);
       Ada.Streams.Stream_IO.Open
-        (File, Ada.Streams.Stream_IO.In_File, Archive_Path);
+        (File, Ada.Streams.Stream_IO.In_File, Archive_Path, Form => "shared=no");
       Ada.Streams.Stream_IO.Set_Index
         (File, Ada.Streams.Stream_IO.Count (Data_Offset + 1));
 

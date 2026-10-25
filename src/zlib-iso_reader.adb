@@ -47,7 +47,7 @@ package body Zlib.Iso_Reader is
          return Empty : Byte_Array (1 .. 0);
       end if;
 
-      Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path);
+      Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path, Form => "shared=no");
       Ada.Streams.Stream_IO.Set_Index
         (File, Ada.Streams.Stream_IO.Positive_Count (Offset + 1));
       Ada.Streams.Stream_IO.Read (File, Buffer, Last);
@@ -324,7 +324,7 @@ package body Zlib.Iso_Reader is
       end if;
 
       Ada.Streams.Stream_IO.Open
-        (File, Ada.Streams.Stream_IO.In_File, Archive_Path);
+        (File, Ada.Streams.Stream_IO.In_File, Archive_Path, Form => "shared=no");
       Ada.Streams.Stream_IO.Set_Index
         (File, Ada.Streams.Stream_IO.Positive_Count (Data_Offset + 1));
 

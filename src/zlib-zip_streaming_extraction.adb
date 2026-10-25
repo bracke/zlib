@@ -392,7 +392,7 @@ package body Zlib.ZIP_Streaming_Extraction is
          return;
       end if;
 
-      SIO.Create (Output, SIO.Out_File, Target_Path);
+      SIO.Create (Output, SIO.Out_File, Target_Path, Form => "shared=no");
       Opened := True;
 
       if Method = Method_Deflate then
@@ -646,7 +646,7 @@ package body Zlib.ZIP_Streaming_Extraction is
                   Raw (Target) := Ada.Streams.Stream_Element (B);
                   Target := Target + 1;
                end loop;
-               SIO.Create (Output, SIO.Out_File, Target_Path);
+               SIO.Create (Output, SIO.Out_File, Target_Path, Form => "shared=no");
                if Raw'Length > 0 then
                   SIO.Write (Output, Raw);
                end if;
@@ -696,7 +696,7 @@ package body Zlib.ZIP_Streaming_Extraction is
          return;
       end if;
 
-      SIO.Open (File, SIO.In_File, Archive_Path);
+      SIO.Open (File, SIO.In_File, Archive_Path, Form => "shared=no");
       Opened := True;
       File_Size := Interfaces.Unsigned_64 (SIO.Size (File));
 
@@ -866,7 +866,7 @@ package body Zlib.ZIP_Streaming_Extraction is
          return;
       end if;
 
-      SIO.Open (File, SIO.In_File, Archive_Path);
+      SIO.Open (File, SIO.In_File, Archive_Path, Form => "shared=no");
       File_Size := Interfaces.Unsigned_64 (SIO.Size (File));
       Find_Central_Directory
         (File, File_Size, CD_Offset, CD_Size, CD_Count, Found);
@@ -998,7 +998,7 @@ package body Zlib.ZIP_Streaming_Extraction is
          return None;
       end if;
 
-      SIO.Open (File, SIO.In_File, Archive_Path);
+      SIO.Open (File, SIO.In_File, Archive_Path, Form => "shared=no");
       File_Size := Interfaces.Unsigned_64 (SIO.Size (File));
       Find_Central_Directory
         (File, File_Size, CD_Offset, CD_Size, CD_Count, Found);
