@@ -20,7 +20,6 @@ with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Calendar;
 with Ada.Strings.Unbounded;
-with GNAT.OS_Lib;
 
 package Zlib.Native_Files is
 
@@ -50,9 +49,12 @@ package Zlib.Native_Files is
    --  Whether the file or directory at Path may be written by its owner (on
    --  Windows: whether it lacks the read-only attribute). False when missing.
 
-   procedure Set_Modification_Time (Path : String; Time : GNAT.OS_Lib.OS_Time);
-   --  Give the file or directory at Path the modification time Time. Like
-   --  GNAT.OS_Lib.Set_File_Last_Modify_Time_Stamp, a failure is silent.
+   procedure Set_Modification_Time (Path : String; Unix_Seconds : Long_Long_Integer);
+   --  Give the file or directory at Path the modification (and access) time
+   --  Unix_Seconds, whole seconds since 1970-01-01 UTC. Like
+   --  GNAT.OS_Lib.Set_File_Last_Modify_Time_Stamp, a failure is silent. Taken
+   --  as seconds, not an OS_Time: GNAT.OS_Lib.GM_Time_Of reads local time,
+   --  and newer runtimes no longer declare the time_t To_Ada takes.
 
    procedure Set_Read_Only (Path : String);
    --  Make the file or directory at Path read-only. Like GNAT.OS_Lib's

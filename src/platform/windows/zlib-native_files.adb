@@ -3,6 +3,7 @@ with Ada.Containers.Vectors;
 with Ada.IO_Exceptions;
 with Ada.Streams.Stream_IO.C_Streams;
 with Ada.Strings.UTF_Encoding.Conversions;
+with GNAT.OS_Lib;
 with Interfaces.C;
 with Interfaces.C_Streams;
 with System.Storage_Elements;
@@ -257,8 +258,8 @@ package body Zlib.Native_Files is
       return Attributes_Of (Path, Data) and then (Data.Attributes and File_Attribute_Read_Only) = 0;
    end Is_Owner_Writable;
 
-   procedure Set_Modification_Time (Path : String; Time : GNAT.OS_Lib.OS_Time) is
-      Seconds : constant Long_Long_Integer := Long_Long_Integer (GNAT.OS_Lib.To_C (Time));
+   procedure Set_Modification_Time (Path : String; Unix_Seconds : Long_Long_Integer) is
+      Seconds : constant Long_Long_Integer := Unix_Seconds;
    begin
       if Seconds < -11_644_473_600 then
          return;

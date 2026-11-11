@@ -1,7 +1,6 @@
 with Ada.Calendar;
 with Ada.Calendar.Formatting;
 with Ada.Containers.Vectors;
-with GNAT.OS_Lib;
 with Zlib.Seven_Zip_Numbers;
 with Zlib.Native_Files;
 
@@ -10,7 +9,6 @@ package body Zlib.Seven_Zip_Properties is
    use type Zlib.Native_Files.File_Kind;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
-   use type GNAT.OS_Lib.OS_Time;
 
    package Byte_Vectors is new Ada.Containers.Vectors
      (Index_Type   => Positive,
@@ -593,35 +591,24 @@ package body Zlib.Seven_Zip_Properties is
       return To_Byte_Array (Header);
    end Metadata_Image;
 
-   function Filetime_To_OS_Time
-     (File_Time : Interfaces.Unsigned_64;
-      OS_Time   : out GNAT.OS_Lib.OS_Time) return Boolean
+   function Filetime_To_Unix_Seconds
+     (File_Time    : Interfaces.Unsigned_64;
+      Unix_Seconds : out Long_Long_Integer) return Boolean
    is
       Ticks_Per_Second : constant Interfaces.Unsigned_64 := 10_000_000;
       Unix_Epoch_Delta : constant Interfaces.Unsigned_64 := 11_644_473_600;
-      Seconds          : Interfaces.Unsigned_64;
+      Seconds          : constant Interfaces.Unsigned_64 := File_Time / Ticks_Per_Second;
    begin
-      OS_Time := GNAT.OS_Lib.Invalid_Time;
-      Seconds := File_Time / Ticks_Per_Second;
-      if Seconds < Unix_Epoch_Delta then
-         return False;
-      end if;
-
-      Seconds := Seconds - Unix_Epoch_Delta;
-      if Seconds > Interfaces.Unsigned_64 (Natural'Last) then
-         return False;
-      end if;
-
+      Unix_Seconds := 0;
       --  Seconds since the epoch in UTC, taken as they are: GM_Time_Of
       --  reads its fields as local time (mktime), which shifted every
       --  restored time by the zone's offset.
-      OS_Time := GNAT.OS_Lib.To_Ada (GNAT.OS_Lib.time_t (Seconds));
-      return OS_Time /= GNAT.OS_Lib.Invalid_Time;
-   exception
-      when others =>
-         OS_Time := GNAT.OS_Lib.Invalid_Time;
+      if Seconds < Unix_Epoch_Delta or else Seconds - Unix_Epoch_Delta > Interfaces.Unsigned_64 (Natural'Last) then
          return False;
-   end Filetime_To_OS_Time;
+      end if;
+      Unix_Seconds := Long_Long_Integer (Seconds - Unix_Epoch_Delta);
+      return True;
+   end Filetime_To_Unix_Seconds;
 
    function Source_Metadata
      (Input_Path : String) return Seven_Zip_Entry_Metadata
@@ -679,12 +666,12 @@ package body Zlib.Seven_Zip_Properties is
      (Path     : String;
       Metadata : Seven_Zip_Entry_Metadata)
    is
-      OS_Time : GNAT.OS_Lib.OS_Time := GNAT.OS_Lib.Invalid_Time;
+      Unix_Seconds : Long_Long_Integer := 0;
    begin
       if Metadata.Has_Modification_Time
-        and then Filetime_To_OS_Time (Metadata.Modification_Time, OS_Time)
+        and then Filetime_To_Unix_Seconds (Metadata.Modification_Time, Unix_Seconds)
       then
-         Zlib.Native_Files.Set_Modification_Time (Path, OS_Time);
+         Zlib.Native_Files.Set_Modification_Time (Path, Unix_Seconds);
       end if;
 
       if Metadata.Has_Windows_Attributes

@@ -1,5 +1,8 @@
 with Ada.Containers.Vectors;
 with Ada.IO_Exceptions;
+with GNAT.OS_Lib;
+with Interfaces.C;
+with System;
 
 --  POSIX hosts (Linux, macOS, the BSDs): the Ada and GNAT libraries reach the
 --  system with the path as given and no length limit of their own, so every
@@ -29,9 +32,22 @@ package body Zlib.Native_Files is
    function Is_Owner_Writable (Path : String) return Boolean is
      (GNAT.OS_Lib.Is_Owner_Writable_File (Path));
 
-   procedure Set_Modification_Time (Path : String; Time : GNAT.OS_Lib.OS_Time) is
+   procedure Set_Modification_Time (Path : String; Unix_Seconds : Long_Long_Integer) is
+      --  struct timeval: 64-bit seconds, then microseconds (64-bit on Linux;
+      --  32-bit plus padding on 64-bit macOS -- zero either way).
+      type Time_Value is record
+         Seconds      : Long_Long_Integer;
+         Microseconds : Long_Long_Integer;
+      end record with Convention => C;
+      type Time_Pair is array (1 .. 2) of Time_Value with Convention => C;
+      function C_Utimes (Name : System.Address; Times : System.Address) return Interfaces.C.int
+        with Import => True, Convention => C, External_Name => "utimes";
+      C_Name : aliased constant String := Path & ASCII.NUL;
+      Times  : aliased constant Time_Pair := [others => (Seconds => Unix_Seconds, Microseconds => 0)];
+      Status : constant Interfaces.C.int := C_Utimes (C_Name'Address, Times'Address);
+      pragma Unreferenced (Status);
    begin
-      GNAT.OS_Lib.Set_File_Last_Modify_Time_Stamp (Path, Time);
+      null;
    end Set_Modification_Time;
 
    procedure Set_Read_Only (Path : String) is
