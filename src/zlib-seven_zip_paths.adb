@@ -1,10 +1,10 @@
-with Ada.Directories;
 with Ada.Strings.Unbounded;
+with Zlib.Native_Files;
 
 package body Zlib.Seven_Zip_Paths
   with SPARK_Mode => On
 is
-   use type Ada.Directories.File_Kind;
+   use type Zlib.Native_Files.File_Kind;
 
    package US renames Ada.Strings.Unbounded;
 
@@ -102,18 +102,18 @@ is
          return False;
       end if;
 
-      if Ada.Directories.Exists (Output_Path)
-        and then Ada.Directories.Kind (Output_Path) = Ada.Directories.Directory
+      if Zlib.Native_Files.Exists (Output_Path)
+        and then Zlib.Native_Files.Kind (Output_Path) = Zlib.Native_Files.Directory
       then
          return False;
       end if;
 
       declare
          Parent_Path : constant String :=
-           Ada.Directories.Containing_Directory (Output_Path);
+           Zlib.Native_Files.Containing_Directory (Output_Path);
       begin
-         return not Ada.Directories.Exists (Parent_Path)
-           or else Ada.Directories.Kind (Parent_Path) = Ada.Directories.Directory;
+         return not Zlib.Native_Files.Exists (Parent_Path)
+           or else Zlib.Native_Files.Kind (Parent_Path) = Zlib.Native_Files.Directory;
       end;
    exception
       when others =>
@@ -125,9 +125,9 @@ is
    is
    begin
       return Input_Path'Length > 0
-        and then Ada.Directories.Exists (Input_Path)
-        and then Ada.Directories.Kind (Input_Path) in
-          Ada.Directories.Ordinary_File | Ada.Directories.Directory;
+        and then Zlib.Native_Files.Exists (Input_Path)
+        and then Zlib.Native_Files.Kind (Input_Path) in
+          Zlib.Native_Files.Ordinary_File | Zlib.Native_Files.Directory;
    exception
       when others =>
          return False;
@@ -161,16 +161,16 @@ is
          return False;
       end if;
 
-      if Ada.Directories.Exists (Output_Dir) then
-         return Ada.Directories.Kind (Output_Dir) = Ada.Directories.Directory;
+      if Zlib.Native_Files.Exists (Output_Dir) then
+         return Zlib.Native_Files.Kind (Output_Dir) = Zlib.Native_Files.Directory;
       end if;
 
       declare
          Parent_Path : constant String :=
-           Ada.Directories.Containing_Directory (Output_Dir);
+           Zlib.Native_Files.Containing_Directory (Output_Dir);
       begin
-         return not Ada.Directories.Exists (Parent_Path)
-           or else Ada.Directories.Kind (Parent_Path) = Ada.Directories.Directory;
+         return not Zlib.Native_Files.Exists (Parent_Path)
+           or else Zlib.Native_Files.Kind (Parent_Path) = Zlib.Native_Files.Directory;
       end;
    exception
       when others =>

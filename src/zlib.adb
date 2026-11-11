@@ -1,7 +1,6 @@
 with Ada.Containers.Vectors;
 with Ada.Exceptions;
 with Ada.Finalization;
-with Ada.Directories;
 with Ada.Streams; use Ada.Streams;
 with Ada.Streams.Stream_IO; use Ada.Streams.Stream_IO;
 with Ada.Unchecked_Deallocation;
@@ -62,6 +61,7 @@ with Zlib.Seven_Zip_Methods; use Zlib.Seven_Zip_Methods;
 with Zlib.Seven_Zip_Numbers;
 with Zlib.Seven_Zip_Paths;
 with Zlib.Seven_Zip_Properties;
+with Zlib.Native_Files;
 
 package body Zlib is
 
@@ -69,7 +69,7 @@ package body Zlib is
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
-   use type Ada.Directories.File_Size;
+   use type Zlib.Native_Files.File_Size;
    use type System.Address;
 
    --  Every codec is now pure Ada: Deflate, LZMA/LZMA2, PPMd7, bzip2 and zstd.
@@ -3573,7 +3573,7 @@ package body Zlib is
    is
       File : SIO.File_Type;
    begin
-      if not Ada.Directories.Exists (Path) then
+      if not Zlib.Native_Files.Exists (Path) then
          Status := Input_File_Error;
          declare
             Empty : constant Byte_Array (1 .. 0) := [others => 0];
@@ -3582,7 +3582,7 @@ package body Zlib is
          end;
       end if;
 
-      SIO.Open (File, SIO.In_File, Path, Form => "shared=no");
+      Zlib.Native_Files.Open (File, SIO.In_File, Path, Form => "shared=no");
 
       declare
          Size : constant Natural := Natural (SIO.Size (File));
@@ -3668,8 +3668,8 @@ package body Zlib is
       Status    : out Status_Code) return Byte_Array
    is
    begin
-      if not Ada.Directories.Exists (Path)
-        or else Ada.Directories.Size (Path) > Ada.Directories.File_Size (Max_Bytes)
+      if not Zlib.Native_Files.Exists (Path)
+        or else Zlib.Native_Files.Size (Path) > Zlib.Native_Files.File_Size (Max_Bytes)
       then
          Status := Input_File_Error;
          declare
@@ -3916,7 +3916,7 @@ package body Zlib is
    is
       File : SIO.File_Type;
    begin
-      SIO.Create (File, SIO.Out_File, Path, Form => "shared=no");
+      Zlib.Native_Files.Create (File, SIO.Out_File, Path, Form => "shared=no");
 
       if Data'Length > 0 then
          declare
@@ -6140,7 +6140,7 @@ package body Zlib is
       Uncompressed_Size := 0;
       Status := Unsupported_Method;
 
-      if not Ada.Directories.Exists (Input_Path) then
+      if not Zlib.Native_Files.Exists (Input_Path) then
          Status := Input_File_Error;
          return Empty;
       end if;
@@ -6202,7 +6202,7 @@ package body Zlib is
       Uncompressed_Size := 0;
       Status := Unsupported_Method;
 
-      if not Ada.Directories.Exists (Input_Path) then
+      if not Zlib.Native_Files.Exists (Input_Path) then
          Status := Input_File_Error;
          return Empty;
       end if;
@@ -6257,7 +6257,7 @@ package body Zlib is
       Uncompressed_Size := 0;
       Status := Unsupported_Method;
 
-      if not Ada.Directories.Exists (Input_Path) then
+      if not Zlib.Native_Files.Exists (Input_Path) then
          Status := Input_File_Error;
          return Empty;
       end if;
@@ -6328,7 +6328,7 @@ package body Zlib is
       Uncompressed_Size := 0;
       Status := Unsupported_Method;
 
-      if not Ada.Directories.Exists (Input_Path) then
+      if not Zlib.Native_Files.Exists (Input_Path) then
          Status := Input_File_Error;
          return Empty;
       end if;
@@ -6435,7 +6435,7 @@ package body Zlib is
            Stream_Element (Payload (Index));
       end loop;
 
-      Create (Output, Out_File, Output_Path, Form => "shared=no");
+      Zlib.Native_Files.Create (Output, Out_File, Output_Path, Form => "shared=no");
       if Payload'Length > 0 then
          Write (Output, Data);
       end if;
@@ -10417,11 +10417,11 @@ package body Zlib is
       Kind := Seven_Zip_File_Entry;
       Metadata := No_Seven_Zip_Entry_Metadata;
 
-      if not Ada.Directories.Exists (Archive_Path) then
+      if not Zlib.Native_Files.Exists (Archive_Path) then
          return Empty;
       end if;
 
-      SIO.Open (File, SIO.In_File, Archive_Path, Form => "shared=no");
+      Zlib.Native_Files.Open (File, SIO.In_File, Archive_Path, Form => "shared=no");
 
       declare
          File_Size : constant Natural := Natural (SIO.Size (File));
@@ -10631,11 +10631,11 @@ package body Zlib is
       Handled := False;
       Status := Unsupported_Method;
 
-      if not Ada.Directories.Exists (Archive_Path) then
+      if not Zlib.Native_Files.Exists (Archive_Path) then
          return No;
       end if;
 
-      SIO.Open (File, SIO.In_File, Archive_Path, Form => "shared=no");
+      Zlib.Native_Files.Open (File, SIO.In_File, Archive_Path, Form => "shared=no");
 
       declare
          File_Size : constant Natural := Natural (SIO.Size (File));
@@ -10893,10 +10893,10 @@ package body Zlib is
                        Destination_Dir & "/" & Rel;
                   begin
                      if E.Is_Directory then
-                        Ada.Directories.Create_Path (Target);
+                        Zlib.Native_Files.Create_Path (Target);
                      else
-                        Ada.Directories.Create_Path
-                          (Ada.Directories.Containing_Directory (Target));
+                        Zlib.Native_Files.Create_Path
+                          (Zlib.Native_Files.Containing_Directory (Target));
 
                         declare
                            Entry_Handled : Boolean := False;
@@ -11506,7 +11506,7 @@ package body Zlib is
       Status := Ok;
 
       begin
-         SIO.Open (Input_File, SIO.In_File, Input_Path, Form => "shared=no");
+         Zlib.Native_Files.Open (Input_File, SIO.In_File, Input_Path, Form => "shared=no");
       exception
          --  A memory limit is not a data, method or file error.
          when Storage_Error =>
@@ -11518,7 +11518,7 @@ package body Zlib is
       end;
 
       begin
-         SIO.Create (Output_File, SIO.Out_File, Output_Path, Form => "shared=no");
+         Zlib.Native_Files.Create (Output_File, SIO.Out_File, Output_Path, Form => "shared=no");
       exception
          --  A memory limit is not a data, method or file error.
          when Storage_Error =>
@@ -11739,7 +11739,7 @@ package body Zlib is
       Status := Ok;
 
       begin
-         SIO.Open (Input_File, SIO.In_File, Input_Path, Form => "shared=no");
+         Zlib.Native_Files.Open (Input_File, SIO.In_File, Input_Path, Form => "shared=no");
       exception
          when others =>
             Status := Input_File_Error;
@@ -11747,7 +11747,7 @@ package body Zlib is
       end;
 
       begin
-         SIO.Create (Output_File, SIO.Out_File, Output_Path, Form => "shared=no");
+         Zlib.Native_Files.Create (Output_File, SIO.Out_File, Output_Path, Form => "shared=no");
       exception
          when others =>
             if SIO.Is_Open (Input_File) then
@@ -11975,7 +11975,7 @@ package body Zlib is
       Compressed_Size := 0;
 
       begin
-         SIO.Open (Input_File, SIO.In_File, Input_Path, Form => "shared=no");
+         Zlib.Native_Files.Open (Input_File, SIO.In_File, Input_Path, Form => "shared=no");
       exception
          --  A memory limit is not a data, method or file error.
          when Storage_Error =>

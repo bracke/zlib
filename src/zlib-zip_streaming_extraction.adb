@@ -1,8 +1,8 @@
-with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Unbounded;
 with CryptoLib.Checksums;
 with Interfaces;
+with Zlib.Native_Files;
 
 package body Zlib.ZIP_Streaming_Extraction is
 
@@ -392,7 +392,7 @@ package body Zlib.ZIP_Streaming_Extraction is
          return;
       end if;
 
-      SIO.Create (Output, SIO.Out_File, Target_Path, Form => "shared=no");
+      Zlib.Native_Files.Create (Output, SIO.Out_File, Target_Path, Form => "shared=no");
       Opened := True;
 
       if Method = Method_Deflate then
@@ -646,7 +646,7 @@ package body Zlib.ZIP_Streaming_Extraction is
                   Raw (Target) := Ada.Streams.Stream_Element (B);
                   Target := Target + 1;
                end loop;
-               SIO.Create (Output, SIO.Out_File, Target_Path, Form => "shared=no");
+               Zlib.Native_Files.Create (Output, SIO.Out_File, Target_Path, Form => "shared=no");
                if Raw'Length > 0 then
                   SIO.Write (Output, Raw);
                end if;
@@ -690,13 +690,13 @@ package body Zlib.ZIP_Streaming_Extraction is
       Handled := False;
       Status := Unsupported_Method;
 
-      if not Ada.Directories.Exists (Archive_Path) then
+      if not Zlib.Native_Files.Exists (Archive_Path) then
          Handled := True;
          Status := Input_File_Error;
          return;
       end if;
 
-      SIO.Open (File, SIO.In_File, Archive_Path, Form => "shared=no");
+      Zlib.Native_Files.Open (File, SIO.In_File, Archive_Path, Form => "shared=no");
       Opened := True;
       File_Size := Interfaces.Unsigned_64 (SIO.Size (File));
 
@@ -768,10 +768,10 @@ package body Zlib.ZIP_Streaming_Extraction is
                      Target : constant String := Destination_Dir & "/" & Rel;
                   begin
                      if Is_Directory then
-                        Ada.Directories.Create_Path (Target);
+                        Zlib.Native_Files.Create_Path (Target);
                      else
-                        Ada.Directories.Create_Path
-                          (Ada.Directories.Containing_Directory (Target));
+                        Zlib.Native_Files.Create_Path
+                          (Zlib.Native_Files.Containing_Directory (Target));
                         if (Flags and 1) = 0
                           and then (Method = Method_Stored
                                     or else Method = Method_Deflate)
@@ -860,13 +860,13 @@ package body Zlib.ZIP_Streaming_Extraction is
          return;
       end if;
 
-      if not Ada.Directories.Exists (Archive_Path) then
+      if not Zlib.Native_Files.Exists (Archive_Path) then
          Handled := True;
          Status := Input_File_Error;
          return;
       end if;
 
-      SIO.Open (File, SIO.In_File, Archive_Path, Form => "shared=no");
+      Zlib.Native_Files.Open (File, SIO.In_File, Archive_Path, Form => "shared=no");
       File_Size := Interfaces.Unsigned_64 (SIO.Size (File));
       Find_Central_Directory
         (File, File_Size, CD_Offset, CD_Size, CD_Count, Found);
@@ -992,13 +992,13 @@ package body Zlib.ZIP_Streaming_Extraction is
       Handled := False;
       Status := Unsupported_Method;
 
-      if not Ada.Directories.Exists (Archive_Path) then
+      if not Zlib.Native_Files.Exists (Archive_Path) then
          Handled := True;
          Status := Input_File_Error;
          return None;
       end if;
 
-      SIO.Open (File, SIO.In_File, Archive_Path, Form => "shared=no");
+      Zlib.Native_Files.Open (File, SIO.In_File, Archive_Path, Form => "shared=no");
       File_Size := Interfaces.Unsigned_64 (SIO.Size (File));
       Find_Central_Directory
         (File, File_Size, CD_Offset, CD_Size, CD_Count, Found);

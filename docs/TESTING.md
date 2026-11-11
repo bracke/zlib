@@ -78,6 +78,7 @@ The expected suite categories are:
 - `zlib_iso_tests`
 - `zlib_lazy_compression_tests`
 - `zlib_lazy_matcher_tests`
+- `zlib_long_path_tests`
 - `zlib_lz77_matcher_tests`
 - `zlib_malformed_conformance_tests`
 - `zlib_malformed_tests`
@@ -355,6 +356,14 @@ a streamed payload that verifies its CRC, `Invalid_Checksum` on a corrupted
 CRC, `Unsupported_Method` for a compressed (non-`Store`) member, the
 `Invalid_Header` for an absent member, and rejection of a non-RAR4 marker as
 `Unsupported_Method`.
+
+`zlib_long_path_tests` covers archive files more than 300 characters deep,
+past the 260-character limit GNAT's Windows runtime enforces before Windows is
+asked. It builds a work tree from short directories renamed to 150-character
+names, then round-trips a ZIP (`ZIP_Files`, `Extract_Archive_File_To_Directory`)
+and a 7z (`Seven_Zip_Deflate_Files`, `List_Archive_File_Entries`,
+`Extract_Archive_File_To_Directory`) there, on every host. It also pins the
+pure `\\?\` long-form rules the Windows file layer applies.
 
 `zlib_cab_tests` covers `List_CAB_Entries` / `Extract_CAB`: the Microsoft
 Cabinet header and folder/file records, single-folder Store and MSZIP (raw

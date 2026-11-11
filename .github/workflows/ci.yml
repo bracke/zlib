@@ -53,6 +53,10 @@ jobs:
 
       - name: Build and run the test suite
         working-directory: zlib/tests
+        # Away from UTC (and at a half-hour offset), so a stored or restored
+        # time read as local time instead of UTC fails here.
+        env:
+          TZ: America/St_Johns
         run: |
           alr --non-interactive build
           ./bin/tests

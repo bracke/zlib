@@ -1,5 +1,6 @@
 with Ada.Directories;
 with Ada.Calendar;
+with Ada.Calendar.Formatting;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Unbounded;
@@ -3304,7 +3305,7 @@ package body Zlib_Seven_Zip_Tests is
       Output_Dir   : constant String :=
         Base_Path ("metadata-preservation.dir");
       Expected_MTime : constant Ada.Calendar.Time :=
-        Ada.Calendar.Time_Of (1970, 1, 1, 0.0);
+        Ada.Calendar.Formatting.Time_Of (1970, 1, 1, 0.0, Time_Zone => 0);
 
       procedure Assert_MTime (Path : String; Label : String) is
          Difference : Duration :=
@@ -3433,7 +3434,7 @@ package body Zlib_Seven_Zip_Tests is
       Output_Path   : constant String :=
         Base_Path ("metadata-creation.out");
       Expected_Time : constant Ada.Calendar.Time :=
-        Ada.Calendar.Time_Of (1970, 1, 1, 0.0);
+        Ada.Calendar.Formatting.Time_Of (1970, 1, 1, 0.0, Time_Zone => 0);
 
       procedure Assert_MTime (Path : String; Label : String) is
          Difference : Duration :=
@@ -3735,7 +3736,7 @@ package body Zlib_Seven_Zip_Tests is
       Expected_Filetime : constant Interfaces.Unsigned_64 :=
         16#019D_B1DE_D53E_8000#;
       Expected_Time     : constant Ada.Calendar.Time :=
-        Ada.Calendar.Time_Of (1970, 1, 1, 0.0);
+        Ada.Calendar.Formatting.Time_Of (1970, 1, 1, 0.0, Time_Zone => 0);
       Status            : Zlib.Status_Code := Zlib.Ok;
 
       procedure Prepare_Source is
@@ -3744,8 +3745,7 @@ package body Zlib_Seven_Zip_Tests is
          Write_File (Source_Path, Payload);
          GNAT.OS_Lib.Set_File_Last_Modify_Time_Stamp
            (Source_Path,
-            GNAT.OS_Lib.GM_Time_Of
-              (1970, 1, 1, 0, 0, 0));
+            GNAT.OS_Lib.To_Ada (0));
          GNAT.OS_Lib.Set_Read_Only (Source_Path);
       end Prepare_Source;
 
@@ -3866,8 +3866,7 @@ package body Zlib_Seven_Zip_Tests is
          Write_File (Path, Data);
          GNAT.OS_Lib.Set_File_Last_Modify_Time_Stamp
            (Path,
-            GNAT.OS_Lib.GM_Time_Of
-              (1970, 1, 1, 0, 0, 0));
+            GNAT.OS_Lib.To_Ada (0));
          GNAT.OS_Lib.Set_Read_Only (Path);
       end Prepare_Source;
 
@@ -9988,7 +9987,7 @@ package body Zlib_Seven_Zip_Tests is
       Expected_Filetime : constant Interfaces.Unsigned_64 :=
         16#019D_B1DE_D53E_8000#;
       Expected_Time     : constant Ada.Calendar.Time :=
-        Ada.Calendar.Time_Of (1970, 1, 1, 0.0);
+        Ada.Calendar.Formatting.Time_Of (1970, 1, 1, 0.0, Time_Zone => 0);
 
       procedure Deflate_Level_File
         (Input_Path  : String;
@@ -10016,8 +10015,7 @@ package body Zlib_Seven_Zip_Tests is
          Ada.Directories.Create_Path (Path);
          GNAT.OS_Lib.Set_File_Last_Modify_Time_Stamp
            (Path,
-            GNAT.OS_Lib.GM_Time_Of
-              (1970, 1, 1, 0, 0, 0));
+            GNAT.OS_Lib.To_Ada (0));
       end Prepare_Directory;
 
       procedure Assert_MTime (Path : String; Label : String) is

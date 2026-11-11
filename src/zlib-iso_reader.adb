@@ -2,6 +2,7 @@ with Ada.Containers.Vectors;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Unbounded;
 with Interfaces;
+with Zlib.Native_Files;
 
 package body Zlib.Iso_Reader is
    use Ada.Strings.Unbounded;
@@ -47,7 +48,7 @@ package body Zlib.Iso_Reader is
          return Empty : Byte_Array (1 .. 0);
       end if;
 
-      Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path, Form => "shared=no");
+      Zlib.Native_Files.Open (File, Ada.Streams.Stream_IO.In_File, Path, Form => "shared=no");
       Ada.Streams.Stream_IO.Set_Index
         (File, Ada.Streams.Stream_IO.Positive_Count (Offset + 1));
       Ada.Streams.Stream_IO.Read (File, Buffer, Last);
@@ -323,7 +324,7 @@ package body Zlib.Iso_Reader is
          return;
       end if;
 
-      Ada.Streams.Stream_IO.Open
+      Zlib.Native_Files.Open
         (File, Ada.Streams.Stream_IO.In_File, Archive_Path, Form => "shared=no");
       Ada.Streams.Stream_IO.Set_Index
         (File, Ada.Streams.Stream_IO.Positive_Count (Data_Offset + 1));

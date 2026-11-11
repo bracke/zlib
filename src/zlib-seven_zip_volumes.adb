@@ -1,5 +1,5 @@
 with Ada.Containers.Vectors;
-with Ada.Directories;
+with Zlib.Native_Files;
 
 package body Zlib.Seven_Zip_Volumes is
 
@@ -65,7 +65,7 @@ package body Zlib.Seven_Zip_Volumes is
             declare
                VP : constant String := Base & "." & Suffix (N);
             begin
-               exit when not Ada.Directories.Exists (VP);
+               exit when not Zlib.Native_Files.Exists (VP);
                declare
                   RS : Status_Code := Ok;
                   B  : constant Byte_Array := Read_File (VP, RS);

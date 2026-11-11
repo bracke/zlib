@@ -1,12 +1,12 @@
-with Ada.Directories;
 with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 with Zlib.Seven_Zip_Paths;
 with Zlib.Seven_Zip_Properties;
+with Zlib.Native_Files;
 
 package body Zlib.Seven_Zip_File_Extraction is
 
-   use type Ada.Directories.File_Kind;
+   use type Zlib.Native_Files.File_Kind;
 
    package Byte_Vectors is new Ada.Containers.Vectors
      (Index_Type   => Positive,
@@ -109,9 +109,9 @@ package body Zlib.Seven_Zip_File_Extraction is
 
             if Is_Directory then
                begin
-                  Ada.Directories.Create_Path
-                    (Ada.Directories.Containing_Directory (Output_Path));
-                  Ada.Directories.Create_Path (Output_Path);
+                  Zlib.Native_Files.Create_Path
+                    (Zlib.Native_Files.Containing_Directory (Output_Path));
+                  Zlib.Native_Files.Create_Path (Output_Path);
                exception
                   --  A memory limit is not a data, method or file error.
                   when Storage_Error =>
@@ -128,8 +128,8 @@ package body Zlib.Seven_Zip_File_Extraction is
             end if;
 
             begin
-               Ada.Directories.Create_Path
-                 (Ada.Directories.Containing_Directory (Output_Path));
+               Zlib.Native_Files.Create_Path
+                 (Zlib.Native_Files.Containing_Directory (Output_Path));
             exception
                --  A memory limit is not a data, method or file error.
                when Storage_Error =>
@@ -251,7 +251,7 @@ package body Zlib.Seven_Zip_File_Extraction is
             end loop;
 
             begin
-               Ada.Directories.Create_Path (Output_Dir);
+               Zlib.Native_Files.Create_Path (Output_Dir);
             exception
                --  A memory limit is not a data, method or file error.
                when Storage_Error =>
@@ -269,23 +269,23 @@ package body Zlib.Seven_Zip_File_Extraction is
                   Output_Path : constant String :=
                     Zlib.Seven_Zip_Paths.Output_Path (Output_Dir, Entry_Name);
                   Parent_Path : constant String :=
-                    Ada.Directories.Containing_Directory (Output_Path);
+                    Zlib.Native_Files.Containing_Directory (Output_Path);
                begin
                   begin
-                     if Ada.Directories.Exists (Output_Path)
+                     if Zlib.Native_Files.Exists (Output_Path)
                        and then
-                        Ada.Directories.Kind (Output_Path) =
-                           Ada.Directories.Directory
+                        Zlib.Native_Files.Kind (Output_Path) =
+                           Zlib.Native_Files.Directory
                        and then not Is_Directory (Offset + 1)
                      then
                         Status := Output_File_Error;
                         return;
                      end if;
 
-                     if Ada.Directories.Exists (Parent_Path)
+                     if Zlib.Native_Files.Exists (Parent_Path)
                        and then
-                         Ada.Directories.Kind (Parent_Path) /=
-                           Ada.Directories.Directory
+                         Zlib.Native_Files.Kind (Parent_Path) /=
+                           Zlib.Native_Files.Directory
                      then
                         Status := Output_File_Error;
                         return;
@@ -313,7 +313,7 @@ package body Zlib.Seven_Zip_File_Extraction is
                begin
                   if Is_Directory (Offset + 1) then
                      begin
-                        Ada.Directories.Create_Path (Output_Path);
+                        Zlib.Native_Files.Create_Path (Output_Path);
                      exception
                         --  A memory limit is not a data, method or file error.
                         when Storage_Error =>
@@ -327,8 +327,8 @@ package body Zlib.Seven_Zip_File_Extraction is
                        (Output_Path, Entry_Metadata (Offset + 1));
                   else
                      begin
-                        Ada.Directories.Create_Path
-                          (Ada.Directories.Containing_Directory (Output_Path));
+                        Zlib.Native_Files.Create_Path
+                          (Zlib.Native_Files.Containing_Directory (Output_Path));
                      exception
                         --  A memory limit is not a data, method or file error.
                         when Storage_Error =>

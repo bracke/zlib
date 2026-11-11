@@ -79,6 +79,11 @@ Zlib.Extract_Seven_Zip_Stored_File ("input.7z", "input.out", "input.bin", Status
 
 The compiled version of this quickstart is `examples/quickstart.adb`; the full first-use walkthrough is in `docs/QUICKSTART.md`.
 
+File and archive paths may be as long as the host allows. On Windows the
+crate opens, creates, lists and extracts through the wide Win32 API, with
+paths read as UTF-8 and long ones given the `\\?\` form, so archives more
+than 260 characters deep work there too.
+
 ## Reentrancy and parallel callers
 
 Independent operations are reentrant. Tools may call zlib functions from

@@ -1,5 +1,5 @@
-with Ada.Directories;
 with Ada.Strings.Unbounded;
+with Zlib.Native_Files;
 
 package body Zlib.Archive_Directory_Extraction is
 
@@ -103,10 +103,10 @@ package body Zlib.Archive_Directory_Extraction is
                   Target : constant String := Destination_Dir & "/" & Rel;
                begin
                   if E.Is_Directory then
-                     Ada.Directories.Create_Path (Target);
+                     Zlib.Native_Files.Create_Path (Target);
                   else
-                     Ada.Directories.Create_Path
-                       (Ada.Directories.Containing_Directory (Target));
+                     Zlib.Native_Files.Create_Path
+                       (Zlib.Native_Files.Containing_Directory (Target));
                      declare
                         Extract_Status : Status_Code := Ok;
                         Data           : constant Byte_Array :=

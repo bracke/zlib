@@ -1,12 +1,13 @@
 with Ada.Calendar;
+with Ada.Calendar.Formatting;
 with Ada.Containers.Vectors;
-with Ada.Directories;
 with GNAT.OS_Lib;
 with Zlib.Seven_Zip_Numbers;
+with Zlib.Native_Files;
 
 package body Zlib.Seven_Zip_Properties is
    use type Ada.Calendar.Time;
-   use type Ada.Directories.File_Kind;
+   use type Zlib.Native_Files.File_Kind;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
    use type GNAT.OS_Lib.OS_Time;
@@ -592,14 +593,6 @@ package body Zlib.Seven_Zip_Properties is
       return To_Byte_Array (Header);
    end Metadata_Image;
 
-   function Leap_Year (Year : Natural) return Boolean
-     with SPARK_Mode => On
-   is
-   begin
-      return (Year mod 4 = 0 and then Year mod 100 /= 0)
-        or else Year mod 400 = 0;
-   end Leap_Year;
-
    function Filetime_To_OS_Time
      (File_Time : Interfaces.Unsigned_64;
       OS_Time   : out GNAT.OS_Lib.OS_Time) return Boolean
@@ -607,13 +600,6 @@ package body Zlib.Seven_Zip_Properties is
       Ticks_Per_Second : constant Interfaces.Unsigned_64 := 10_000_000;
       Unix_Epoch_Delta : constant Interfaces.Unsigned_64 := 11_644_473_600;
       Seconds          : Interfaces.Unsigned_64;
-      Days             : Natural;
-      Seconds_Of_Day   : Natural;
-      Year             : Natural := 1970;
-      Month            : Natural := 1;
-      Day              : Natural;
-      Month_Lengths    : constant array (1 .. 12) of Natural :=
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
    begin
       OS_Time := GNAT.OS_Lib.Invalid_Time;
       Seconds := File_Time / Ticks_Per_Second;
@@ -626,45 +612,10 @@ package body Zlib.Seven_Zip_Properties is
          return False;
       end if;
 
-      Days := Natural (Seconds / 86_400);
-      Seconds_Of_Day := Natural (Seconds mod 86_400);
-
-      loop
-         declare
-            Year_Days : constant Natural :=
-              (if Leap_Year (Year) then 366 else 365);
-         begin
-            exit when Days < Year_Days;
-            Days := Days - Year_Days;
-            Year := Year + 1;
-            if Year > GNAT.OS_Lib.Year_Type'Last then
-               return False;
-            end if;
-         end;
-      end loop;
-
-      loop
-         declare
-            Month_Days : constant Natural :=
-              (if Month = 2 and then Leap_Year (Year)
-               then 29
-               else Month_Lengths (Month));
-         begin
-            exit when Days < Month_Days;
-            Days := Days - Month_Days;
-            Month := Month + 1;
-         end;
-      end loop;
-
-      Day := Days + 1;
-      OS_Time :=
-        GNAT.OS_Lib.GM_Time_Of
-          (GNAT.OS_Lib.Year_Type (Year),
-           GNAT.OS_Lib.Month_Type (Month),
-           GNAT.OS_Lib.Day_Type (Day),
-           GNAT.OS_Lib.Hour_Type (Seconds_Of_Day / 3_600),
-           GNAT.OS_Lib.Minute_Type ((Seconds_Of_Day / 60) mod 60),
-           GNAT.OS_Lib.Second_Type (Seconds_Of_Day mod 60));
+      --  Seconds since the epoch in UTC, taken as they are: GM_Time_Of
+      --  reads its fields as local time (mktime), which shifted every
+      --  restored time by the zone's offset.
+      OS_Time := GNAT.OS_Lib.To_Ada (GNAT.OS_Lib.time_t (Seconds));
       return OS_Time /= GNAT.OS_Lib.Invalid_Time;
    exception
       when others =>
@@ -675,20 +626,22 @@ package body Zlib.Seven_Zip_Properties is
    function Source_Metadata
      (Input_Path : String) return Seven_Zip_Entry_Metadata
    is
+      --  The epoch in UTC: Ada.Calendar.Time_Of reads its arguments as local
+      --  time, which shifted every stored time by the zone's offset.
       Unix_Epoch          : constant Ada.Calendar.Time :=
-        Ada.Calendar.Time_Of (1970, 1, 1, 0.0);
+        Ada.Calendar.Formatting.Time_Of (1970, 1, 1, 0.0, Time_Zone => 0);
       Filetime_Unix_Epoch : constant Interfaces.Unsigned_64 :=
         116_444_736_000_000_000;
       Ticks_Per_Second    : constant Long_Long_Float := 10_000_000.0;
       Metadata            : Seven_Zip_Entry_Metadata :=
         No_Seven_Zip_Entry_Metadata;
       Is_Directory        : constant Boolean :=
-        Ada.Directories.Kind (Input_Path) = Ada.Directories.Directory;
+        Zlib.Native_Files.Kind (Input_Path) = Zlib.Native_Files.Directory;
       Seconds             : Duration;
       Ticks               : Interfaces.Unsigned_64 := 0;
    begin
       Metadata.Is_Directory := Is_Directory;
-      Seconds := Ada.Directories.Modification_Time (Input_Path) - Unix_Epoch;
+      Seconds := Zlib.Native_Files.Modification_Time (Input_Path) - Unix_Epoch;
       Metadata.Has_Modification_Time := True;
 
       if Seconds >= 0.0 then
@@ -711,7 +664,7 @@ package body Zlib.Seven_Zip_Properties is
       Metadata.Has_Windows_Attributes := True;
       Metadata.Windows_Attributes :=
         (if Is_Directory then 16#0000_0010# else 16#0000_0020#);
-      if not GNAT.OS_Lib.Is_Owner_Writable_File (Input_Path) then
+      if not Zlib.Native_Files.Is_Owner_Writable (Input_Path) then
          Metadata.Windows_Attributes :=
            Metadata.Windows_Attributes or 16#0000_0001#;
       end if;
@@ -731,13 +684,13 @@ package body Zlib.Seven_Zip_Properties is
       if Metadata.Has_Modification_Time
         and then Filetime_To_OS_Time (Metadata.Modification_Time, OS_Time)
       then
-         GNAT.OS_Lib.Set_File_Last_Modify_Time_Stamp (Path, OS_Time);
+         Zlib.Native_Files.Set_Modification_Time (Path, OS_Time);
       end if;
 
       if Metadata.Has_Windows_Attributes
         and then (Metadata.Windows_Attributes and 16#0000_0001#) /= 0
       then
-         GNAT.OS_Lib.Set_Read_Only (Path);
+         Zlib.Native_Files.Set_Read_Only (Path);
       end if;
    end Apply_Metadata;
 

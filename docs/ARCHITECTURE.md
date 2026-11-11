@@ -180,6 +180,30 @@ root entry points. FilesInfo target-entry walking now flows through
 `Zlib.Seven_Zip_Properties`; the remaining read-side orchestration in the root
 body is section ordering, StreamsInfo parsing, and codec callback dispatch.
 
+## File system access
+
+Every by-path file and directory operation in `src/` -- opening and creating
+Stream_IO files, existence, kind, size and time queries, directory creation,
+deletion, renaming and listing -- goes through `Zlib.Native_Files`. GNAT's
+Windows runtime refuses any path longer than 260 characters in
+`System.File_IO`, `Ada.Directories` and `GNAT.OS_Lib` before Windows is asked,
+so archives deep in a tree could be neither read nor extracted there. The
+spec is shared; `zlib.gpr` selects the body per host from
+`Zlib_Config.Alire_Host_OS`:
+
+```text
+src/platform/windows/zlib-native_files.adb  wide Win32/CRT calls (_wfopen + Stream_IO.C_Streams,
+                                            CreateDirectoryW, GetFileAttributesExW, DeleteFileW,
+                                            FindFirstFileW, MoveFileExW) on the \\?\ long form
+src/platform/posix/zlib-native_files.adb    the Ada and GNAT libraries, unchanged
+```
+
+`Zlib.Windows_Paths` holds the pure long-form rules (UTF-8 to UTF-16, `\\?\`
+or `\\?\UNC\` for absolute paths of 248 or more characters, `/` read as `\`,
+relative, already prefixed and dot-component paths left alone). They are a copy
+of the sibling hostkit crate's rules, kept here because zlib depends on no
+platform crate, and `zlib_long_path_tests` checks them on every host.
+
 ## Performance-sensitive internals
 
 Performance work must keep the public API and decompression semantics unchanged. The main

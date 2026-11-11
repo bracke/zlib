@@ -1,5 +1,4 @@
 with Ada.Containers.Vectors;
-with Ada.Directories;
 with Ada.Streams;
 with Ada.Strings.Unbounded;
 with CryptoLib.Checksums;
@@ -10,6 +9,7 @@ with Zlib.Seven_Zip_Codec_Writing;
 with Zlib.Seven_Zip_Container;
 with Zlib.Seven_Zip_Paths;
 with Zlib.Seven_Zip_Properties;
+with Zlib.Native_Files;
 
 package body Zlib.Seven_Zip_File_Writing is
 
@@ -206,7 +206,7 @@ package body Zlib.Seven_Zip_File_Writing is
       end if;
 
       Write_PPMd_File_Archive
-        (Input_Path, Output_Path, Ada.Directories.Simple_Name (Input_Path),
+        (Input_Path, Output_Path, Zlib.Native_Files.Simple_Name (Input_Path),
          Read_File, Write_File, Source_Metadata, Status);
    exception
       --  A memory limit is not a data, method or file error.

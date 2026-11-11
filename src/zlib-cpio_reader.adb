@@ -1,12 +1,12 @@
 with Ada.Containers.Vectors;
-with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Unbounded;
 with Interfaces;
+with Zlib.Native_Files;
 
 package body Zlib.Cpio_Reader is
    use Ada.Strings.Unbounded;
-   use type Ada.Directories.File_Size;
+   use type Zlib.Native_Files.File_Size;
    use type Ada.Streams.Stream_Element_Offset;
 
    Header_Size        : constant := 110;
@@ -111,8 +111,8 @@ package body Zlib.Cpio_Reader is
       Status       : out Status_Code)
    is
       File   : Ada.Streams.Stream_IO.File_Type;
-      Size   : constant Ada.Directories.File_Size :=
-        Ada.Directories.Size (Archive_Path);
+      Size   : constant Zlib.Native_Files.File_Size :=
+        Zlib.Native_Files.Size (Archive_Path);
       Offset : Natural := 0;
 
       procedure Fail (Code : Status_Code) is
@@ -126,14 +126,14 @@ package body Zlib.Cpio_Reader is
    begin
       Members := Member_Vectors.Empty_Vector;
 
-      if Size < Ada.Directories.File_Size (Header_Size)
-        or else Size > Ada.Directories.File_Size (Natural'Last)
+      if Size < Zlib.Native_Files.File_Size (Header_Size)
+        or else Size > Zlib.Native_Files.File_Size (Natural'Last)
       then
          Status := Invalid_Header;
          return;
       end if;
 
-      Ada.Streams.Stream_IO.Open
+      Zlib.Native_Files.Open
         (File, Ada.Streams.Stream_IO.In_File, Archive_Path, Form => "shared=no");
 
       while Offset < Natural (Size) loop
@@ -346,7 +346,7 @@ package body Zlib.Cpio_Reader is
          return;
       end if;
 
-      Ada.Streams.Stream_IO.Open
+      Zlib.Native_Files.Open
         (File, Ada.Streams.Stream_IO.In_File, Archive_Path, Form => "shared=no");
       Ada.Streams.Stream_IO.Set_Index
         (File, Ada.Streams.Stream_IO.Count (Data_Offset + 1));
