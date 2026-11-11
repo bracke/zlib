@@ -1797,6 +1797,9 @@ package body Zlib_Seven_Zip_Tests is
          if Ada.Directories.Kind (Path) = Ada.Directories.Directory then
             Ada.Directories.Delete_Tree (Path);
          else
+            --  A test leaves some outputs read-only, and Windows refuses to
+            --  delete a read-only file: make it writable first.
+            GNAT.OS_Lib.Set_Writable (Path);
             Ada.Directories.Delete_File (Path);
          end if;
       end if;
