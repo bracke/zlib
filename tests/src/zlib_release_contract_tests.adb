@@ -1,3 +1,4 @@
+with Ada.Environment_Variables;
 with Ada.Directories;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
@@ -8,6 +9,14 @@ with Interfaces;
 with Zlib;
 
 package body Zlib_Release_Contract_Tests is
+
+   --  The host's temporary folder: /tmp is not a place Windows has.
+   function Temp_Root return String is
+     (if Ada.Environment_Variables.Exists ("TMPDIR") then Ada.Environment_Variables.Value ("TMPDIR")
+      elsif Ada.Environment_Variables.Exists ("TEMP") then Ada.Environment_Variables.Value ("TEMP")
+      elsif Ada.Environment_Variables.Exists ("TMP") then Ada.Environment_Variables.Value ("TMP")
+      else "/tmp");
+
    use type Ada.Streams.Stream_Element_Offset;
    use type Ada.Directories.File_Kind;
    use type Interfaces.Unsigned_16;
@@ -557,8 +566,8 @@ package body Zlib_Release_Contract_Tests is
       end;
 
       Zlib.Seven_Zip_PPMd_File
-        ("/tmp/zlib-release-contract-missing-input",
-         "/tmp/zlib-release-contract-ppmd.7z",
+        (Temp_Root & "/zlib-release-contract-missing-input",
+         Temp_Root & "/zlib-release-contract-ppmd.7z",
          Status);
       Assert
         (Status /= Zlib.Ok,
@@ -608,7 +617,7 @@ package body Zlib_Release_Contract_Tests is
    is
       pragma Unreferenced (T);
 
-      Base         : constant String := "/tmp/zlib-release-contract-7z-list";
+      Base         : constant String := Temp_Root & "/zlib-release-contract-7z-list";
       First_Path   : constant String := Base & "-first.bin";
       Second_Path  : constant String := Base & "-second.bin";
       Archive_Path : constant String := Base & ".7z";

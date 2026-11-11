@@ -1,3 +1,4 @@
+with Ada.Environment_Variables;
 with Ada.Directories;
 with Ada.Calendar;
 with Ada.Calendar.Formatting;
@@ -1776,10 +1777,17 @@ package body Zlib_Seven_Zip_Tests is
         (Archive, Encoded_Header_Deflate);
    end Seven_Zip_With_Deflate_Encoded_Header;
 
+   --  The host's temporary folder: /tmp is not a place Windows has.
+   function Temp_Root return String is
+     (if Ada.Environment_Variables.Exists ("TMPDIR") then Ada.Environment_Variables.Value ("TMPDIR")
+      elsif Ada.Environment_Variables.Exists ("TEMP") then Ada.Environment_Variables.Value ("TEMP")
+      elsif Ada.Environment_Variables.Exists ("TMP") then Ada.Environment_Variables.Value ("TMP")
+      else "/tmp");
+
    function Base_Path (Name : String) return String is
    begin
       return Ada.Directories.Compose
-        ("/tmp",
+        (Temp_Root,
          "zlib-seven-zip-" & Name);
    end Base_Path;
 

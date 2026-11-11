@@ -486,11 +486,58 @@ package body Zlib.Native_Files is
       end;
    end Rename;
 
+   --  Path text read as text: GNAT's Ada.Directories versions refuse a long
+   --  path before they look at it, which failed every extraction deep in a
+   --  folder tree.
+
+   --  Path less its trailing separators, but never less than a root's one.
+   function Trimmed (Path : String) return String is
+      Last : Natural := Path'Last;
+   begin
+      while Last > Path'First and then Is_Separator (Path (Last))
+        and then Path (Last - 1) /= ':'
+      loop
+         Last := Last - 1;
+      end loop;
+      return Path (Path'First .. Last);
+   end Trimmed;
+
+   --  The index of the last separator in Path, or 0.
+   function Last_Separator (Path : String) return Natural is
+   begin
+      for Index in reverse Path'Range loop
+         if Is_Separator (Path (Index)) then
+            return Index;
+         end if;
+      end loop;
+      return 0;
+   end Last_Separator;
+
    function Containing_Directory (Path : String) return String is
-     (Ada.Directories.Containing_Directory (Path));
+      Name : constant String := Trimmed (Path);
+      Last : constant Natural := Last_Separator (Name);
+   begin
+      if Name'Length = 0 then
+         raise Ada.IO_Exceptions.Name_Error with "invalid path name """ & Path & '"';
+      elsif Last = 0 then
+         return ".";
+      elsif Last = Name'Last then
+         raise Ada.IO_Exceptions.Use_Error with "unknown containing directory of root """ & Path & '"';
+      elsif Last = Name'First or else Name (Last - 1) = ':' then
+         --  "\name", "C:\name", "\\?\C:\name": the root keeps its separator.
+         return Name (Name'First .. Last);
+      end if;
+      return Name (Name'First .. Last - 1);
+   end Containing_Directory;
 
    function Simple_Name (Path : String) return String is
-     (Ada.Directories.Simple_Name (Path));
+      Name : constant String := Trimmed (Path);
+   begin
+      if Name'Length = 0 then
+         raise Ada.IO_Exceptions.Name_Error with "invalid path name """ & Path & '"';
+      end if;
+      return Name (Last_Separator (Name) + 1 .. Name'Last);
+   end Simple_Name;
 
    package Entry_Vectors is new Ada.Containers.Vectors
      (Index_Type   => Positive,
