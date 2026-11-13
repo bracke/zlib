@@ -7,8 +7,14 @@ project Tests is
    for Exec_Dir use "bin";
    for Main use ("tests.adb");
 
+   --  -fstack-check: the small-stack tests run compression in a task sized to
+   --  prove it streams, and rely on an overflow raising Storage_Error. Without
+   --  stack probes an overflow is noticed only when a frame touches the guard
+   --  page, and a frame larger than that page can step over it. The library is
+   --  built with it too, for the suite only (ZLIB_STACK_CHECK in alire.toml).
    package Compiler is
-      for Default_Switches ("Ada") use Tests_Config.Ada_Compiler_Switches & ("-gnat2022","-gnatyM120","-gnatX", "-gnata");
+      for Default_Switches ("Ada") use
+        Tests_Config.Ada_Compiler_Switches & ("-gnat2022","-gnatyM120","-gnatX", "-gnata", "-fstack-check");
    end Compiler;
 
 

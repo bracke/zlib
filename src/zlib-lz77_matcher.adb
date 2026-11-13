@@ -296,18 +296,19 @@ package body Zlib.LZ77_Matcher is
          end;
       end if;
 
+      --  Every table starts out null and is allocated as the first statements
+      --  of the block, inside the region its handler covers: allocated in the
+      --  declarations, a Storage_Error from the second or third allocation
+      --  would leave the block before its handler, and the first table leaked.
       declare
-         Head_Table_Access   : Head_Access := new Head_Table;
-         Prev_Table_Access   : Prev_Access := new Prev_Table (0 .. Input'Length - 1);
-         Result_Access       : Token_Access := new Token_Array (0 .. Input'Length - 1);
+         Head_Table_Access   : Head_Access;
+         Prev_Table_Access   : Prev_Access;
+         Result_Access       : Token_Access;
          Best_Lengths_Access : Natural_Access;
          Best_Dists_Access   : Natural_Access;
          Costs_Access        : Natural_Access;
          Choice_Lens_Access  : Natural_Access;
          Choice_Dists_Access : Natural_Access;
-         Head   : Head_Table renames Head_Table_Access.all;
-         Prev   : Prev_Table renames Prev_Table_Access.all;
-         Result : Token_Array renames Result_Access.all;
          Count  : Natural := 0;
          Pos    : Natural := 0;
 
@@ -327,147 +328,157 @@ package body Zlib.LZ77_Matcher is
          --  on this stack), and the tables freed.
          function Emitted return Token_Array is
          begin
-            return Tokens : constant Token_Array := Result (0 .. Count - 1) do
+            return Tokens : constant Token_Array := Result_Access.all (0 .. Count - 1) do
                Release;
             end return;
          end Emitted;
       begin
-         Head := [others => -1];
-         Prev := [others => -1];
-         if Strategy = Optimal then
-            Best_Lengths_Access := new Natural_Table (0 .. Input'Length - 1);
-            Best_Dists_Access := new Natural_Table (0 .. Input'Length - 1);
-            Costs_Access := new Natural_Table (0 .. Input'Length);
-            Choice_Lens_Access := new Natural_Table (0 .. Input'Length - 1);
-            Choice_Dists_Access := new Natural_Table (0 .. Input'Length - 1);
-            declare
-               Best_Lengths : Natural_Table renames Best_Lengths_Access.all;
-               Best_Dists   : Natural_Table renames Best_Dists_Access.all;
-               Costs        : Natural_Table renames Costs_Access.all;
-               Choice_Lens  : Natural_Table renames Choice_Lens_Access.all;
-               Choice_Dists : Natural_Table renames Choice_Dists_Access.all;
-            begin
-               Best_Lengths := [others => 0];
-               Best_Dists := [others => 0];
-               Costs := [others => 0];
-               Choice_Lens := [others => 1];
-               Choice_Dists := [others => 0];
-               for Scan_Pos in 0 .. Input'Length - 1 loop
-                  Find_Best_Match
-                    (Input, Scan_Pos, Head, Prev, Chain_Limit,
-                     Best_Lengths (Scan_Pos), Best_Dists (Scan_Pos));
-                  Insert_Position (Input, Scan_Pos, Head, Prev);
-               end loop;
+         Head_Table_Access := new Head_Table;
+         Prev_Table_Access := new Prev_Table (0 .. Input'Length - 1);
+         Result_Access := new Token_Array (0 .. Input'Length - 1);
 
-               Costs (Input'Length) := 0;
-               for Reverse_Pos in reverse 0 .. Input'Length - 1 loop
-                  declare
-                     Best_Cost : Natural :=
-                       Token_Cost (1, 0) + Costs (Reverse_Pos + 1);
-                     Best_Len  : Natural := 1;
-                     Best_Dist : Natural := 0;
-                  begin
-                     if Best_Lengths (Reverse_Pos) >= Min_Match_Length then
-                        for Len in
-                          Min_Match_Length .. Best_Lengths (Reverse_Pos)
-                        loop
-                           declare
-                              Candidate_Cost : constant Natural :=
-                                Token_Cost (Len, Best_Dists (Reverse_Pos))
-                                + Costs (Reverse_Pos + Len);
-                           begin
-                              if Candidate_Cost < Best_Cost then
-                                 Best_Cost := Candidate_Cost;
-                                 Best_Len := Len;
-                                 Best_Dist := Best_Dists (Reverse_Pos);
-                              end if;
-                           end;
-                        end loop;
-                     end if;
-
-                     Costs (Reverse_Pos) := Best_Cost;
-                     Choice_Lens (Reverse_Pos) := Best_Len;
-                     Choice_Dists (Reverse_Pos) := Best_Dist;
-                  end;
-               end loop;
-
-               while Pos < Input'Length loop
-                  if Choice_Lens (Pos) >= Min_Match_Length then
-                     Emit_Match
-                       (Choice_Lens (Pos), Choice_Dists (Pos), Result, Count);
-                     Pos := Pos + Choice_Lens (Pos);
-                  else
-                     Emit_Literal (Input, Pos, Result, Count);
-                     Pos := Pos + 1;
-                  end if;
-               end loop;
-
-               return Emitted;
-            end;
-         end if;
-
-         while Pos < Input'Length loop
-            declare
-               Len  : Natural;
-               Dist : Natural;
-            begin
-               Find_Best_Match (Input, Pos, Head, Prev, Chain_Limit, Len, Dist);
-
-               if Len < Min_Match_Length then
-                  Emit_Literal (Input, Pos, Result, Count);
-                  Insert_Position (Input, Pos, Head, Prev);
-                  Pos := Pos + 1;
-
-               elsif Strategy = Lazy and then Pos + 1 < Input'Length then
-                  declare
-                     Next_Len  : Natural;
-                     Next_Dist : Natural;
-                  begin
-                     --  If byte Pos is emitted as a literal, it becomes part
-                     --  of the legal history for a match at Pos + 1.  Insert it
-                     --  before probing the next position, but do not insert it
-                     --  again if the current match is kept.
-                     Insert_Position (Input, Pos, Head, Prev);
+         declare
+            Head   : Head_Table renames Head_Table_Access.all;
+            Prev   : Prev_Table renames Prev_Table_Access.all;
+            Result : Token_Array renames Result_Access.all;
+         begin
+            Head := [others => -1];
+            Prev := [others => -1];
+            if Strategy = Optimal then
+               Best_Lengths_Access := new Natural_Table (0 .. Input'Length - 1);
+               Best_Dists_Access := new Natural_Table (0 .. Input'Length - 1);
+               Costs_Access := new Natural_Table (0 .. Input'Length);
+               Choice_Lens_Access := new Natural_Table (0 .. Input'Length - 1);
+               Choice_Dists_Access := new Natural_Table (0 .. Input'Length - 1);
+               declare
+                  Best_Lengths : Natural_Table renames Best_Lengths_Access.all;
+                  Best_Dists   : Natural_Table renames Best_Dists_Access.all;
+                  Costs        : Natural_Table renames Costs_Access.all;
+                  Choice_Lens  : Natural_Table renames Choice_Lens_Access.all;
+                  Choice_Dists : Natural_Table renames Choice_Dists_Access.all;
+               begin
+                  Best_Lengths := [others => 0];
+                  Best_Dists := [others => 0];
+                  Costs := [others => 0];
+                  Choice_Lens := [others => 1];
+                  Choice_Dists := [others => 0];
+                  for Scan_Pos in 0 .. Input'Length - 1 loop
                      Find_Best_Match
-                       (Input, Pos + 1, Head, Prev, Chain_Limit, Next_Len, Next_Dist);
-
-                     if Next_Len > Len
-                       or else
-                         (Next_Len = Len
-                          and then Next_Len >= Min_Match_Length
-                          and then
-                            Token_Cost (1, 0) +
-                            Token_Cost (Next_Len, Next_Dist) <
-                            Token_Cost (Len, Dist))
-                     then
-                        Emit_Literal (Input, Pos, Result, Count);
-                        Pos := Pos + 1;
-                     else
-                        Emit_Match (Len, Dist, Result, Count);
-
-                        for Insert_Pos in
-                          Pos + 1 .. Natural'Min (Input'Length - 1, Pos + Len - 1)
-                        loop
-                           Insert_Position (Input, Insert_Pos, Head, Prev);
-                        end loop;
-
-                        Pos := Pos + Len;
-                     end if;
-                  end;
-
-               else
-                  Emit_Match (Len, Dist, Result, Count);
-
-                  for Insert_Pos in Pos .. Natural'Min (Input'Length - 1, Pos + Len - 1) loop
-                     Insert_Position (Input, Insert_Pos, Head, Prev);
+                       (Input, Scan_Pos, Head, Prev, Chain_Limit,
+                        Best_Lengths (Scan_Pos), Best_Dists (Scan_Pos));
+                     Insert_Position (Input, Scan_Pos, Head, Prev);
                   end loop;
 
-                  Pos := Pos + Len;
-               end if;
-            end;
-         end loop;
+                  Costs (Input'Length) := 0;
+                  for Reverse_Pos in reverse 0 .. Input'Length - 1 loop
+                     declare
+                        Best_Cost : Natural :=
+                          Token_Cost (1, 0) + Costs (Reverse_Pos + 1);
+                        Best_Len  : Natural := 1;
+                        Best_Dist : Natural := 0;
+                     begin
+                        if Best_Lengths (Reverse_Pos) >= Min_Match_Length then
+                           for Len in
+                             Min_Match_Length .. Best_Lengths (Reverse_Pos)
+                           loop
+                              declare
+                                 Candidate_Cost : constant Natural :=
+                                   Token_Cost (Len, Best_Dists (Reverse_Pos))
+                                   + Costs (Reverse_Pos + Len);
+                              begin
+                                 if Candidate_Cost < Best_Cost then
+                                    Best_Cost := Candidate_Cost;
+                                    Best_Len := Len;
+                                    Best_Dist := Best_Dists (Reverse_Pos);
+                                 end if;
+                              end;
+                           end loop;
+                        end if;
 
-         return Emitted;
+                        Costs (Reverse_Pos) := Best_Cost;
+                        Choice_Lens (Reverse_Pos) := Best_Len;
+                        Choice_Dists (Reverse_Pos) := Best_Dist;
+                     end;
+                  end loop;
+
+                  while Pos < Input'Length loop
+                     if Choice_Lens (Pos) >= Min_Match_Length then
+                        Emit_Match
+                          (Choice_Lens (Pos), Choice_Dists (Pos), Result, Count);
+                        Pos := Pos + Choice_Lens (Pos);
+                     else
+                        Emit_Literal (Input, Pos, Result, Count);
+                        Pos := Pos + 1;
+                     end if;
+                  end loop;
+
+                  return Emitted;
+               end;
+            end if;
+
+            while Pos < Input'Length loop
+               declare
+                  Len  : Natural;
+                  Dist : Natural;
+               begin
+                  Find_Best_Match (Input, Pos, Head, Prev, Chain_Limit, Len, Dist);
+
+                  if Len < Min_Match_Length then
+                     Emit_Literal (Input, Pos, Result, Count);
+                     Insert_Position (Input, Pos, Head, Prev);
+                     Pos := Pos + 1;
+
+                  elsif Strategy = Lazy and then Pos + 1 < Input'Length then
+                     declare
+                        Next_Len  : Natural;
+                        Next_Dist : Natural;
+                     begin
+                        --  If byte Pos is emitted as a literal, it becomes part
+                        --  of the legal history for a match at Pos + 1.  Insert it
+                        --  before probing the next position, but do not insert it
+                        --  again if the current match is kept.
+                        Insert_Position (Input, Pos, Head, Prev);
+                        Find_Best_Match
+                          (Input, Pos + 1, Head, Prev, Chain_Limit, Next_Len, Next_Dist);
+
+                        if Next_Len > Len
+                          or else
+                            (Next_Len = Len
+                             and then Next_Len >= Min_Match_Length
+                             and then
+                               Token_Cost (1, 0) +
+                               Token_Cost (Next_Len, Next_Dist) <
+                               Token_Cost (Len, Dist))
+                        then
+                           Emit_Literal (Input, Pos, Result, Count);
+                           Pos := Pos + 1;
+                        else
+                           Emit_Match (Len, Dist, Result, Count);
+
+                           for Insert_Pos in
+                             Pos + 1 .. Natural'Min (Input'Length - 1, Pos + Len - 1)
+                           loop
+                              Insert_Position (Input, Insert_Pos, Head, Prev);
+                           end loop;
+
+                           Pos := Pos + Len;
+                        end if;
+                     end;
+
+                  else
+                     Emit_Match (Len, Dist, Result, Count);
+
+                     for Insert_Pos in Pos .. Natural'Min (Input'Length - 1, Pos + Len - 1) loop
+                        Insert_Position (Input, Insert_Pos, Head, Prev);
+                     end loop;
+
+                     Pos := Pos + Len;
+                  end if;
+               end;
+            end loop;
+
+            return Emitted;
+         end;
       exception
          when others =>
             Release;

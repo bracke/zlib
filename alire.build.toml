@@ -9,6 +9,10 @@ licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
 website = ""
 tags = ["zlib", "deflate", "gzip", "compression", "ada"]
 
+# On only for the test suite (tests/alire.toml): see zlib.gpr.
+[gpr-externals]
+ZLIB_STACK_CHECK = ["true", "false"]
+
 [[depends-on]]
 gnat_native = "^15"
 

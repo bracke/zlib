@@ -11,6 +11,12 @@ tags = ["zlib", "deflate", "gzip", "compression", "ada"]
 
 executables = ["tests"]
 
+# Stack checking in zlib itself, not only in the suite: the small-stack tests
+# need an overflow in the library's own frames to raise Storage_Error every
+# time, and -fstack-check is what makes it so (see zlib.gpr and tests.gpr).
+[gpr-set-externals]
+ZLIB_STACK_CHECK = "true"
+
 [[depends-on]]
 gnat_native = "^15"
 

@@ -98,3 +98,89 @@ jobs:
         run: |
           alr --non-interactive build
           ./bin/tests.exe
+
+  macos-tests:
+    # The POSIX file layer on macOS, Intel and Apple silicon alike; the
+    # release checklist runs on Linux.
+    name: macOS test suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    # Runner images are published with a coherent Homebrew snapshot; anything
+    # that reaches Homebrew must not upgrade it first. On the Intel runner an
+    # auto-update rebuilds large, unrelated dependency trees (openssl from
+    # source) and can consume the whole job timeout.
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-15-intel is the x86_64 macOS job, on the pinned toolchain.
+        #
+        # macos-latest is Apple silicon. gnat_native=15.2.1 ships no
+        # aarch64-darwin binary (GNAT 15.2.0-1 was built for x86_64 only), so
+        # that one job builds with 15.3.1, the nearest release that has one,
+        # and rewrites the =15.2.1 pins in its own checkout to match. Every
+        # other job, and every manifest in the repositories, stays on 15.2.1.
+        os: [macos-15-intel, macos-latest]
+        include:
+          - toolchain: gnat_native=15.2.1
+          - os: macos-latest
+            toolchain: gnat_native=15.3.1
+    steps:
+      - name: Check out zlib
+        uses: actions/checkout@v7
+        with:
+          path: zlib
+      - name: Check out sibling crates (transitive pin closure)
+        uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
+        with:
+          root: zlib
+      - name: Set up Alire
+        uses: alire-project/setup-alire@v6
+        with:
+          toolchain: ${{ matrix.toolchain }} gprbuild
+
+      - name: Pin the Apple silicon toolchain in this checkout (macos-latest)
+        # See the matrix: no 15.2.1 exists for aarch64-darwin. Crates in the
+        # closure pin gnat_native =15.2.1, so the solve would fail on the
+        # toolchain this job can have; this job's copies pin 15.3.1 instead.
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          find . -name alire.toml -not -path "*/alire/*" -print0 |
+            xargs -0 grep -l 'gnat_native = "=15.2.1"' |
+            while read -r manifest; do
+              sed -i '' 's/gnat_native = "=15.2.1"/gnat_native = "=15.3.1"/' "$manifest"
+              echo "pinned 15.3.1 in $manifest"
+            done
+          # GCC otherwise links against the Command Line Tools SDK, whose
+          # library stubs name architectures (arm64e.x1) the selected Xcode's
+          # ld does not know, and every link fails. The SDK of that Xcode
+          # matches its ld.
+          echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+
+      - name: Raise Alire solver timeout so slow runners get a complete solution
+        # The default solver.timeout is 5 s (+10 s grace); the slower macOS
+        # runners can time out and ship an INCOMPLETE solution, silently
+        # dropping transitive crates (then gprbuild fails with "<x>.gpr not
+        # found").
+        shell: bash
+        run: alr settings --global --set solver.timeout 600
+
+      # config/zlib_config.gpr is Alire-generated and gitignored, so a fresh
+      # clone has none. `alr build` generates it.
+      - name: Build the library
+        working-directory: zlib
+        run: alr --non-interactive build
+
+      - name: Build and run the test suite
+        working-directory: zlib/tests
+        # Away from UTC (and at a half-hour offset), so a stored or restored
+        # time read as local time instead of UTC fails here.
+        env:
+          TZ: America/St_Johns
+        run: |
+          alr --non-interactive build
+          ./bin/tests

@@ -21,8 +21,25 @@ project Zlib is
      external ("ZLIB_LIBRARY_TYPE", external ("LIBRARY_TYPE", "static"));
    for Library_Kind use Library_Type;
 
+   --  Stack checking, for a build that needs a stack overflow to raise
+   --  Storage_Error every time: the test suite, which runs compression in a
+   --  task with a small stack to prove it streams. Without -fstack-check an
+   --  overflow is caught only when a frame touches the guard page, and a frame
+   --  larger than the guard page can step over it into other memory. Off by
+   --  default, so a consumer does not pay for the probes; tests/alire.toml
+   --  turns it on.
+   type Stack_Check_Type is ("true", "false");
+   Stack_Check : Stack_Check_Type := external ("ZLIB_STACK_CHECK", "false");
+
    package Compiler is
-      for Default_Switches ("Ada") use Zlib_Config.Ada_Compiler_Switches & ("-gnat2022","-gnatyM120","-gnatX", "-gnata");
+      case Stack_Check is
+         when "true" =>
+            for Default_Switches ("Ada") use
+              Zlib_Config.Ada_Compiler_Switches & ("-gnat2022","-gnatyM120","-gnatX", "-gnata", "-fstack-check");
+         when "false" =>
+            for Default_Switches ("Ada") use
+              Zlib_Config.Ada_Compiler_Switches & ("-gnat2022","-gnatyM120","-gnatX", "-gnata");
+      end case;
    end Compiler;
 
    package Binder is
