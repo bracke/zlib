@@ -1,3 +1,4 @@
+with Ada.Unchecked_Deallocation;
 with Zlib.Deflate_Tables;
 
 package body Zlib.LZ77_Matcher is
@@ -8,6 +9,20 @@ package body Zlib.LZ77_Matcher is
 
    type Head_Table is array (Hash_Index) of Integer;
    type Prev_Table is array (Natural range <>) of Integer;
+   type Natural_Table is array (Natural range <>) of Natural;
+
+   --  A block's tables live on the heap: for a 64 KiB block they come to
+   --  well over a megabyte (several with the optimal parse), more than a
+   --  Windows main thread's whole stack.
+   type Head_Access is access Head_Table;
+   type Prev_Access is access Prev_Table;
+   type Token_Access is access Token_Array;
+   type Natural_Access is access Natural_Table;
+
+   procedure Free is new Ada.Unchecked_Deallocation (Head_Table, Head_Access);
+   procedure Free is new Ada.Unchecked_Deallocation (Prev_Table, Prev_Access);
+   procedure Free is new Ada.Unchecked_Deallocation (Token_Array, Token_Access);
+   procedure Free is new Ada.Unchecked_Deallocation (Natural_Table, Natural_Access);
 
    function Chain_Limit_For_Level
      (Level : Compression_Level)
@@ -282,25 +297,61 @@ package body Zlib.LZ77_Matcher is
       end if;
 
       declare
-         Head   : Head_Table := [others => -1];
-         Prev   : Prev_Table (0 .. Input'Length - 1) := [others => -1];
-         Result : Token_Array (0 .. Input'Length - 1) := [others => <>];
+         Head_Table_Access   : Head_Access := new Head_Table;
+         Prev_Table_Access   : Prev_Access := new Prev_Table (0 .. Input'Length - 1);
+         Result_Access       : Token_Access := new Token_Array (0 .. Input'Length - 1);
+         Best_Lengths_Access : Natural_Access;
+         Best_Dists_Access   : Natural_Access;
+         Costs_Access        : Natural_Access;
+         Choice_Lens_Access  : Natural_Access;
+         Choice_Dists_Access : Natural_Access;
+         Head   : Head_Table renames Head_Table_Access.all;
+         Prev   : Prev_Table renames Prev_Table_Access.all;
+         Result : Token_Array renames Result_Access.all;
          Count  : Natural := 0;
          Pos    : Natural := 0;
+
+         procedure Release is
+         begin
+            Free (Head_Table_Access);
+            Free (Prev_Table_Access);
+            Free (Result_Access);
+            Free (Best_Lengths_Access);
+            Free (Best_Dists_Access);
+            Free (Costs_Access);
+            Free (Choice_Lens_Access);
+            Free (Choice_Dists_Access);
+         end Release;
+
+         --  The tokens emitted, built where the caller receives them (not
+         --  on this stack), and the tables freed.
+         function Emitted return Token_Array is
+         begin
+            return Tokens : constant Token_Array := Result (0 .. Count - 1) do
+               Release;
+            end return;
+         end Emitted;
       begin
+         Head := [others => -1];
+         Prev := [others => -1];
          if Strategy = Optimal then
+            Best_Lengths_Access := new Natural_Table (0 .. Input'Length - 1);
+            Best_Dists_Access := new Natural_Table (0 .. Input'Length - 1);
+            Costs_Access := new Natural_Table (0 .. Input'Length);
+            Choice_Lens_Access := new Natural_Table (0 .. Input'Length - 1);
+            Choice_Dists_Access := new Natural_Table (0 .. Input'Length - 1);
             declare
-               Best_Lengths : array (0 .. Input'Length - 1) of Natural :=
-                 [others => 0];
-               Best_Dists   : array (0 .. Input'Length - 1) of Natural :=
-                 [others => 0];
-               Costs        : array (0 .. Input'Length) of Natural :=
-                 [others => 0];
-               Choice_Lens  : array (0 .. Input'Length - 1) of Natural :=
-                 [others => 1];
-               Choice_Dists : array (0 .. Input'Length - 1) of Natural :=
-                 [others => 0];
+               Best_Lengths : Natural_Table renames Best_Lengths_Access.all;
+               Best_Dists   : Natural_Table renames Best_Dists_Access.all;
+               Costs        : Natural_Table renames Costs_Access.all;
+               Choice_Lens  : Natural_Table renames Choice_Lens_Access.all;
+               Choice_Dists : Natural_Table renames Choice_Dists_Access.all;
             begin
+               Best_Lengths := [others => 0];
+               Best_Dists := [others => 0];
+               Costs := [others => 0];
+               Choice_Lens := [others => 1];
+               Choice_Dists := [others => 0];
                for Scan_Pos in 0 .. Input'Length - 1 loop
                   Find_Best_Match
                     (Input, Scan_Pos, Head, Prev, Chain_Limit,
@@ -351,7 +402,7 @@ package body Zlib.LZ77_Matcher is
                   end if;
                end loop;
 
-               return Result (0 .. Count - 1);
+               return Emitted;
             end;
          end if;
 
@@ -416,7 +467,11 @@ package body Zlib.LZ77_Matcher is
             end;
          end loop;
 
-         return Result (0 .. Count - 1);
+         return Emitted;
+      exception
+         when others =>
+            Release;
+            raise;
       end;
    end Tokenize;
 

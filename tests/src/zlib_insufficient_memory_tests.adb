@@ -1324,6 +1324,99 @@ package body Zlib_Insufficient_Memory_Tests is
       Ada.Directories.Delete_Tree (Work);
    end Test_Seven_Zip_Extraction_Is_Bounded_By_The_Folder;
 
+   --  A compressor fed a block at a time needs a stack for one block's work,
+   --  not for the block's match tables: those are well over a megabyte for a
+   --  64 KiB block, more than a Windows main thread's whole stack. Every
+   --  parse (fixed, greedy, lazy, optimal) runs here in a 1 MiB task, and
+   --  the output must decode back to the input.
+   procedure Test_Streaming_Compress_Fits_A_Thread_Stack
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Thread_Stack : constant := 1024 * 1024;
+      Input_Size   : constant := 4 * 64 * 1024;
+
+      --  Repetitive but not uniform, so every parse finds matches to weigh.
+      function Input_Byte (Index : Positive) return Ada.Streams.Stream_Element is
+        (Ada.Streams.Stream_Element ((Index * 7 + Index / 251) mod 61 + 32));
+   begin
+      for Level in Zlib.Compression_Level range 1 .. 9 loop
+         declare
+            Encoded : Byte_Array_Access;
+            Outcome : Zlib.Status_Code := Zlib.Ok;
+            Escaped : Boolean := False;
+         begin
+            declare
+               task Runner with Storage_Size => Thread_Stack;
+
+               task body Runner is
+                  Filter   : Zlib.Compression_Filter_Type;
+                  Chunk    : Ada.Streams.Stream_Element_Array (1 .. 4096);
+                  Output   : Ada.Streams.Stream_Element_Array (1 .. 16 * 1024);
+                  Out_Last : Ada.Streams.Stream_Element_Offset;
+                  In_Last  : Ada.Streams.Stream_Element_Offset;
+                  Written  : Natural := 0;
+                  Squeezed : Byte_Array_Access := new Zlib.Byte_Array (1 .. 2 * Input_Size);
+
+                  procedure Take is
+                  begin
+                     for Index in Output'First .. Out_Last loop
+                        Written := Written + 1;
+                        Squeezed (Written) := Zlib.Byte (Output (Index));
+                     end loop;
+                  end Take;
+               begin
+                  Zlib.Deflate_Init (Filter, Level => Level);
+                  for Start in 0 .. Input_Size / Chunk'Length - 1 loop
+                     for Index in Chunk'Range loop
+                        Chunk (Index) := Input_Byte (Start * Chunk'Length + Positive (Index));
+                     end loop;
+                     declare
+                        First : Ada.Streams.Stream_Element_Offset := Chunk'First;
+                     begin
+                        while First <= Chunk'Last loop
+                           Zlib.Compress (Filter, Chunk (First .. Chunk'Last), In_Last, Output, Out_Last);
+                           Take;
+                           First := In_Last + 1;
+                        end loop;
+                     end;
+                  end loop;
+                  loop
+                     Zlib.Compress_Flush (Filter, Output, Out_Last, Zlib.Finish);
+                     Take;
+                     exit when Zlib.Compress_Stream_End (Filter);
+                  end loop;
+                  Zlib.Compress_Close (Filter);
+                  Encoded := new Zlib.Byte_Array'(Squeezed (1 .. Written));
+                  Free (Squeezed);
+               exception
+                  when others =>
+                     Escaped := True;
+                     Free (Squeezed);
+               end Runner;
+            begin
+               null;
+            end;
+
+            Assert
+              (not Escaped and then Encoded /= null,
+               "level" & Zlib.Compression_Level'Image (Level) & " compresses in a 1 MiB task");
+            declare
+               Decoded : constant Zlib.Byte_Array := Zlib.Inflate (Encoded.all, Outcome);
+               Same    : Boolean := Decoded'Length = Input_Size;
+            begin
+               Free (Encoded);
+               Assert (Outcome = Zlib.Ok, "level" & Zlib.Compression_Level'Image (Level) & " output decodes");
+               for Index in Decoded'Range loop
+                  exit when not Same;
+                  Same := Decoded (Index) = Zlib.Byte (Input_Byte (Index - Decoded'First + 1));
+               end loop;
+               Assert (Same, "level" & Zlib.Compression_Level'Image (Level) & " output decodes to the input");
+            end;
+         end;
+      end loop;
+   end Test_Streaming_Compress_Fits_A_Thread_Stack;
+
    overriding procedure Register_Tests
      (T : in out Test_Case) is
    begin
@@ -1363,6 +1456,9 @@ package body Zlib_Insufficient_Memory_Tests is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Test_Seven_Zip_Extraction_Is_Bounded_By_The_Folder'Access,
          "extracting one 7z member costs its folder, not the archive");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Test_Streaming_Compress_Fits_A_Thread_Stack'Access,
+         "streaming compression at every level fits a 1 MiB thread stack");
    end Register_Tests;
 
 end Zlib_Insufficient_Memory_Tests;
