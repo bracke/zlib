@@ -24,6 +24,26 @@ package body Zlib.LZ77_Matcher is
    procedure Free is new Ada.Unchecked_Deallocation (Token_Array, Token_Access);
    procedure Free is new Ada.Unchecked_Deallocation (Natural_Table, Natural_Access);
 
+   --  The test seam (see Probe in the private part): called before each table
+   --  allocation, it refuses the one the armed probe names.
+   procedure Before_Allocation is
+   begin
+      if Probe.Armed then
+         Probe.Attempted := Probe.Attempted + 1;
+         if Probe.Attempted = Probe.Fail_At then
+            raise Storage_Error with "LZ77 test seam: allocation refused";
+         end if;
+      end if;
+   end Before_Allocation;
+
+   --  Called after each table allocation that succeeded.
+   procedure After_Allocation is
+   begin
+      if Probe.Armed then
+         Probe.Outstanding := Probe.Outstanding + 1;
+      end if;
+   end After_Allocation;
+
    function Chain_Limit_For_Level
      (Level : Compression_Level)
       return Natural
@@ -314,6 +334,18 @@ package body Zlib.LZ77_Matcher is
 
          procedure Release is
          begin
+            if Probe.Armed then
+               Probe.Outstanding :=
+                 Probe.Outstanding
+                 - Boolean'Pos (Head_Table_Access /= null)
+                 - Boolean'Pos (Prev_Table_Access /= null)
+                 - Boolean'Pos (Result_Access /= null)
+                 - Boolean'Pos (Best_Lengths_Access /= null)
+                 - Boolean'Pos (Best_Dists_Access /= null)
+                 - Boolean'Pos (Costs_Access /= null)
+                 - Boolean'Pos (Choice_Lens_Access /= null)
+                 - Boolean'Pos (Choice_Dists_Access /= null);
+            end if;
             Free (Head_Table_Access);
             Free (Prev_Table_Access);
             Free (Result_Access);
@@ -333,9 +365,15 @@ package body Zlib.LZ77_Matcher is
             end return;
          end Emitted;
       begin
+         Before_Allocation;
          Head_Table_Access := new Head_Table;
+         After_Allocation;
+         Before_Allocation;
          Prev_Table_Access := new Prev_Table (0 .. Input'Length - 1);
+         After_Allocation;
+         Before_Allocation;
          Result_Access := new Token_Array (0 .. Input'Length - 1);
+         After_Allocation;
 
          declare
             Head   : Head_Table renames Head_Table_Access.all;
@@ -345,11 +383,21 @@ package body Zlib.LZ77_Matcher is
             Head := [others => -1];
             Prev := [others => -1];
             if Strategy = Optimal then
+               Before_Allocation;
                Best_Lengths_Access := new Natural_Table (0 .. Input'Length - 1);
+               After_Allocation;
+               Before_Allocation;
                Best_Dists_Access := new Natural_Table (0 .. Input'Length - 1);
+               After_Allocation;
+               Before_Allocation;
                Costs_Access := new Natural_Table (0 .. Input'Length);
+               After_Allocation;
+               Before_Allocation;
                Choice_Lens_Access := new Natural_Table (0 .. Input'Length - 1);
+               After_Allocation;
+               Before_Allocation;
                Choice_Dists_Access := new Natural_Table (0 .. Input'Length - 1);
+               After_Allocation;
                declare
                   Best_Lengths : Natural_Table renames Best_Lengths_Access.all;
                   Best_Dists   : Natural_Table renames Best_Dists_Access.all;

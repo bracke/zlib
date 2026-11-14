@@ -84,4 +84,22 @@ package Zlib.LZ77_Matcher is
    --  @param Input Input argument supplied to Tokenize_For_Level
    --  @param Level Level argument supplied to Tokenize_For_Level
    --  @return result produced by Tokenize_For_Level
+
+private
+
+   --  Test seam, driven only through Zlib.LZ77_Matcher.Testing.
+   --
+   --  While Armed, Tokenize counts the tables it allocates and frees, and
+   --  refuses allocation number Fail_At (when nonzero) with Storage_Error, the
+   --  way a full heap would. Disarmed -- always, outside the test suite -- the
+   --  cost is one Boolean test per table, and nothing is written, so tasks
+   --  compressing concurrently share no mutable state through it.
+   type Allocation_Probe is record
+      Armed       : Boolean := False;
+      Fail_At     : Natural := 0;
+      Attempted   : Natural := 0;
+      Outstanding : Integer := 0;
+   end record;
+
+   Probe : Allocation_Probe;
 end Zlib.LZ77_Matcher;

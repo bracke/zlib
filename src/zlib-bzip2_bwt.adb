@@ -62,9 +62,13 @@ package body Zlib.BZip2_BWT is
          Rank (Order (Index)) := Classes - 1;
       end loop;
 
-      --  Double the compared prefix until every rotation is in its own class.
+      --  Double the compared prefix until every rotation is in its own class,
+      --  or until it spans the whole block: a periodic block (one string
+      --  repeated) has rotations that are equal, which no prefix tells apart.
+      --  Equal rotations are the same string, so their order changes neither
+      --  the last column nor the row the original is found in.
       Step := 1;
-      while Classes < N loop
+      while Classes < N and then Step < N loop
          --  Order by the second half, by shifting the current order left.
          for Index in 0 .. N - 1 loop
             if Order (Index) >= Step then

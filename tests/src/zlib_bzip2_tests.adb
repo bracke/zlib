@@ -301,7 +301,24 @@ package body Zlib_BZip2_Tests is
    procedure Test_Round_Trips (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       Repeat : constant Zlib.Byte_Array (1 .. 5_000) := [others => 16#41#];
+
+      --  Period bytes from a 23-letter cycle, repeated to Length: a periodic
+      --  block whose rotations are not all different.
+      function Periodic (Length, Period : Positive) return Zlib.Byte_Array is
+         Result : Zlib.Byte_Array (1 .. Length);
+      begin
+         for I in Result'Range loop
+            Result (I) := Zlib.Byte (Character'Pos ('A') + ((I mod Period) mod 23));
+         end loop;
+         return Result;
+      end Periodic;
    begin
+      --  The block sort once doubled its compared prefix past the block's
+      --  length when equal rotations could never be told apart, and the
+      --  encoder failed on such input.
+      Assert_Round_Trip (Periodic (161, 23), 9, "a 23-byte pattern repeated seven times");
+      Assert_Round_Trip (Periodic (100, 2), 9, "two bytes alternating");
+      Assert_Round_Trip (Periodic (999, 3), 9, "three bytes repeated");
       Assert_Round_Trip (Zlib_BZip2_Fixtures.Noise_Plain, 9, "noise");
       Assert_Round_Trip (Zlib_BZip2_Fixtures.Multi_Plain, 1, "multi");
       --  A single byte repeated: the block sort's worst case, and the run coder's

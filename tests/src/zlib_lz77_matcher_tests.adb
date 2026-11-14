@@ -1,6 +1,7 @@
 with AUnit.Assertions; use AUnit.Assertions;
 with Zlib; use Zlib;
 with Zlib.LZ77_Matcher;
+with Zlib.LZ77_Matcher.Testing;
 
 package body Zlib_LZ77_Matcher_Tests is
    use type Zlib.LZ77_Matcher.Token_Kind;
@@ -120,6 +121,91 @@ package body Zlib_LZ77_Matcher_Tests is
       end;
    end Test_Fixed_Roundtrips_With_Matches;
 
+   --  A Storage_Error from any of the tokenizer's table allocations must free
+   --  the tables already allocated. They were once allocated in a block's
+   --  declarations, outside its handler, so a refusal of the second or third
+   --  left the first behind on every failed call. The seam refuses each
+   --  allocation in turn, for the greedy tables and for the optimal parse's
+   --  extra ones, and counts what is still allocated afterwards.
+   procedure Test_Failed_Allocation_Frees_Tables
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Seam renames Zlib.LZ77_Matcher.Testing;
+      Input : constant Zlib.Byte_Array (1 .. 4_096) :=
+        [for I in 1 .. 4_096 => Zlib.Byte (I mod 37)];
+
+      procedure Check
+        (Strategy    : Zlib.LZ77_Matcher.Match_Strategy;
+         Allocations : Positive)
+      is
+         Label : constant String :=
+           Zlib.LZ77_Matcher.Match_Strategy'Image (Strategy);
+      begin
+         --  A clean run first, to pin the number of tables this strategy
+         --  allocates: the refusals below must cover each one of them.
+         Seam.Arm;
+         declare
+            Tokens : constant Zlib.LZ77_Matcher.Token_Array :=
+              Zlib.LZ77_Matcher.Tokenize (Input, 32, Strategy);
+         begin
+            Assert (Tokens'Length > 0, Label & ": tokens expected");
+         end;
+         Assert
+           (Seam.Attempted = Allocations,
+            Label & ": table allocations, got"
+            & Natural'Image (Seam.Attempted));
+         Assert (Seam.Outstanding = 0, Label & ": a clean run frees its tables");
+
+         for Fail_At in 1 .. Allocations loop
+            Seam.Arm (Fail_At);
+            begin
+               declare
+                  Tokens : constant Zlib.LZ77_Matcher.Token_Array :=
+                    Zlib.LZ77_Matcher.Tokenize (Input, 32, Strategy);
+               begin
+                  Assert
+                    (False,
+                     Label & ": refusing allocation" & Natural'Image (Fail_At)
+                     & " must raise Storage_Error, got"
+                     & Natural'Image (Tokens'Length) & " tokens");
+               end;
+            exception
+               when Storage_Error =>
+                  null;
+            end;
+            Assert
+              (Seam.Attempted = Fail_At,
+               Label & ": nothing is allocated after the refusal");
+            Assert
+              (Seam.Outstanding = 0,
+               Label & ": refusing allocation" & Natural'Image (Fail_At)
+               & " leaked" & Integer'Image (Seam.Outstanding) & " tables");
+         end loop;
+
+         --  And the next call, with nothing refused, still works and frees.
+         Seam.Arm;
+         declare
+            Tokens : constant Zlib.LZ77_Matcher.Token_Array :=
+              Zlib.LZ77_Matcher.Tokenize (Input, 32, Strategy);
+         begin
+            Assert (Tokens'Length > 0, Label & ": tokens after a refusal");
+         end;
+         Assert
+           (Seam.Outstanding = 0,
+            Label & ": a run after a refusal frees its tables");
+         Seam.Disarm;
+      exception
+         when others =>
+            Seam.Disarm;
+            raise;
+      end Check;
+   begin
+      Check (Zlib.LZ77_Matcher.Greedy, 3);
+      Check (Zlib.LZ77_Matcher.Lazy, 3);
+      Check (Zlib.LZ77_Matcher.Optimal, 8);
+   end Test_Failed_Allocation_Frees_Tables;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
@@ -133,6 +219,8 @@ package body Zlib_LZ77_Matcher_Tests is
                           "dynamic compression emits valid match output");
       R.Register_Routine (T, Test_Fixed_Roundtrips_With_Matches'Access,
                           "fixed compression emits valid match output");
+      R.Register_Routine (T, Test_Failed_Allocation_Frees_Tables'Access,
+                          "a refused table allocation frees the others");
    end Register_Tests;
 
 end Zlib_LZ77_Matcher_Tests;

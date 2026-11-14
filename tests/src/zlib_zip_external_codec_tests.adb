@@ -10,6 +10,7 @@ package body Zlib_ZIP_External_Codec_Tests is
    use type Ada.Directories.File_Kind;
    use type Ada.Streams.Stream_Element_Offset;
    use type Interfaces.Unsigned_16;
+   use type Zlib.Byte_Array;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
    use type Zlib.Byte;
@@ -654,6 +655,168 @@ package body Zlib_ZIP_External_Codec_Tests is
       end;
    end Test_ZIP_Encrypted_Deflate_Member_Extracted;
 
+   function ZIP_Local_Record
+     (Name    : String;
+      Method  : Interfaces.Unsigned_16;
+      Crc32   : Interfaces.Unsigned_32;
+      Size    : Natural;
+      Payload : Zlib.Byte_Array) return Zlib.Byte_Array
+   is
+      Result : Zlib.Byte_Array (1 .. 30 + Name'Length + Payload'Length) :=
+        [others => 0];
+   begin
+      Put_U32 (Result, 1, 16#0403_4B50#);
+      Put_U16 (Result, 5, 20);
+      Put_U16 (Result, 9, Method);
+      Put_U32 (Result, 15, Crc32);
+      Put_U32 (Result, 19, Interfaces.Unsigned_32 (Payload'Length));
+      Put_U32 (Result, 23, Interfaces.Unsigned_32 (Size));
+      Put_U16 (Result, 27, Interfaces.Unsigned_16 (Name'Length));
+      Put_Name (Result, 31, Name);
+      for I in Payload'Range loop
+         Result (31 + Name'Length + I - Payload'First) := Payload (I);
+      end loop;
+      return Result;
+   end ZIP_Local_Record;
+
+   function ZIP_Central_Record
+     (Name       : String;
+      Method     : Interfaces.Unsigned_16;
+      Crc32      : Interfaces.Unsigned_32;
+      Compressed : Natural;
+      Size       : Natural;
+      Offset     : Natural) return Zlib.Byte_Array
+   is
+      Result : Zlib.Byte_Array (1 .. 46 + Name'Length) := [others => 0];
+   begin
+      Put_U32 (Result, 1, 16#0201_4B50#);
+      Put_U16 (Result, 5, 20);
+      Put_U16 (Result, 7, 20);
+      Put_U16 (Result, 11, Method);
+      Put_U32 (Result, 17, Crc32);
+      Put_U32 (Result, 21, Interfaces.Unsigned_32 (Compressed));
+      Put_U32 (Result, 25, Interfaces.Unsigned_32 (Size));
+      Put_U16 (Result, 29, Interfaces.Unsigned_16 (Name'Length));
+      Put_U32 (Result, 43, Interfaces.Unsigned_32 (Offset));
+      Put_Name (Result, 47, Name);
+      return Result;
+   end ZIP_Central_Record;
+
+   function ZIP_End_Record
+     (Entries        : Natural;
+      Central_Length : Natural;
+      Central_Offset : Natural) return Zlib.Byte_Array
+   is
+      Result : Zlib.Byte_Array (1 .. 22) := [others => 0];
+   begin
+      Put_U32 (Result, 1, 16#0605_4B50#);
+      Put_U16 (Result, 9, Interfaces.Unsigned_16 (Entries));
+      Put_U16 (Result, 11, Interfaces.Unsigned_16 (Entries));
+      Put_U32 (Result, 13, Interfaces.Unsigned_32 (Central_Length));
+      Put_U32 (Result, 17, Interfaces.Unsigned_32 (Central_Offset));
+      return Result;
+   end ZIP_End_Record;
+
+   --  A Stored member that is itself a ZIP carries central-directory records
+   --  of its own, in the middle of the outer archive's data. The non-Deflate
+   --  readers used to find their entry by scanning the whole image for the
+   --  central-header signature and taking the first name match, so a
+   --  same-named entry inside the nested ZIP was met first and decoded against
+   --  the outer archive's offsets. The real central directory must decide.
+   procedure Test_ZIP_Nested_Stored_ZIP_Does_Not_Shadow_Entry
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Member      : constant String := "payload.bin";
+      Inner_Plain : constant Zlib.Byte_Array := Repeated_Data (150, 7);
+      Outer_Plain : constant Zlib.Byte_Array := Repeated_Data (161, 11);
+      Inner_Path  : constant String := "zlib-zip-nested-inner.bin";
+      Outer_Path  : constant String := "zlib-zip-nested-outer.bin";
+      Inner_Method, Outer_Method : Interfaces.Unsigned_16;
+      Inner_Crc, Outer_Crc       : Interfaces.Unsigned_32;
+      Inner_Size, Outer_Size     : Interfaces.Unsigned_64;
+      Status      : Zlib.Status_Code := Zlib.Ok;
+   begin
+      Write_File (Inner_Path, Inner_Plain);
+      Write_File (Outer_Path, Outer_Plain);
+      declare
+         Inner_Payload : constant Zlib.Byte_Array :=
+           Zlib.Compress_ZIP_External_File
+             (Inner_Path, "BZip2", Inner_Method, Inner_Crc, Inner_Size, Status);
+         Inner_Status  : constant Zlib.Status_Code := Status;
+         Outer_Payload : constant Zlib.Byte_Array :=
+           Zlib.Compress_ZIP_External_File
+             (Outer_Path, "BZip2", Outer_Method, Outer_Crc, Outer_Size, Status);
+      begin
+         Assert
+           (Inner_Status = Zlib.Ok and then Status = Zlib.Ok
+            and then Inner_Method = 12 and then Outer_Method = 12,
+            "fixture: both members must compress as BZip2, got "
+            & Zlib.Status_Image (Inner_Status) & Interfaces.Unsigned_16'Image (Inner_Method) & " / "
+            & Zlib.Status_Image (Status) & Interfaces.Unsigned_16'Image (Outer_Method));
+         declare
+            Inner_Zip : constant Zlib.Byte_Array :=
+              Archive_With_External_Payload
+                (Inner_Payload, 12, Inner_Crc, Inner_Size, Member);
+            First     : constant Zlib.Byte_Array :=
+              ZIP_Local_Record
+                ("inner.zip", 0, CRC32_Of (Inner_Zip), Inner_Zip'Length,
+                 Inner_Zip);
+            Second    : constant Zlib.Byte_Array :=
+              ZIP_Local_Record
+                (Member, 12, Outer_Crc, Natural (Outer_Size), Outer_Payload);
+            Central   : constant Zlib.Byte_Array :=
+              ZIP_Central_Record
+                ("inner.zip", 0, CRC32_Of (Inner_Zip), Inner_Zip'Length,
+                 Inner_Zip'Length, 0)
+              & ZIP_Central_Record
+                  (Member, 12, Outer_Crc, Outer_Payload'Length,
+                   Natural (Outer_Size), First'Length);
+            Outer_Zip : constant Zlib.Byte_Array :=
+              First & Second & Central
+              & ZIP_End_Record (2, Central'Length, First'Length + Second'Length);
+         begin
+            Assert_Bytes_Equal
+              (Zlib.Extract_ZIP (Outer_Zip, Member, Status), Outer_Plain,
+               "the outer BZip2 member must be read through the outer "
+               & "central directory");
+            Assert
+              (Status = Zlib.Ok,
+               "outer member status, got " & Zlib.Status_Image (Status));
+
+            Assert_Bytes_Equal
+              (Zlib.Extract_ZIP_External_Entry (Outer_Zip, Member, "", Status),
+               Outer_Plain,
+               "the codec bridge must find the outer member too");
+            Assert
+              (Status = Zlib.Ok,
+               "codec bridge status, got " & Zlib.Status_Image (Status));
+
+            --  The nested archive is still intact and still yields its own
+            --  member when it is opened in its own right.
+            Assert_Bytes_Equal
+              (Zlib.Extract_ZIP (Outer_Zip, "inner.zip", Status), Inner_Zip,
+               "the nested archive is stored verbatim");
+            Assert
+              (Status = Zlib.Ok,
+               "nested archive status, got " & Zlib.Status_Image (Status));
+            Assert_Bytes_Equal
+              (Zlib.Extract_ZIP (Inner_Zip, Member, Status), Inner_Plain,
+               "the nested archive yields its own member");
+            Assert
+              (Status = Zlib.Ok,
+               "nested member status, got " & Zlib.Status_Image (Status));
+         end;
+      end;
+      Delete_If_Exists (Inner_Path);
+      Delete_If_Exists (Outer_Path);
+   exception
+      when others =>
+         Delete_If_Exists (Inner_Path);
+         Delete_If_Exists (Outer_Path);
+         raise;
+   end Test_ZIP_Nested_Stored_ZIP_Does_Not_Shadow_Entry;
+
    procedure Test_ZIP_LZMA_Created
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -907,6 +1070,9 @@ package body Zlib_ZIP_External_Codec_Tests is
       Registration.Register_Routine
         (T, Test_ZIP_Encrypted_Data_Descriptor_Member_Extracted'Access,
          "a data-descriptor entry checks the password against the file time");
+      Registration.Register_Routine
+        (T, Test_ZIP_Nested_Stored_ZIP_Does_Not_Shadow_Entry'Access,
+         "a stored nested ZIP's central records do not shadow an outer entry");
       Registration.Register_Routine
         (T, Test_ZIP_LZMA_Created'Access,
          "ZIP LZMA payloads are created in-process");
