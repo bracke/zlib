@@ -1,6 +1,7 @@
 with Ada.Calendar;
 with Ada.Calendar.Formatting;
 with Ada.Containers.Vectors;
+with Zlib.Heap_Bytes;
 with Zlib.Seven_Zip_Numbers;
 with Zlib.Native_Files;
 
@@ -14,18 +15,7 @@ package body Zlib.Seven_Zip_Properties is
      (Index_Type   => Positive,
       Element_Type => Byte);
 
-   function To_Byte_Array (Data : Byte_Vectors.Vector) return Byte_Array
-   is
-      Output : Byte_Array (1 .. Natural (Data.Length));
-      Pos    : Natural := Output'First;
-   begin
-      for B of Data loop
-         Output (Pos) := B;
-         Pos := Pos + 1;
-      end loop;
-
-      return Output;
-   end To_Byte_Array;
+   function To_Byte_Array is new Zlib.Heap_Bytes.Vector_To_Array (Byte_Vectors);
 
    procedure Append_Bytes
      (Output : in out Byte_Vectors.Vector;

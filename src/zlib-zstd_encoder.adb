@@ -3,6 +3,7 @@ with Ada.Unchecked_Deallocation;
 
 with Interfaces;
 
+with Zlib.Heap_Bytes;
 with Zlib.Zstd_Bits;
 with Zlib.Zstd_FSE;
 with Zlib.Zstd_Huffman;
@@ -44,20 +45,11 @@ package body Zlib.Zstd_Encoder is
    procedure Free is
      new Ada.Unchecked_Deallocation (Position_Array, Position_Access);
 
-   function To_Array (Source : Byte_Vectors.Vector) return Byte_Array;
+   function To_Array is new Zlib.Heap_Bytes.Vector_To_Array (Byte_Vectors);
    procedure Put_LE
      (Target : in out Byte_Vectors.Vector;
       Value  : Interfaces.Unsigned_64;
       Count  : Natural);
-
-   function To_Array (Source : Byte_Vectors.Vector) return Byte_Array is
-      Result : Byte_Array (1 .. Natural (Source.Length));
-   begin
-      for Index in Result'Range loop
-         Result (Index) := Source (Index - 1);
-      end loop;
-      return Result;
-   end To_Array;
 
    procedure Put_LE
      (Target : in out Byte_Vectors.Vector;

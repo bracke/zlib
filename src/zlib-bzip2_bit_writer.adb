@@ -1,3 +1,5 @@
+with Zlib.Heap_Bytes;
+
 package body Zlib.BZip2_Bit_Writer is
 
    use type Interfaces.Unsigned_32;
@@ -44,13 +46,11 @@ package body Zlib.BZip2_Bit_Writer is
       end if;
    end Flush;
 
+   function Vector_Image is new Zlib.Heap_Bytes.Vector_To_Array (Byte_Vectors);
+
    function To_Array (W : Writer) return Byte_Array is
-      Result : Byte_Array (1 .. Natural (W.Data.Length));
    begin
-      for Index in Result'Range loop
-         Result (Index) := W.Data (Index - 1);
-      end loop;
-      return Result;
+      return Vector_Image (W.Data);
    end To_Array;
 
 end Zlib.BZip2_Bit_Writer;

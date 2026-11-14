@@ -1,4 +1,5 @@
 with Ada.Containers.Vectors;
+with Zlib.Heap_Bytes;
 with Zlib.Native_Files;
 
 package body Zlib.Seven_Zip_Volumes is
@@ -7,18 +8,7 @@ package body Zlib.Seven_Zip_Volumes is
      (Index_Type   => Positive,
       Element_Type => Byte);
 
-   function To_Byte_Array (Data : Byte_Vectors.Vector) return Byte_Array
-   is
-      Output : Byte_Array (1 .. Natural (Data.Length));
-      Pos    : Natural := Output'First;
-   begin
-      for B of Data loop
-         Output (Pos) := B;
-         Pos := Pos + 1;
-      end loop;
-
-      return Output;
-   end To_Byte_Array;
+   function To_Byte_Array is new Zlib.Heap_Bytes.Vector_To_Array (Byte_Vectors);
 
    function Suffix (N : Positive) return String
      with SPARK_Mode => On

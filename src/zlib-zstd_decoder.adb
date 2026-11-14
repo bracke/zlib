@@ -2,6 +2,7 @@ with Ada.Containers.Vectors;
 
 with Interfaces;
 
+with Zlib.Heap_Bytes;
 with Zlib.Zstd_Bits;
 with Zlib.Zstd_FSE;
 with Zlib.Zstd_Huffman;
@@ -25,6 +26,19 @@ package body Zlib.Zstd_Decoder is
    Magic          : constant Interfaces.Unsigned_32 := 16#FD2F_B528#;
    Skip_Magic_Low : constant Interfaces.Unsigned_32 := 16#184D_2A50#;
 
+   --  The format's Block_Maximum_Size. A block's literals regenerate into at
+   --  most this many bytes, so a larger count is corrupt -- and is refused
+   --  before it can size a buffer.
+   Block_Maximum : constant Natural := 131_072;
+
+   --  An offset code names an offset of 2 ** Code plus Code extra bits. Code
+   --  30 is the largest whose offset still fits a Natural; the output can
+   --  never be that long anyway, so a larger code is a corrupt stream.
+   Max_Offset_Bits : constant Natural := 30;
+
+   --  The largest offset code the format defines.
+   Max_Offset_Symbol : constant Natural := 31;
+
    type Mode_Kind is (Predefined, Single, Compressed_Table, Repeat);
 
    type Sequence_Tables is record
@@ -34,21 +48,46 @@ package body Zlib.Zstd_Decoder is
       Have    : Boolean := False;
    end record;
 
-   function To_Array (Source : Byte_Vectors.Vector) return Byte_Array;
+   function To_Array is new Zlib.Heap_Bytes.Vector_To_Array (Byte_Vectors);
+
+   function Frame_Checksum
+     (Output : Byte_Vectors.Vector;
+      First  : Natural) return Interfaces.Unsigned_32;
+   --  The low 32 bits of the XXH64 of Output from index First to its end:
+   --  hashed in place, a chunk at a time, rather than by copying the whole
+   --  output (every earlier frame included) once per frame.
 
    function Read_LE
      (Data  : Byte_Array;
       First : Natural;
       Count : Natural) return Interfaces.Unsigned_64;
 
-   function To_Array (Source : Byte_Vectors.Vector) return Byte_Array is
-      Result : Byte_Array (1 .. Natural (Source.Length));
+   function Frame_Checksum
+     (Output : Byte_Vectors.Vector;
+      First  : Natural) return Interfaces.Unsigned_32
+   is
+      Hasher : Zlib.Zstd_XXH64.State;
+      Chunk  : Byte_Array (1 .. 4_096);
+      Next   : Natural := First;
+      Stop   : constant Natural := Natural (Output.Length);
    begin
-      for Index in Result'Range loop
-         Result (Index) := Source (Index - 1);
+      Zlib.Zstd_XXH64.Reset (Hasher);
+
+      while Next < Stop loop
+         declare
+            Take : constant Natural := Natural'Min (Chunk'Length, Stop - Next);
+         begin
+            for Index in 1 .. Take loop
+               Chunk (Index) := Output (Next + Index - 1);
+            end loop;
+            Zlib.Zstd_XXH64.Update (Hasher, Chunk (1 .. Take));
+            Next := Next + Take;
+         end;
       end loop;
-      return Result;
-   end To_Array;
+
+      return Interfaces.Unsigned_32
+        (Zlib.Zstd_XXH64.Digest (Hasher) and 16#FFFF_FFFF#);
+   end Frame_Checksum;
 
    function Read_LE
      (Data  : Byte_Array;
@@ -74,7 +113,8 @@ package body Zlib.Zstd_Decoder is
 
       Position : Natural := Payload'First;
 
-      --  Carried across the blocks of one frame.
+      --  Carried across the blocks of one frame, and reset at the start of
+      --  each: a frame is decoded independently of the ones before it.
       Repeat_1 : Natural := 1;
       Repeat_2 : Natural := 4;
       Repeat_3 : Natural := 8;
@@ -250,8 +290,11 @@ package body Zlib.Zstd_Decoder is
                return;
             end if;
 
+            --  A described offset table may name codes up to 31, past the
+            --  predefined table's 28; the codes that overflow are refused per
+            --  sequence below.
             Load (Off_Mode, Tables.Offset_Default, Tables.Offset_Log,
-                  Tables.Max_Offset_Code, Current.Offset, Status);
+                  Max_Offset_Symbol, Current.Offset, Status);
             if Status /= Ok then
                return;
             end if;
@@ -272,7 +315,7 @@ package body Zlib.Zstd_Decoder is
 
             --  The sequence bitstream runs to the end of the section.
             declare
-               Stream : constant Byte_Array := Data (Cursor .. Data'Last);
+               Stream : Byte_Array renames Data (Cursor .. Data'Last);
                R      : Stream_Bits.Backward_Reader;
 
                Lit_State : Natural;
@@ -315,9 +358,16 @@ package body Zlib.Zstd_Decoder is
                   begin
                      if Lit_Code > Tables.Max_Literal_Code
                        or else Mat_Code > Tables.Max_Match_Code
-                       or else Off_Code > 31
+                       or else Off_Code > Max_Offset_Symbol
                      then
                         Status := Invalid_Huffman_Code;
+                        return;
+                     end if;
+
+                     --  2 ** 31 overflows a Natural; no output reaches that
+                     --  far back in any case.
+                     if Off_Code > Max_Offset_Bits then
+                        Status := Invalid_Distance;
                         return;
                      end if;
 
@@ -331,6 +381,7 @@ package body Zlib.Zstd_Decoder is
                         if Status /= Ok then
                            return;
                         end if;
+                        --  At most 2 ** 30 + (2 ** 30 - 1): fits a Natural.
                         Offset_Value := 2 ** Off_Code + Natural (Raw);
 
                         Raw :=
@@ -411,8 +462,10 @@ package body Zlib.Zstd_Decoder is
                         Lit_Taken := Lit_Taken + 1;
                      end loop;
 
+                     --  A match reaches back only into this frame's output:
+                     --  an earlier frame is no part of its window.
                      if Offset = 0
-                       or else Offset > Natural (Output.Length)
+                       or else Offset > Natural (Output.Length) - Frame_Start
                      then
                         Status := Invalid_Distance;
                         return;
@@ -465,9 +518,17 @@ package body Zlib.Zstd_Decoder is
 
       procedure Decode_Block (Size : Natural; Status : out Status_Code) is
          Cursor : Natural := Position;
-         Stop   : constant Natural := Position + Size - 1;
+         --  An Integer, so that a zero Size gets as far as the check below.
+         Stop   : constant Integer := Position + Size - 1;
       begin
          Status := Ok;
+
+         --  A compressed block holds at least its literals header; an empty one
+         --  is corrupt, and would otherwise be read past its end.
+         if Size = 0 then
+            Status := Invalid_Block_Type;
+            return;
+         end if;
 
          if Stop > Payload'Last then
             Status := Unexpected_End_Of_Input;
@@ -510,6 +571,11 @@ package body Zlib.Zstd_Decoder is
                           + Natural (Payload (Cursor + 2)) * 4_096;
                         Cursor := Cursor + 3;
                   end case;
+
+                  if Regen > Block_Maximum then
+                     Status := Invalid_Block_Type;
+                     return;
+                  end if;
 
                   declare
                      Lits : Byte_Array (1 .. Regen);
@@ -592,13 +658,18 @@ package body Zlib.Zstd_Decoder is
                         Cursor := Cursor + 5;
                   end case;
 
+                  if Regen > Block_Maximum then
+                     Status := Invalid_Block_Type;
+                     return;
+                  end if;
+
                   if Cursor + Comp_Size - 1 > Stop then
                      Status := Unexpected_End_Of_Input;
                      return;
                   end if;
 
                   declare
-                     Section : constant Byte_Array :=
+                     Section : Byte_Array renames
                        Payload (Cursor .. Cursor + Comp_Size - 1);
                      Table   : Huffman.Decode_Table;
                      Used    : Natural := 0;
@@ -737,11 +808,20 @@ package body Zlib.Zstd_Decoder is
                   Status := Unexpected_End_Of_Input;
                   return Empty;
                end if;
+               --  The size is a full 32-bit field: kept unsigned, since a
+               --  Natural cannot hold every value and Position plus it could
+               --  overflow. The skipped bytes must all be present.
                declare
-                  Size : constant Natural :=
-                    Natural (Read_LE (Payload, Position + 4, 4));
+                  Size : constant Interfaces.Unsigned_64 :=
+                    Read_LE (Payload, Position + 4, 4);
+                  Room : constant Interfaces.Unsigned_64 :=
+                    Interfaces.Unsigned_64 (Payload'Last - (Position + 7));
                begin
-                  Position := Position + 8 + Size;
+                  if Size > Room then
+                     Status := Unexpected_End_Of_Input;
+                     return Empty;
+                  end if;
+                  Position := Position + 8 + Natural (Size);
                end;
                Skippable := True;
 
@@ -754,6 +834,13 @@ package body Zlib.Zstd_Decoder is
          if not Skippable then
             Position := Position + 4;
             Frame_Start := Natural (Output.Length);
+
+            --  Nothing carries over from the previous frame.
+            Repeat_1 := 1;
+            Repeat_2 := 4;
+            Repeat_3 := 8;
+            Seq_Prev.Have := False;
+            Have_Huff := False;
 
             --  Frame header.
             declare
@@ -878,12 +965,8 @@ package body Zlib.Zstd_Decoder is
                   declare
                      Stored : constant Interfaces.Unsigned_32 :=
                        Interfaces.Unsigned_32 (Read_LE (Payload, Position, 4));
-                     Content : constant Byte_Array :=
-                       To_Array (Output) (Frame_Start + 1 .. Natural (Output.Length));
                      Actual : constant Interfaces.Unsigned_32 :=
-                       Interfaces.Unsigned_32
-                         (Zlib.Zstd_XXH64.Compute (Content)
-                          and 16#FFFF_FFFF#);
+                       Frame_Checksum (Output, Frame_Start);
                   begin
                      if Stored /= Actual then
                         Status := Invalid_Checksum;
@@ -901,6 +984,12 @@ package body Zlib.Zstd_Decoder is
 
       Status := Ok;
       return To_Array (Output);
+
+   exception
+      --  A memory limit is not a data error: the stream may be well formed.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         return Empty;
    end Decode;
 
 end Zlib.Zstd_Decoder;

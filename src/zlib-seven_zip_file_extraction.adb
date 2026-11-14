@@ -3,6 +3,7 @@ with Ada.Strings.Unbounded;
 with Zlib.Seven_Zip_Paths;
 with Zlib.Seven_Zip_Properties;
 with Zlib.Native_Files;
+with Zlib.Heap_Bytes;
 
 package body Zlib.Seven_Zip_File_Extraction is
 
@@ -13,18 +14,7 @@ package body Zlib.Seven_Zip_File_Extraction is
       Element_Type => Byte);
    package US renames Ada.Strings.Unbounded;
 
-   function To_Byte_Array (Data : Byte_Vectors.Vector) return Byte_Array
-   is
-      Output : Byte_Array (1 .. Natural (Data.Length));
-      Pos    : Natural := Output'First;
-   begin
-      for B of Data loop
-         Output (Pos) := B;
-         Pos := Pos + 1;
-      end loop;
-
-      return Output;
-   end To_Byte_Array;
+   function To_Byte_Array is new Zlib.Heap_Bytes.Vector_To_Array (Byte_Vectors);
 
    function Extract_Metadata
      (Archive_Image  : Byte_Array;

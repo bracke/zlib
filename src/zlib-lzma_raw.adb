@@ -1,3 +1,4 @@
+with Zlib.Heap_Bytes;
 with Zlib.LZMA_Decoder;
 
 package body Zlib.LZMA_Raw is
@@ -28,24 +29,41 @@ package body Zlib.LZMA_Raw is
    is
       Prefix : constant Zlib.LZMA_Properties.LZMA_Raw_Header :=
         Zlib.LZMA_Properties.Raw_Stream_Header (Props);
-      Header : Byte_Array (1 .. Prefix'Length + Stream'Length);
-      Out_I  : Natural := Header'First;
+      --  As long as the compressed stream: on the heap, not the stack.
+      Store  : Zlib.Heap_Bytes.Holder;
+      Out_I  : Natural := 1;
    begin
-      for B of Prefix loop
-         Header (Out_I) := B;
-         Out_I := Out_I + 1;
-      end loop;
-      for B of Stream loop
-         Header (Out_I) := B;
-         Out_I := Out_I + 1;
-      end loop;
+      Zlib.Heap_Bytes.Allocate (Store, Prefix'Length + Stream'Length);
 
-      return Zlib.LZMA_Decoder.Decode_Payload
-        (Header, Plain_Len,
-         Require_Full_Stream => Require_Full_Stream,
-         Initial_Rep_Distance => Initial_Rep_Distance,
-         Use_Matched_Literals => Use_Matched_Literals,
-         Status => Status);
+      declare
+         Header : Byte_Array renames Store.Data.all;
+      begin
+         for B of Prefix loop
+            Header (Out_I) := B;
+            Out_I := Out_I + 1;
+         end loop;
+         for B of Stream loop
+            Header (Out_I) := B;
+            Out_I := Out_I + 1;
+         end loop;
+
+         return Zlib.LZMA_Decoder.Decode_Payload
+           (Header, Plain_Len,
+            Require_Full_Stream => Require_Full_Stream,
+            Initial_Rep_Distance => Initial_Rep_Distance,
+            Use_Matched_Literals => Use_Matched_Literals,
+            Status => Status);
+      end;
+
+   exception
+      --  A memory limit is not a data, method or file error.
+      when Storage_Error =>
+         Status := Insufficient_Memory;
+         declare
+            Empty : constant Byte_Array (1 .. 0) := [others => 0];
+         begin
+            return Empty;
+         end;
    end Decode_With;
 
    function Decode_Encoded_Header

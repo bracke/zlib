@@ -1,5 +1,6 @@
 with Ada.Containers.Vectors;
 with Interfaces; use Interfaces;
+with Zlib.Heap_Bytes;
 
 package body Zlib.Seven_Zip_Filters is
 
@@ -15,16 +16,7 @@ package body Zlib.Seven_Zip_Filters is
    package Byte_Vectors is new Ada.Containers.Vectors
      (Index_Type => Natural, Element_Type => Byte);
 
-   function To_Byte_Array (Data : Byte_Vectors.Vector) return Byte_Array is
-      Result : Byte_Array (1 .. Natural (Data.Length));
-      J      : Natural := Result'First;
-   begin
-      for B of Data loop
-         Result (J) := B;
-         J := J + 1;
-      end loop;
-      return Result;
-   end To_Byte_Array;
+   function To_Byte_Array is new Zlib.Heap_Bytes.Vector_To_Array (Byte_Vectors);
 
    --------------------
    -- Branch_Convert --

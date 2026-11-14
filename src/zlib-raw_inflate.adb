@@ -2,6 +2,7 @@ with Ada.Containers.Vectors;
 with Zlib.Bits;
 with Zlib.Huffman;
 with Zlib.Deflate_Tables;
+with Zlib.Heap_Bytes;
 
 package body Zlib.Raw_Inflate is
 
@@ -24,30 +25,7 @@ package body Zlib.Raw_Inflate is
       return False;
    end Has_Non_Zero_Length;
 
-   function To_Array
-     (Output : Byte_Vectors.Vector)
-      return Zlib.Byte_Array
-   is
-      Length : constant Natural := Natural (Output.Length);
-   begin
-      if Length = 0 then
-         declare
-            Empty : constant Zlib.Byte_Array (1 .. 0) := [others => 0];
-         begin
-            return Empty;
-         end;
-      end if;
-
-      declare
-         Result : Zlib.Byte_Array (1 .. Length);
-      begin
-         for I in 1 .. Length loop
-            Result (I) := Output.Element (I - 1);
-         end loop;
-
-         return Result;
-      end;
-   end To_Array;
+   function To_Array is new Zlib.Heap_Bytes.Vector_To_Array (Byte_Vectors);
 
    function Read_U16_Little_Endian
      (R      : in out Zlib.Bits.Bit_Reader;

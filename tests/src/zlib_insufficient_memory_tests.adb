@@ -4,6 +4,13 @@ with Interfaces;
 with Ada.Unchecked_Deallocation;
 with AUnit.Assertions; use AUnit.Assertions;
 with Zlib; use Zlib;
+with Zlib.BZip2_Decoder;
+with Zlib.BZip2_Encoder;
+with Zlib.LZMA_Decoder;
+with Zlib.LZMA_Encoder;
+with Zlib.LZMA_Properties;
+with Zlib.Zstd_Decoder;
+with Zlib.Zstd_Encoder;
 
 package body Zlib_Insufficient_Memory_Tests is
 
@@ -1417,6 +1424,108 @@ package body Zlib_Insufficient_Memory_Tests is
       end loop;
    end Test_Streaming_Compress_Fits_A_Thread_Stack;
 
+   --  The one-shot decoders keep their output on the heap and hand it back on
+   --  the (heap-backed) secondary stack. None may build a payload-sized array
+   --  on the primary stack: 3 MiB decoded through Zstd, BZip2 and LZMA must
+   --  each succeed, whole and exact, in a 1 MiB task.
+   procedure Test_One_Shot_Decoders_Fit_A_Thread_Stack
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Interfaces.Unsigned_32;
+
+      Thread_Stack : constant := 1024 * 1024;
+      Plain_Size   : constant := 3 * 1024 * 1024;
+
+      --  Repetitive but not uniform, with a period well inside every window.
+      function Plain_Byte (Index : Positive) return Zlib.Byte is
+        (Zlib.Byte ((Index * 7 + Index / 251) mod 61 + 32));
+
+      Dict  : constant Interfaces.Unsigned_32 := Zlib.LZMA_Properties.Default_Dict;
+      Plain : Byte_Array_Access := new Zlib.Byte_Array (1 .. Plain_Size);
+   begin
+      for Index in Plain'Range loop
+         Plain (Index) := Plain_Byte (Index);
+      end loop;
+
+      declare
+         Zstd_Status  : Zlib.Status_Code := Zlib.Ok;
+         BZip2_Status : Zlib.Status_Code := Zlib.Ok;
+         Zstd_Coded   : constant Zlib.Byte_Array :=
+           Zlib.Zstd_Encoder.Encode (Plain.all, Zstd_Status);
+         BZip2_Coded  : constant Zlib.Byte_Array :=
+           Zlib.BZip2_Encoder.Encode (Plain.all, Status => BZip2_Status);
+         --  The ZIP layout Decode_Payload reads: version, properties size,
+         --  then the five property bytes ahead of the raw stream.
+         LZMA_Coded   : constant Zlib.Byte_Array :=
+           Zlib.Byte_Array'
+             [9, 4, 5, 0,
+              Zlib.LZMA_Properties.Default_Props,
+              Zlib.Byte (Dict and 16#FF#),
+              Zlib.Byte (Interfaces.Shift_Right (Dict, 8) and 16#FF#),
+              Zlib.Byte (Interfaces.Shift_Right (Dict, 16) and 16#FF#),
+              Zlib.Byte (Interfaces.Shift_Right (Dict, 24) and 16#FF#)]
+           & Zlib.LZMA_Encoder.Encode_Bounded (Plain.all);
+
+         Names    : constant array (1 .. 3) of String (1 .. 5) := ["Zstd ", "BZip2", "LZMA "];
+         Outcomes : array (1 .. 3) of Zlib.Status_Code := [others => Zlib.Ok];
+         Matches  : array (1 .. 3) of Boolean := [others => False];
+         Escaped  : Boolean := False;
+      begin
+         Assert
+           (Zstd_Status = Zlib.Ok and then BZip2_Status = Zlib.Ok,
+            "fixture: the encoders must succeed");
+
+         declare
+            task Runner with Storage_Size => Thread_Stack;
+
+            task body Runner is
+               function Same (Decoded : Zlib.Byte_Array) return Boolean;
+
+               function Same (Decoded : Zlib.Byte_Array) return Boolean is
+               begin
+                  if Decoded'Length /= Plain_Size then
+                     return False;
+                  end if;
+                  for Offset in 0 .. Plain_Size - 1 loop
+                     if Decoded (Decoded'First + Offset) /= Plain (Plain'First + Offset) then
+                        return False;
+                     end if;
+                  end loop;
+                  return True;
+               end Same;
+            begin
+               Matches (1) := Same (Zlib.Zstd_Decoder.Decode (Zstd_Coded, Outcomes (1)));
+               Matches (2) := Same (Zlib.BZip2_Decoder.Decode (BZip2_Coded, Outcomes (2)));
+               Matches (3) :=
+                 Same
+                   (Zlib.LZMA_Decoder.Decode_Payload
+                      (LZMA_Coded, Plain_Size,
+                       Require_Full_Stream  => True,
+                       Initial_Rep_Distance => 1,
+                       Use_Matched_Literals => True,
+                       Status               => Outcomes (3)));
+            exception
+               when others =>
+                  Escaped := True;
+            end Runner;
+         begin
+            null;
+         end;
+
+         Free (Plain);
+
+         Assert (not Escaped, "a one-shot decoder must not raise in a 1 MiB task");
+         for Index in Outcomes'Range loop
+            Assert
+              (Outcomes (Index) = Zlib.Ok,
+               Names (Index) & " must decode 3 MiB in a 1 MiB task, got "
+               & Zlib.Status_Image (Outcomes (Index)));
+            Assert (Matches (Index), Names (Index) & " must decode 3 MiB whole and exact");
+         end loop;
+      end;
+   end Test_One_Shot_Decoders_Fit_A_Thread_Stack;
+
    overriding procedure Register_Tests
      (T : in out Test_Case) is
    begin
@@ -1459,6 +1568,9 @@ package body Zlib_Insufficient_Memory_Tests is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Test_Streaming_Compress_Fits_A_Thread_Stack'Access,
          "streaming compression at every level fits a 1 MiB thread stack");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Test_One_Shot_Decoders_Fit_A_Thread_Stack'Access,
+         "Zstd, BZip2 and LZMA decode 8 MiB in a 1 MiB thread stack");
    end Register_Tests;
 
 end Zlib_Insufficient_Memory_Tests;

@@ -1,6 +1,7 @@
 with Ada.Containers.Vectors;
 with Zlib.LZMA_Core;
 with Zlib.LZMA_Properties;
+with Zlib.Heap_Bytes;
 
 function Zlib.LZMA_Encoder_Selection
   (Plain : Byte_Array;
@@ -9,28 +10,7 @@ is
    package Byte_Vectors is new
      Ada.Containers.Vectors (Index_Type => Natural, Element_Type => Byte);
 
-   function To_Byte_Array (Data : Byte_Vectors.Vector) return Byte_Array is
-   begin
-      if Data.Is_Empty then
-         declare
-            Empty : constant Byte_Array (1 .. 0) := [others => 0];
-         begin
-            return Empty;
-         end;
-      end if;
-
-      declare
-         Result : Byte_Array (1 .. Natural (Data.Length));
-         Out_I  : Natural := Result'First;
-      begin
-         for B of Data loop
-            Result (Out_I) := B;
-            Out_I := Out_I + 1;
-         end loop;
-
-         return Result;
-      end;
-   end To_Byte_Array;
+   function To_Byte_Array is new Zlib.Heap_Bytes.Vector_To_Array (Byte_Vectors);
 
    Best     : Byte_Vectors.Vector;
    Best_Len : Natural := Natural'Last;

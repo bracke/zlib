@@ -2,6 +2,7 @@ with Ada.Containers.Vectors;
 with Ada.Streams;
 with Ada.Strings.Unbounded;
 with CryptoLib.Checksums;
+with Zlib.Heap_Bytes;
 with Zlib.Seven_Zip_Coders;
 with Zlib.Seven_Zip_Graphs;
 with Zlib.Seven_Zip_Numbers;
@@ -16,18 +17,7 @@ package body Zlib.Seven_Zip_Container is
       Element_Type => Byte);
    package US renames Ada.Strings.Unbounded;
 
-   function To_Byte_Array (Data : Byte_Vectors.Vector) return Byte_Array
-   is
-      Output : Byte_Array (1 .. Natural (Data.Length));
-      Pos    : Natural := Output'First;
-   begin
-      for B of Data loop
-         Output (Pos) := B;
-         Pos := Pos + 1;
-      end loop;
-
-      return Output;
-   end To_Byte_Array;
+   function To_Byte_Array is new Zlib.Heap_Bytes.Vector_To_Array (Byte_Vectors);
 
    procedure Append_Bytes
      (Output : in out Byte_Vectors.Vector;

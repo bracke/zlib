@@ -1,3 +1,5 @@
+with Zlib.Heap_Bytes;
+
 package body Zlib.Bit_Writer is
 
    procedure Reset
@@ -68,30 +70,14 @@ package body Zlib.Bit_Writer is
       return W.Bit_Index = 0;
    end Is_Byte_Aligned;
 
+   function Vector_Image is new Zlib.Heap_Bytes.Vector_To_Array (Byte_Vectors);
+
    function To_Array
      (W : Writer)
       return Zlib.Byte_Array
    is
    begin
-      if W.Data.Is_Empty then
-         declare
-            Empty : constant Zlib.Byte_Array (1 .. 0) := [others => 0];
-         begin
-            return Empty;
-         end;
-      end if;
-
-      declare
-         Result : Zlib.Byte_Array (1 .. Natural (W.Data.Length));
-         Out_I  : Natural := Result'First;
-      begin
-         for B of W.Data loop
-            Result (Out_I) := B;
-            Out_I := Out_I + 1;
-         end loop;
-
-         return Result;
-      end;
+      return Vector_Image (W.Data);
    end To_Array;
 
 end Zlib.Bit_Writer;

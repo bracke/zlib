@@ -10,6 +10,7 @@ with Zlib.Seven_Zip_Container;
 with Zlib.Seven_Zip_Paths;
 with Zlib.Seven_Zip_Properties;
 with Zlib.Native_Files;
+with Zlib.Heap_Bytes;
 
 package body Zlib.Seven_Zip_File_Writing is
 
@@ -17,18 +18,7 @@ package body Zlib.Seven_Zip_File_Writing is
      (Index_Type   => Positive,
       Element_Type => Byte);
 
-   function To_Byte_Array (Data : Byte_Vectors.Vector) return Byte_Array
-   is
-      Output : Byte_Array (1 .. Natural (Data.Length));
-      Pos    : Natural := Output'First;
-   begin
-      for B of Data loop
-         Output (Pos) := B;
-         Pos := Pos + 1;
-      end loop;
-
-      return Output;
-   end To_Byte_Array;
+   function To_Byte_Array is new Zlib.Heap_Bytes.Vector_To_Array (Byte_Vectors);
 
    function Compute_CRC32 (Data : Byte_Array) return Interfaces.Unsigned_32 is
       State : CryptoLib.Checksums.CRC32_State;

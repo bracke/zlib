@@ -1,31 +1,12 @@
 with Ada.Containers.Vectors;
 with Zlib.LZMA2_Framing;
+with Zlib.Heap_Bytes;
 
 function Zlib.LZMA2_Encoder (Plain : Byte_Array) return Byte_Array is
    package Byte_Vectors is new
      Ada.Containers.Vectors (Index_Type => Natural, Element_Type => Byte);
 
-   function To_Byte_Array (Data : Byte_Vectors.Vector) return Byte_Array is
-   begin
-      if Data.Is_Empty then
-         declare
-            Empty : constant Byte_Array (1 .. 0) := [others => 0];
-         begin
-            return Empty;
-         end;
-      end if;
-
-      declare
-         Result : Byte_Array (1 .. Natural (Data.Length));
-         Out_I  : Natural := Result'First;
-      begin
-         for B of Data loop
-            Result (Out_I) := B;
-            Out_I := Out_I + 1;
-         end loop;
-         return Result;
-      end;
-   end To_Byte_Array;
+   function To_Byte_Array is new Zlib.Heap_Bytes.Vector_To_Array (Byte_Vectors);
 
    Output : Byte_Vectors.Vector;
    Pos    : Natural := Plain'First;

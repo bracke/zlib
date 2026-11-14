@@ -6,6 +6,7 @@ with Interfaces;
 with Zlib.BZip2_Bits;
 with Zlib.BZip2_CRC;
 with Zlib.BZip2_Huffman;
+with Zlib.Heap_Bytes;
 
 package body Zlib.BZip2_Decoder is
 
@@ -40,7 +41,7 @@ package body Zlib.BZip2_Decoder is
    type Mtf_Array is array (0 .. 255) of Byte;
    type Use_Array is array (0 .. 255) of Boolean;
 
-   function To_Array (Source : Byte_Vectors.Vector) return Byte_Array;
+   function To_Array is new Zlib.Heap_Bytes.Vector_To_Array (Byte_Vectors);
 
    procedure Decode_Block
      (R         : in out Zlib.BZip2_Bits.Reader;
@@ -49,15 +50,6 @@ package body Zlib.BZip2_Decoder is
       Block_CRC : out Interfaces.Unsigned_32;
       Output    : in out Byte_Vectors.Vector;
       Status    : out Status_Code);
-
-   function To_Array (Source : Byte_Vectors.Vector) return Byte_Array is
-      Result : Byte_Array (1 .. Natural (Source.Length));
-   begin
-      for Index in Result'Range loop
-         Result (Index) := Source (Index - 1);
-      end loop;
-      return Result;
-   end To_Array;
 
    procedure Decode_Block
      (R         : in out Zlib.BZip2_Bits.Reader;

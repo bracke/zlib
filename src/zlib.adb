@@ -62,6 +62,7 @@ with Zlib.Seven_Zip_Numbers;
 with Zlib.Seven_Zip_Paths;
 with Zlib.Seven_Zip_Properties;
 with Zlib.Native_Files;
+with Zlib.Heap_Bytes;
 
 package body Zlib is
 
@@ -2545,28 +2546,7 @@ package body Zlib is
    package Byte_Vectors is new
      Ada.Containers.Vectors (Index_Type => Natural, Element_Type => Byte);
 
-   function To_Byte_Array (Data : Byte_Vectors.Vector) return Byte_Array is
-   begin
-      if Data.Is_Empty then
-         declare
-            Empty : constant Byte_Array (1 .. 0) := [others => 0];
-         begin
-            return Empty;
-         end;
-      end if;
-
-      declare
-         Result : Byte_Array (1 .. Natural (Data.Length));
-         Out_I  : Natural := Result'First;
-      begin
-         for B of Data loop
-            Result (Out_I) := B;
-            Out_I := Out_I + 1;
-         end loop;
-
-         return Result;
-      end;
-   end To_Byte_Array;
+   function To_Byte_Array is new Zlib.Heap_Bytes.Vector_To_Array (Byte_Vectors);
 
    function Produced
      (Data : Ada.Streams.Stream_Element_Array;
@@ -3720,6 +3700,34 @@ package body Zlib is
         Read_File_Bounded (Input_Path, Max_Input_Bytes, Read_Status);
       Decode_Status : Status_Code := Ok;
       Continue      : Boolean := True;
+
+      function Run_Decoder return Byte_Array;
+      --  The decoder's result, with an exception it lets out mapped to a
+      --  status the way every other decode path maps it: running out of
+      --  memory is not a data error, and anything else the decoder raises
+      --  means the stream did not hold together. Neither is a file error --
+      --  the file was read whole before the decoder saw it.
+
+      function Run_Decoder return Byte_Array is
+      begin
+         return Decoder.all (Input, Decode_Status);
+      exception
+         when Storage_Error =>
+            Decode_Status := Insufficient_Memory;
+            declare
+               Empty : constant Byte_Array (1 .. 0) := [others => 0];
+            begin
+               return Empty;
+            end;
+         when others =>
+            Decode_Status := Invalid_Block_Type;
+            declare
+               Empty : constant Byte_Array (1 .. 0) := [others => 0];
+            begin
+               return Empty;
+            end;
+      end Run_Decoder;
+
    begin
       Decoded_Size := 0;
       Status := Read_Status;
@@ -3729,7 +3737,7 @@ package body Zlib is
       end if;
 
       declare
-         Decoded : constant Byte_Array := Decoder.all (Input, Decode_Status);
+         Decoded : constant Byte_Array := Run_Decoder;
       begin
          Status := Decode_Status;
          if Decode_Status /= Ok then
@@ -3743,8 +3751,9 @@ package body Zlib is
       end;
 
    exception
+      --  A memory limit is not a data, method or file error.
       when Storage_Error =>
-         Status := Output_File_Error;
+         Status := Insufficient_Memory;
          Decoded_Size := 0;
       when others =>
          Status := Input_File_Error;
