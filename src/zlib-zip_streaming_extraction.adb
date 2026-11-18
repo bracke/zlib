@@ -753,11 +753,13 @@ package body Zlib.ZIP_Streaming_Extraction is
 
                declare
                   Full : constant String := US.To_String (Name);
+                  --  The path it goes to; the member is read by its name.
+                  Path : constant String := Zlib.Entry_Path_Name (Full);
                   Rel  : constant String :=
-                    (if Full'Length > 0 and then Full (Full'Last) = '/'
-                     then Full (Full'First .. Full'Last - 1) else Full);
+                    (if Path'Length > 0 and then Path (Path'Last) = '/'
+                     then Path (Path'First .. Path'Last - 1) else Path);
                   Is_Directory : constant Boolean :=
-                    Full'Length > 0 and then Full (Full'Last) = '/';
+                    Path'Length > 0 and then Path (Path'Last) = '/';
                begin
                   if Rel'Length = 0 or else not Safe_Entry_Name (Rel) then
                      Status := Unsupported_Method;

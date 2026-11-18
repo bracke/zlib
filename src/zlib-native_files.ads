@@ -109,6 +109,11 @@ package Zlib.Native_Files is
    --  computes it. Pure text: the file system is not consulted.
 
    function Simple_Name (Path : String) return String;
+
+   function Colon_Is_Path_Syntax return Boolean;
+   --  Whether a ':' in a path is path syntax on this host -- a drive, or an
+   --  NTFS alternate data stream, on Windows -- rather than a character a
+   --  name may hold.
    --  The last component of Path, as Ada.Directories.Simple_Name computes it.
    --  Pure text: the file system is not consulted.
 

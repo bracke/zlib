@@ -90,9 +90,11 @@ package body Zlib.Archive_Directory_Extraction is
          for E of Entries loop
             declare
                Name : constant String := US.To_String (E.Name);
+               --  The path it goes to; the member is read by its name.
+               Path : constant String := Zlib.Entry_Path_Name (Name);
                Rel  : constant String :=
-                 (if Name'Length > 0 and then Name (Name'Last) = '/'
-                  then Name (Name'First .. Name'Last - 1) else Name);
+                 (if Path'Length > 0 and then Path (Path'Last) = '/'
+                  then Path (Path'First .. Path'Last - 1) else Path);
             begin
                if Rel'Length = 0 or else not Safe_Entry_Name (Rel) then
                   Status := Unsupported_Method;
@@ -102,7 +104,7 @@ package body Zlib.Archive_Directory_Extraction is
                declare
                   Target : constant String := Destination_Dir & "/" & Rel;
                begin
-                  if E.Is_Directory then
+                  if E.Is_Directory or else Path (Path'Last) = '/' then
                      Zlib.Native_Files.Create_Path (Target);
                   else
                      Zlib.Native_Files.Create_Path

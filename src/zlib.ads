@@ -1224,6 +1224,26 @@ package Zlib is
    --  @param Status Ok on success, otherwise a deterministic failure code
    --  @return one Archive_Entry per member when Status is Ok
 
+   function Entry_Path_Name (Name : String) return String;
+   --  An archive member's name as the relative path it is extracted to:
+   --  '\' read as the separator when the name holds no '/' -- as Windows
+   --  tools wrote ZIP names (.NET's ZipFile before 4.6.1, PowerShell 5's
+   --  Compress-Archive), against the format's own rule -- and as it is
+   --  otherwise, where a '\' beside a '/' is not taken to separate anything.
+   --  @param Name a member's name as the archive lists it
+   --  @return the '/'-separated path
+
+   function Safe_Entry_Path (Path : String) return Boolean;
+   --  Whether an extracted member's path (Entry_Path_Name, without a
+   --  directory's trailing '/') stays inside the folder it is extracted to
+   --  and names what it says: relative, with no empty, "." or ".." segment,
+   --  no NUL and no '\' left in it, and no ':' where the host reads one as
+   --  path syntax (a drive, or an NTFS stream, on Windows). Elsewhere ':' is
+   --  a name's own character ("Meeting 10:30.txt"); a caller writing onto a
+   --  volume that refuses it checks that itself.
+   --  @param Path the member's relative path
+   --  @return True when it may be extracted
+
    procedure Extract_Archive_To_Directory
      (Archive_Image   : Byte_Array;
       Destination_Dir : String;
@@ -1231,8 +1251,9 @@ package Zlib is
       Status          : out Status_Code);
    --  Auto-detect ZIP or 7z, enumerate every member, and write each file under
    --  Destination_Dir (creating subdirectories), recreating directory entries.
-   --  Entry paths are validated as safe relative paths (no absolute, "..",
-   --  drive, or backslash) before any file is written. Password is used for
+   --  Entry paths (Entry_Path_Name) are validated as safe relative paths
+   --  (Safe_Entry_Path: no absolute, "..", or Windows drive or stream) before
+   --  any file is written. Password is used for
    --  7z (AES data and encrypted headers); pass "" when not needed.
    --  @param Archive_Image complete ZIP or .7z archive image
    --  @param Destination_Dir directory to extract into

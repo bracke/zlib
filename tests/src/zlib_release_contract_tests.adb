@@ -1060,6 +1060,78 @@ package body Zlib_Release_Contract_Tests is
       Assert (Zlib.Status_Image (Zlib.Output_File_Error) = "output file error", "Output_File_Error image");
    end Test_Status_Image_Full_Release_Contract;
 
+   --  A member's name in an archive is the path it is extracted to: a
+   --  name written with '\' separators (old Windows tools) lands in its
+   --  folder, a ':' is a name's own character where the host stores one,
+   --  and nothing leaves the destination.
+   procedure Test_Extracted_Entry_Paths (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Colons_Kept : constant Boolean :=
+        not Ada.Environment_Variables.Exists ("SystemRoot") and then not Ada.Environment_Variables.Exists ("windir");
+      Root    : constant String := Temp_Root & "/zlib-release-contract-entry-paths";
+      Status  : Zlib.Status_Code;
+      Payload : constant Zlib.Byte_Array := [Character'Pos ('o'), Character'Pos ('k')];
+
+      --  A one-member ZIP whose name is Stored_As: written under a safe name
+      --  of the same length, then that name's bytes replaced in the image
+      --  (both headers keep it uncompressed; the CRC covers the data only).
+      function Archive_Named (Stored_As : String) return Zlib.Byte_Array is
+         Safe  : constant String (Stored_As'Range) := [others => 'x'];
+         Image : Zlib.Byte_Array := Zlib.ZIP (Payload, Safe, Zlib.Stored, Status);
+         Found : Natural := 0;
+      begin
+         for I in Image'First .. Image'Last - Safe'Length + 1 loop
+            if (for all K in 0 .. Safe'Length - 1 => Image (I + K) = Character'Pos ('x')) then
+               for K in 0 .. Safe'Length - 1 loop
+                  Image (I + K) := Character'Pos (Stored_As (Stored_As'First + K));
+               end loop;
+               Found := Found + 1;
+            end if;
+         end loop;
+         Assert (Found = 2, "the name is in both headers once");
+         return Image;
+      end Archive_Named;
+
+      --  Extract an archive holding Stored_As into a fresh folder.
+      procedure Extract (Stored_As : String) is
+         Zip_Path : constant String := Root & ".zip";
+      begin
+         if Ada.Directories.Exists (Root) then
+            Ada.Directories.Delete_Tree (Root);
+         end if;
+         Ada.Directories.Create_Path (Root);
+         Write_File (Zip_Path, Archive_Named (Stored_As));
+         Zlib.Extract_Archive_File_To_Directory (Zip_Path, Root, "", Status);
+         Ada.Directories.Delete_File (Zip_Path);
+      end Extract;
+   begin
+      Assert (Zlib.Entry_Path_Name ("dir\file.txt") = "dir/file.txt", "a name with only '\' separates by it");
+      Assert (Zlib.Entry_Path_Name ("dir/a\b.txt") = "dir/a\b.txt", "a '\' beside a '/' is left alone");
+      Assert (not Zlib.Safe_Entry_Path ("dir/a\b.txt"), "a '\' left in a path is refused");
+      Assert (not Zlib.Safe_Entry_Path ("../x") and then not Zlib.Safe_Entry_Path ("/x")
+              and then not Zlib.Safe_Entry_Path ("a//b") and then not Zlib.Safe_Entry_Path ("a/./b"),
+              "traversal, absolute and empty segments are refused");
+      Assert (Zlib.Safe_Entry_Path ("Meeting 10:30.txt") = Colons_Kept,
+              "a ':' is a name's own where the host stores it, refused where it is path syntax");
+
+      Extract ("dir\file.txt");
+      Assert (Status = Zlib.Ok, "a '\'-separated member extracts: " & Zlib.Status_Image (Status));
+      Assert (Ada.Directories.Exists (Root & "/dir/file.txt"), "it lands in its folder");
+
+      Extract ("..\escape.txt");
+      Assert (Status /= Zlib.Ok, "a '\'-separated traversal is refused");
+      Assert (not Ada.Directories.Exists (Temp_Root & "/escape.txt"), "nothing is written outside");
+
+      if Colons_Kept then
+         Extract ("Meeting 10:30.txt");
+         Assert (Status = Zlib.Ok, "a member with ':' extracts here: " & Zlib.Status_Image (Status));
+         Assert (Ada.Directories.Exists (Root & "/Meeting 10:30.txt"), "under its own name");
+      end if;
+      if Ada.Directories.Exists (Root) then
+         Ada.Directories.Delete_Tree (Root);
+      end if;
+   end Test_Extracted_Entry_Paths;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
@@ -1085,5 +1157,7 @@ package body Zlib_Release_Contract_Tests is
          "external-style root ZIP API compiles");
       Registration.Register_Routine (T, Test_Status_Image_Full_Release_Contract'Access,
                                      "all Status_Image strings match release contract");
+      Registration.Register_Routine (T, Test_Extracted_Entry_Paths'Access,
+                                     "an extracted member's name is its path below the folder, and only there");
    end Register_Tests;
 end Zlib_Release_Contract_Tests;

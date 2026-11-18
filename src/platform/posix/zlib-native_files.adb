@@ -109,6 +109,8 @@ package body Zlib.Native_Files is
    function Simple_Name (Path : String) return String is
      (Ada.Directories.Simple_Name (Path));
 
+   function Colon_Is_Path_Syntax return Boolean is (False);
+
    package Entry_Vectors is new Ada.Containers.Vectors
      (Index_Type   => Positive,
       Element_Type => Directory_Entry);

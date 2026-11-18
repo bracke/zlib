@@ -6945,6 +6945,46 @@ package body Zlib is
          end;
    end XZ_LZMA2;
 
+   function Entry_Path_Name (Name : String) return String is
+      Path : String := Name;
+   begin
+      if (for some C of Name => C = '/') then
+         return Name;
+      end if;
+      for C of Path loop
+         if C = '\' then
+            C := '/';
+         end if;
+      end loop;
+      return Path;
+   end Entry_Path_Name;
+
+   function Safe_Entry_Path (Path : String) return Boolean is
+      Colon_Refused : constant Boolean := Zlib.Native_Files.Colon_Is_Path_Syntax;
+      Segment_Start : Positive := Path'First;
+   begin
+      if Path'Length = 0 or else Path (Path'First) = '/' then
+         return False;
+      end if;
+      for I in Path'First .. Path'Last + 1 loop
+         if I > Path'Last or else Path (I) = '/' then
+            if I = Segment_Start
+              or else Path (Segment_Start .. I - 1) = "."
+              or else Path (Segment_Start .. I - 1) = ".."
+            then
+               return False;
+            end if;
+            Segment_Start := I + 1;
+         elsif Path (I) = Character'Val (0)
+           or else Path (I) = '\'
+           or else (Path (I) = ':' and then Colon_Refused)
+         then
+            return False;
+         end if;
+      end loop;
+      return True;
+   end Safe_Entry_Path;
+
    function Safe_ZIP_Entry_Name (Entry_Name : String) return Boolean is
       Segment_Length : Natural := 0;
       Segment_Start  : Natural := Entry_Name'First;
@@ -10845,7 +10885,7 @@ package body Zlib is
          List_ZIP            => List_ZIP_Entries'Access,
          Extract_Seven_Zip   => Extract_Seven_Zip_With_Password'Access,
          Extract_ZIP         => Extract_ZIP_With_Password'Access,
-         Safe_Entry_Name     => Safe_ZIP_Entry_Name'Access,
+         Safe_Entry_Name     => Safe_Entry_Path'Access,
          Write_File          => Write_File'Access,
          Status              => Status);
    exception
@@ -10875,7 +10915,7 @@ package body Zlib is
          Zlib.ZIP_Streaming_Extraction.Extract_To_Directory
            (Archive_Path    => Archive_Path,
             Destination_Dir => Destination_Dir,
-            Safe_Entry_Name => Safe_ZIP_Entry_Name'Access,
+            Safe_Entry_Name => Safe_Entry_Path'Access,
             Password        => Password,
             Extract_Image   => Extract_ZIP_Entry_Image'Access,
             Handled         => Handled,
@@ -10901,11 +10941,13 @@ package body Zlib is
                declare
                   Name : constant String :=
                     Ada.Strings.Unbounded.To_String (E.Name);
+                  --  The path it goes to; the member is read by its name.
+                  Path : constant String := Entry_Path_Name (Name);
                   Rel  : constant String :=
-                    (if Name'Length > 0 and then Name (Name'Last) = '/'
-                     then Name (Name'First .. Name'Last - 1) else Name);
+                    (if Path'Length > 0 and then Path (Path'Last) = '/'
+                     then Path (Path'First .. Path'Last - 1) else Path);
                begin
-                  if Rel'Length = 0 or else not Safe_ZIP_Entry_Name (Rel)
+                  if Rel'Length = 0 or else not Safe_Entry_Path (Rel)
                   then
                      Status := Unsupported_Method;
                      return;
@@ -10915,7 +10957,7 @@ package body Zlib is
                      Target : constant String :=
                        Destination_Dir & "/" & Rel;
                   begin
-                     if E.Is_Directory then
+                     if E.Is_Directory or else Path (Path'Last) = '/' then
                         Zlib.Native_Files.Create_Path (Target);
                      else
                         Zlib.Native_Files.Create_Path

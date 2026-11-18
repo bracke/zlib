@@ -530,6 +530,8 @@ package body Zlib.Native_Files is
       return Name (Name'First .. Last - 1);
    end Containing_Directory;
 
+   function Colon_Is_Path_Syntax return Boolean is (True);
+
    function Simple_Name (Path : String) return String is
       Name : constant String := Trimmed (Path);
    begin
