@@ -24,6 +24,7 @@
 | `Insufficient_Memory` | Not enough memory to hold an intermediate or final result. |
 | `Password_Required` | The archive or member is encrypted and no password was supplied. |
 | `Invalid_Password` | A password was supplied and the encrypted data did not decrypt under it. |
+| `Cancelled` | The caller's cancel callback answered True and the operation stopped before it was complete. |
 
 `Status_Image` returns release-contract diagnostic text for each status.
 
@@ -70,6 +71,22 @@ than the archive.
 
 `Extract_Archive_To_Directory` takes an image the caller already holds in
 memory and is unaffected.
+
+## Declared sizes and cancelling directory extraction
+
+`Extract_Archive_File_To_Directory` writes no more for a member than the
+member declares. A streamed ZIP member whose data decodes to more than its
+declared uncompressed size is refused with `Invalid_Checksum` before the excess
+chunk is written, so a member that declares 1 KB and inflates to gigabytes (a
+zip bomb) cannot fill the destination volume. A member decoded in memory is
+checked against its declared size before anything is written.
+
+The overload taking `Cancel : not null access function return Boolean` polls
+it once before each member and, while a streamed ZIP member is written, before
+each 64 KiB chunk of compressed input and after each chunk of output. When it
+answers True extraction stops with `Cancelled`; what was already written
+(including a partially written member) stays, so a caller that wants nothing
+left behind extracts into a staging folder and discards it.
 
 A `.7z` is read from its signature header, its header, and the packed streams
 of the folders a request actually touches, so the archive itself is never read

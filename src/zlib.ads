@@ -73,11 +73,15 @@ package Zlib is
       --  The encryption itself is one this reader supports, so it must not be
       --  read as Unsupported_Method: supplying the password is expected to
       --  succeed, and a caller that can prompt for one should.
-      Invalid_Password);
+      Invalid_Password,
       --  A password was supplied and the encrypted data did not decrypt under
       --  it. Distinguished from Invalid_Checksum, which means an archive this
       --  reader could read was damaged: here the archive is intact as far as
       --  is known and the password is what is wrong.
+      Cancelled);
+      --  The caller's cancel callback answered True and the operation stopped
+      --  before it was complete. Nothing is wrong with the input; whatever was
+      --  already written stays where it was written.
    --  Deterministic result code returned by public operations.
 
    type Compression_Mode is
@@ -1286,10 +1290,50 @@ package Zlib is
    --  An encrypted member is decrypted with Password whatever its compression
    --  method, and costs that member rather than the archive like any other. A
    --  wrong password is reported as Invalid_Checksum.
+   --
+   --  A member's declared uncompressed size bounds what is written for it. A
+   --  streamed ZIP member whose data decodes to more than it declares is
+   --  refused with Invalid_Checksum before the excess is written, so a member
+   --  that declares 1 KB and inflates to gigabytes cannot fill the
+   --  destination volume; a member decoded in memory is checked against its
+   --  declared size before it is written at all.
+   --
+   --  This form cannot be cancelled; the overload below takes a Cancel
+   --  callback.
    --  @param Archive_Path path to a .zip or .7z file
    --  @param Destination_Dir directory to extract into
    --  @param Password archive password, or "" if not encrypted
    --  @param Status Ok on success, otherwise a deterministic failure code
+
+   procedure Extract_Archive_File_To_Directory
+     (Archive_Path    : String;
+      Destination_Dir : String;
+      Password        : String;
+      Cancel          : not null access function return Boolean;
+      Status          : out Status_Code);
+   --  Extract_Archive_File_To_Directory, stopping early when Cancel answers
+   --  True.
+   --
+   --  Cancel is polled once before each member is extracted (directory
+   --  entries included), and, while a streamed ZIP member (Stored or Deflate)
+   --  is written, before each 64 KiB chunk of its compressed input is read
+   --  and after each chunk of its output is written, so even one large member
+   --  stops promptly. A member decoded in memory (a 7z member, an encrypted or
+   --  non-Deflate ZIP member, or any member of an archive read whole) is not
+   --  interrupted once begun. An archive read whole polls Cancel once more
+   --  before the file is read. Each poll is one call, so Cancel should be
+   --  cheap, such as reading an atomic flag.
+   --
+   --  When Cancel answers True extraction stops and Status is Cancelled.
+   --  Members already written stay below Destination_Dir, and the member
+   --  being streamed is left partially written; a caller that wants nothing
+   --  on cancel extracts into a staging folder and discards it.
+   --  @param Archive_Path path to a .zip or .7z file
+   --  @param Destination_Dir directory to extract into
+   --  @param Password archive password, or "" if not encrypted
+   --  @param Cancel answers True when the caller wants extraction to stop
+   --  @param Status Ok on success, Cancelled when Cancel stopped it, otherwise
+   --  a deterministic failure code
 
    function Extract_ZIP
      (Archive_Image : Byte_Array;

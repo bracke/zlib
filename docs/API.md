@@ -43,7 +43,8 @@ type Status_Code is
    Output_File_Error,
    Insufficient_Memory,
    Password_Required,
-   Invalid_Password);
+   Invalid_Password,
+   Cancelled);
 
 function Status_Image (Status : Status_Code) return String;
 function Looks_Like_Zlib_Header (Input : Byte_Array) return Boolean;
@@ -410,6 +411,14 @@ output when its method allows and otherwise rebuilt as a single-entry image, so
 the cost is the member rather than the archive. A `.7z`, an encrypted member, or
 a ZIP needing a password reads the whole image. A name the directory does not
 hold is reported as a failure without writing an output file.
+
+`Extract_Archive_File_To_Directory` extracts a whole archive file below a
+folder. No member writes more than it declares: a ZIP member that decodes past
+its declared size is refused with `Invalid_Checksum` before the excess is
+written. An overload adds `Cancel : not null access function return Boolean`,
+polled before each member and between the chunks of a streamed ZIP member;
+when it answers True extraction stops with `Cancelled` and what was already
+written stays.
 
 `List_Archive_Entries` catalogues an archive already held in memory.
 `List_Archive_File_Entries` catalogues one from a path without holding it. A

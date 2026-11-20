@@ -24,6 +24,8 @@ package body Zlib_Release_Contract_Tests is
    use type Interfaces.Unsigned_64;
    use type Zlib.Byte;
    use type Zlib.Status_Code;
+   use type Zlib.Byte_Array;
+   use type Ada.Directories.File_Size;
    package US renames Ada.Strings.Unbounded;
 
    function CRC32 (Data : Zlib.Byte_Array) return Interfaces.Unsigned_32 is
@@ -1058,7 +1060,152 @@ package body Zlib_Release_Contract_Tests is
          "Unexpected_End_Of_Input image");
       Assert (Zlib.Status_Image (Zlib.Input_File_Error) = "input file error", "Input_File_Error image");
       Assert (Zlib.Status_Image (Zlib.Output_File_Error) = "output file error", "Output_File_Error image");
+      Assert (Zlib.Status_Image (Zlib.Cancelled) = "cancelled", "Cancelled image");
    end Test_Status_Image_Full_Release_Contract;
+
+   --  Set a ZIP member's declared uncompressed size in its local header and
+   --  its central-directory record, leaving its data and CRC as they are.
+   procedure Declare_Uncompressed_Size
+     (Image : in out Zlib.Byte_Array;
+      Size  : Interfaces.Unsigned_32)
+   is
+      procedure Put_U32 (Pos : Natural) is
+      begin
+         for K in 0 .. 3 loop
+            Image (Pos + K) := Zlib.Byte (Interfaces.Shift_Right (Size, 8 * K) and 16#FF#);
+         end loop;
+      end Put_U32;
+
+      Local   : constant Natural := Find_ZIP_Signature (Image, 16#0403_4B50#, Image'First);
+      Central : constant Natural := Find_ZIP_Signature (Image, 16#0201_4B50#, Image'First);
+   begin
+      Assert (Central > Local, "the ZIP has a local header and a central record");
+      Put_U32 (Local + 22);
+      Put_U32 (Central + 24);
+   end Declare_Uncompressed_Size;
+
+   --  A member that decodes to more than it declares is refused before the
+   --  excess reaches the disk: a zip bomb cannot fill the destination.
+   procedure Test_Extraction_Bounded_By_Declared_Size (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Root     : constant String := Temp_Root & "/zlib-release-contract-declared-size";
+      Zip_Path : constant String := Root & ".zip";
+      Declared : constant := 1_000;
+      Status   : Zlib.Status_Code;
+
+      procedure Check (Mode : Zlib.Compression_Mode; Label : String) is
+         Data  : constant Zlib.Byte_Array (1 .. 1024 * 1024) := [others => 16#41#];
+         Image : Zlib.Byte_Array := Zlib.ZIP (Data, "bomb.bin", Mode, Status);
+      begin
+         Assert (Status = Zlib.Ok, Label & ": the archive is written");
+         Declare_Uncompressed_Size (Image, Declared);
+         if Ada.Directories.Exists (Root) then
+            Ada.Directories.Delete_Tree (Root);
+         end if;
+         Ada.Directories.Create_Path (Root);
+         Write_File (Zip_Path, Image);
+
+         Zlib.Extract_Archive_File_To_Directory (Zip_Path, Root, "", Status);
+         Assert (Status = Zlib.Invalid_Checksum,
+                 Label & ": a member larger than declared is refused: " & Zlib.Status_Image (Status));
+         Assert (not Ada.Directories.Exists (Root & "/bomb.bin")
+                 or else Ada.Directories.Size (Root & "/bomb.bin") <= Declared,
+                 Label & ": no more than the declared size is written");
+         Ada.Directories.Delete_File (Zip_Path);
+      end Check;
+   begin
+      Check (Zlib.Dynamic, "Deflate");
+      Check (Zlib.Stored, "Stored");
+      if Ada.Directories.Exists (Root) then
+         Ada.Directories.Delete_Tree (Root);
+      end if;
+   end Test_Extraction_Bounded_By_Declared_Size;
+
+   --  A cancel callback stops extraction between members: answering True at
+   --  once extracts nothing, answering True after the first member keeps it
+   --  and nothing after it.
+   procedure Test_Extraction_Cancel (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Root     : constant String := Temp_Root & "/zlib-release-contract-cancel";
+      Sources  : constant String := Root & "-sources";
+      Out_Dir  : constant String := Root & "-out";
+      Zip_Path : constant String := Root & ".zip";
+      First    : constant Zlib.Byte_Array := [Character'Pos ('o'), Character'Pos ('n'), Character'Pos ('e')];
+      Second   : constant Zlib.Byte_Array := [Character'Pos ('t'), Character'Pos ('w'), Character'Pos ('o')];
+      Status   : Zlib.Status_Code;
+      Polls    : Natural := 0;
+
+      function Cancel_At_Once return Boolean is
+      begin
+         Polls := Polls + 1;
+         return True;
+      end Cancel_At_Once;
+
+      --  True once the first member is completely on disk, so the poll before
+      --  the second member answers True.
+      function Cancel_After_First return Boolean is
+        (Ada.Directories.Exists (Out_Dir & "/a.txt")
+         and then Ada.Directories.Size (Out_Dir & "/a.txt") = First'Length);
+
+      procedure Fresh_Output is
+      begin
+         if Ada.Directories.Exists (Out_Dir) then
+            Ada.Directories.Delete_Tree (Out_Dir);
+         end if;
+         Ada.Directories.Create_Path (Out_Dir);
+      end Fresh_Output;
+
+      function Is_Empty (Dir : String) return Boolean is
+         Search : Ada.Directories.Search_Type;
+         Item   : Ada.Directories.Directory_Entry_Type;
+         Found  : Boolean := False;
+      begin
+         Ada.Directories.Start_Search (Search, Dir, "");
+         while Ada.Directories.More_Entries (Search) loop
+            Ada.Directories.Get_Next_Entry (Search, Item);
+            if Ada.Directories.Simple_Name (Item) not in "." | ".." then
+               Found := True;
+            end if;
+         end loop;
+         Ada.Directories.End_Search (Search);
+         return not Found;
+      end Is_Empty;
+   begin
+      if Ada.Directories.Exists (Sources) then
+         Ada.Directories.Delete_Tree (Sources);
+      end if;
+      Ada.Directories.Create_Path (Sources);
+      Write_File (Sources & "/a.txt", First);
+      Write_File (Sources & "/b.txt", Second);
+      Zlib.ZIP_Files
+        (Input_Paths => [US.To_Unbounded_String (Sources & "/a.txt"), US.To_Unbounded_String (Sources & "/b.txt")],
+         Output_Path => Zip_Path,
+         Entry_Names => [US.To_Unbounded_String ("a.txt"), US.To_Unbounded_String ("b.txt")],
+         Mode        => Zlib.Stored,
+         Status      => Status);
+      Assert (Status = Zlib.Ok, "the two-member archive is written");
+
+      Fresh_Output;
+      Zlib.Extract_Archive_File_To_Directory (Zip_Path, Out_Dir, "", Cancel_At_Once'Access, Status);
+      Assert (Status = Zlib.Cancelled, "cancelled at once: " & Zlib.Status_Image (Status));
+      Assert (Polls = 1, "the callback is polled once, before the first member");
+      Assert (Is_Empty (Out_Dir), "nothing is extracted");
+
+      Fresh_Output;
+      Zlib.Extract_Archive_File_To_Directory (Zip_Path, Out_Dir, "", Cancel_After_First'Access, Status);
+      Assert (Status = Zlib.Cancelled, "cancelled after the first member: " & Zlib.Status_Image (Status));
+      Assert (Read_File (Out_Dir & "/a.txt") = First, "the first member is extracted whole");
+      Assert (not Ada.Directories.Exists (Out_Dir & "/b.txt"), "the second member is not");
+
+      Fresh_Output;
+      Zlib.Extract_Archive_File_To_Directory (Zip_Path, Out_Dir, "", Status);
+      Assert (Status = Zlib.Ok, "the form without a callback extracts everything");
+      Assert (Read_File (Out_Dir & "/b.txt") = Second, "including the second member");
+
+      Ada.Directories.Delete_Tree (Out_Dir);
+      Ada.Directories.Delete_Tree (Sources);
+      Ada.Directories.Delete_File (Zip_Path);
+   end Test_Extraction_Cancel;
 
    --  A member's name in an archive is the path it is extracted to: a
    --  name written with '\' separators (old Windows tools) lands in its
@@ -1159,5 +1306,9 @@ package body Zlib_Release_Contract_Tests is
                                      "all Status_Image strings match release contract");
       Registration.Register_Routine (T, Test_Extracted_Entry_Paths'Access,
                                      "an extracted member's name is its path below the folder, and only there");
+      Registration.Register_Routine (T, Test_Extraction_Bounded_By_Declared_Size'Access,
+                                     "a member larger than it declares is refused before the excess is written");
+      Registration.Register_Routine (T, Test_Extraction_Cancel'Access,
+                                     "a cancel callback stops directory extraction between members");
    end Register_Tests;
 end Zlib_Release_Contract_Tests;

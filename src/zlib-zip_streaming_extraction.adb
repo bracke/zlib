@@ -344,6 +344,17 @@ package body Zlib.ZIP_Streaming_Extraction is
    --  Stream one member from the archive file to its output file.
    ---------------------------------------------------------------------------
 
+   --  The cancel callback of an extraction no caller can cancel.
+   function Never_Cancel return Boolean is (False);
+
+   --  The member's declared size bounds what is written: a chunk that would
+   --  take the output past Unc_Size is refused (Invalid_Checksum, as the
+   --  in-memory reader reports a size mismatch) before it is written, so a
+   --  member that inflates far beyond what it declares cannot fill the
+   --  destination volume. Cancel is polled before each chunk of compressed
+   --  input is read and after each chunk of output is written; when it
+   --  answers True the member stops with Cancelled and its partial output is
+   --  left on disk.
    procedure Extract_Member
      (File        : in out SIO.File_Type;
       File_Size   : Interfaces.Unsigned_64;
@@ -353,6 +364,7 @@ package body Zlib.ZIP_Streaming_Extraction is
       Unc_Size    : Interfaces.Unsigned_64;
       Expected_CRC : Interfaces.Unsigned_32;
       Target_Path : String;
+      Cancel      : not null access function return Boolean;
       Status      : out Status_Code)
    is
       Header     : Byte_Array (0 .. 29);
@@ -365,6 +377,11 @@ package body Zlib.ZIP_Streaming_Extraction is
       Opened     : Boolean := False;
       Filter     : Zlib.Filter_Type;
       Inflating  : Boolean := False;
+
+      --  Whether Count more bytes would take the output past the declared
+      --  size. Written so that it cannot overflow.
+      function Would_Exceed (Count : Interfaces.Unsigned_64) return Boolean is
+        (Produced > Unc_Size or else Count > Unc_Size - Produced);
    begin
       Status := Ok;
       CryptoLib.Checksums.CRC32_Reset (CRC);
@@ -403,6 +420,11 @@ package body Zlib.ZIP_Streaming_Extraction is
       Remaining := Comp_Size;
 
       while Remaining > 0 loop
+         if Cancel.all then
+            Status := Cancelled;
+            exit;
+         end if;
+
          declare
             Want : constant Natural :=
               Natural (Interfaces.Unsigned_64'Min (Remaining, Chunk_Size));
@@ -422,6 +444,11 @@ package body Zlib.ZIP_Streaming_Extraction is
                     (1 .. Ada.Streams.Stream_Element_Offset (Want));
                   Target    : Ada.Streams.Stream_Element_Offset := 1;
                begin
+                  if Would_Exceed (Interfaces.Unsigned_64 (Want)) then
+                     Status := Invalid_Checksum;
+                     exit;
+                  end if;
+
                   for B of In_Bytes loop
                      CryptoLib.Checksums.CRC32_Update
                        (CRC, Ada.Streams.Stream_Element (B));
@@ -461,6 +488,12 @@ package body Zlib.ZIP_Streaming_Extraction is
                            Flush    => Zlib.No_Flush);
 
                         if Out_Last >= Out_Stream'First then
+                           if Would_Exceed
+                             (Interfaces.Unsigned_64 (Out_Last - Out_Stream'First + 1))
+                           then
+                              Status := Invalid_Checksum;
+                              exit;
+                           end if;
                            for I in Out_Stream'First .. Out_Last loop
                               CryptoLib.Checksums.CRC32_Update
                                 (CRC, Out_Stream (I));
@@ -469,6 +502,10 @@ package body Zlib.ZIP_Streaming_Extraction is
                              (Output, Out_Stream (Out_Stream'First .. Out_Last));
                            Produced := Produced
                              + Interfaces.Unsigned_64 (Out_Last - Out_Stream'First + 1);
+                           if Cancel.all then
+                              Status := Cancelled;
+                              exit;
+                           end if;
                         end if;
 
                         exit when Consumed >= In_Stream'Last;
@@ -480,6 +517,7 @@ package body Zlib.ZIP_Streaming_Extraction is
                end;
             end if;
          end;
+         exit when Status /= Ok;
       end loop;
 
       --  Drain whatever the decoder still holds once the input is exhausted.
@@ -491,12 +529,22 @@ package body Zlib.ZIP_Streaming_Extraction is
             begin
                Zlib.Flush (Filter, Out_Stream, Out_Last, Zlib.No_Flush);
                exit when Out_Last < Out_Stream'First;
+               if Would_Exceed
+                 (Interfaces.Unsigned_64 (Out_Last - Out_Stream'First + 1))
+               then
+                  Status := Invalid_Checksum;
+                  exit;
+               end if;
                for I in Out_Stream'First .. Out_Last loop
                   CryptoLib.Checksums.CRC32_Update (CRC, Out_Stream (I));
                end loop;
                SIO.Write (Output, Out_Stream (Out_Stream'First .. Out_Last));
                Produced := Produced
                  + Interfaces.Unsigned_64 (Out_Last - Out_Stream'First + 1);
+               if Cancel.all then
+                  Status := Cancelled;
+                  exit;
+               end if;
             end;
          end loop;
       end if;
@@ -636,6 +684,14 @@ package body Zlib.ZIP_Streaming_Extraction is
                return;
             end if;
 
+            --  The bridge decodes against the declared size, but the write is
+            --  bounded here too: nothing beyond what the member declares
+            --  reaches the disk.
+            if Interfaces.Unsigned_64 (Decoded'Length) > Unc_Size then
+               Status := Invalid_Checksum;
+               return;
+            end if;
+
             declare
                Output : SIO.File_Type;
                Raw    : Ada.Streams.Stream_Element_Array
@@ -676,6 +732,7 @@ package body Zlib.ZIP_Streaming_Extraction is
          Entry_Name    : String;
          Password      : String;
          Status        : out Status_Code) return Byte_Array;
+      Cancel          : not null access function return Boolean;
       Handled         : out Boolean;
       Status          : out Status_Code)
    is
@@ -743,6 +800,11 @@ package body Zlib.ZIP_Streaming_Extraction is
             begin
                exit when Name_First + Name_Len + Extra_Len + Cmt_Len - 1 > Central'Last;
 
+               if Cancel.all then
+                  Status := Cancelled;
+                  exit;
+               end if;
+
                for I in Name_First .. Name_First + Name_Len - 1 loop
                   US.Append (Name, Character'Val (Natural (Central (I))));
                end loop;
@@ -787,6 +849,7 @@ package body Zlib.ZIP_Streaming_Extraction is
                               Unc_Size     => Unc,
                               Expected_CRC => CRC,
                               Target_Path  => Target,
+                              Cancel       => Cancel,
                               Status       => Status);
                         else
                            Extract_Foreign_Member
@@ -933,6 +996,7 @@ package body Zlib.ZIP_Streaming_Extraction is
                         Unc_Size     => Unc,
                         Expected_CRC => CRC,
                         Target_Path  => Output_Path,
+                        Cancel       => Never_Cancel'Access,
                         Status       => Status);
                   else
                      Extract_Foreign_Member

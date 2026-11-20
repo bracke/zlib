@@ -15,11 +15,18 @@ package body Zlib.Archive_Directory_Extraction is
         (Archive_Image   : Byte_Array;
          Destination_Dir : String;
          Password        : String;
+         Cancel          : not null access function return Boolean;
          Status          : out Status_Code);
+      Cancel          : not null access function return Boolean;
       Status          : out Status_Code)
    is
       Read_Status : Status_Code := Ok;
    begin
+      if Cancel.all then
+         Status := Cancelled;
+         return;
+      end if;
+
       --  Reading the archive is done inside the handled sequence of
       --  statements, not in this subprogram's declarative part: a handler does
       --  not cover its own declarative part, so an exception raised while
@@ -33,7 +40,7 @@ package body Zlib.Archive_Directory_Extraction is
             return;
          end if;
 
-         Extract_Image (Image, Destination_Dir, Password, Status);
+         Extract_Image (Image, Destination_Dir, Password, Cancel, Status);
       end;
    exception
       when Storage_Error =>
@@ -67,6 +74,7 @@ package body Zlib.Archive_Directory_Extraction is
         (Entry_Name : String) return Boolean;
       Write_File        : not null access procedure
         (Path : String; Data : Byte_Array; Status : out Status_Code);
+      Cancel            : not null access function return Boolean;
       Status            : out Status_Code)
    is
       List_Status : Status_Code := Ok;
@@ -88,6 +96,11 @@ package body Zlib.Archive_Directory_Extraction is
          end if;
 
          for E of Entries loop
+            if Cancel.all then
+               Status := Cancelled;
+               return;
+            end if;
+
             declare
                Name : constant String := US.To_String (E.Name);
                --  The path it goes to; the member is read by its name.

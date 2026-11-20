@@ -17,9 +17,13 @@ package Zlib.Archive_Directory_Extraction is
         (Archive_Image   : Byte_Array;
          Destination_Dir : String;
          Password        : String;
+         Cancel          : not null access function return Boolean;
          Status          : out Status_Code);
+      Cancel          : not null access function return Boolean;
       Status          : out Status_Code);
-   --  Read an archive file and extract its image to Destination_Dir.
+   --  Read an archive file and extract its image to Destination_Dir. Cancel
+   --  is polled once before the file is read and is passed on to
+   --  Extract_Image; when it answers True, Status is Cancelled.
 
    procedure Extract_To_Directory
      (Archive_Image     : Byte_Array;
@@ -46,8 +50,11 @@ package Zlib.Archive_Directory_Extraction is
         (Entry_Name : String) return Boolean;
       Write_File        : not null access procedure
         (Path : String; Data : Byte_Array; Status : out Status_Code);
+      Cancel            : not null access function return Boolean;
       Status            : out Status_Code);
    --  List entries, validate relative output names, extract payloads, and
-   --  write files/directories below Destination_Dir.
+   --  write files/directories below Destination_Dir. Cancel is polled once
+   --  before each entry; when it answers True extraction stops with
+   --  Cancelled and the entries already written stay.
 
 end Zlib.Archive_Directory_Extraction;

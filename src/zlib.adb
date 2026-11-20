@@ -3254,6 +3254,9 @@ package body Zlib is
 
          when Invalid_Password              =>
             return "invalid password";
+
+         when Cancelled                     =>
+            return "cancelled";
       end case;
    end Status_Image;
 
@@ -10824,10 +10827,16 @@ package body Zlib is
          return None;
    end List_Archive_File_Entries;
 
-   procedure Extract_Archive_To_Directory
+   --  The cancel callback of an extraction its caller cannot cancel.
+   function Never_Cancel return Boolean is (False);
+
+   --  Extract_Archive_To_Directory with a cancel callback, polled once before
+   --  each member.
+   procedure Extract_Image_To_Directory
      (Archive_Image   : Byte_Array;
       Destination_Dir : String;
       Password        : String;
+      Cancel          : not null access function return Boolean;
       Status          : out Status_Code)
    is
       Is_7z : constant Boolean :=
@@ -10887,6 +10896,7 @@ package body Zlib is
          Extract_ZIP         => Extract_ZIP_With_Password'Access,
          Safe_Entry_Name     => Safe_Entry_Path'Access,
          Write_File          => Write_File'Access,
+         Cancel              => Cancel,
          Status              => Status);
    exception
       --  A memory limit is not a data, method or file error.
@@ -10894,12 +10904,33 @@ package body Zlib is
          Status := Insufficient_Memory;
       when others =>
          Status := Unsupported_Method;
+   end Extract_Image_To_Directory;
+
+   procedure Extract_Archive_To_Directory
+     (Archive_Image   : Byte_Array;
+      Destination_Dir : String;
+      Password        : String;
+      Status          : out Status_Code) is
+   begin
+      Extract_Image_To_Directory
+        (Archive_Image, Destination_Dir, Password, Never_Cancel'Access, Status);
    end Extract_Archive_To_Directory;
 
    procedure Extract_Archive_File_To_Directory
      (Archive_Path    : String;
       Destination_Dir : String;
       Password        : String;
+      Status          : out Status_Code) is
+   begin
+      Extract_Archive_File_To_Directory
+        (Archive_Path, Destination_Dir, Password, Never_Cancel'Access, Status);
+   end Extract_Archive_File_To_Directory;
+
+   procedure Extract_Archive_File_To_Directory
+     (Archive_Path    : String;
+      Destination_Dir : String;
+      Password        : String;
+      Cancel          : not null access function return Boolean;
       Status          : out Status_Code)
    is
       Handled : Boolean := False;
@@ -10918,6 +10949,7 @@ package body Zlib is
             Safe_Entry_Name => Safe_Entry_Path'Access,
             Password        => Password,
             Extract_Image   => Extract_ZIP_Entry_Image'Access,
+            Cancel          => Cancel,
             Handled         => Handled,
             Status          => Status);
          if Handled then
@@ -10938,6 +10970,11 @@ package body Zlib is
       begin
          if List_Handled and then List_Status = Ok then
             for E of Entries loop
+               if Cancel.all then
+                  Status := Cancelled;
+                  return;
+               end if;
+
                declare
                   Name : constant String :=
                     Ada.Strings.Unbounded.To_String (E.Name);
@@ -11006,7 +11043,7 @@ package body Zlib is
 
       Zlib.Archive_Directory_Extraction.Extract_File_To_Directory
         (Archive_Path, Destination_Dir, Password, Read_File'Access,
-         Extract_Archive_To_Directory'Access, Status);
+         Extract_Image_To_Directory'Access, Cancel, Status);
    exception
       when Storage_Error =>
          Status := Insufficient_Memory;

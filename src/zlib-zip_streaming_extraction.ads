@@ -23,10 +23,20 @@ package Zlib.ZIP_Streaming_Extraction is
          Entry_Name    : String;
          Password      : String;
          Status        : out Status_Code) return Byte_Array;
+      Cancel          : not null access function return Boolean;
       Handled         : out Boolean;
       Status          : out Status_Code);
    --  Extract every member of the ZIP at Archive_Path below Destination_Dir,
    --  creating subdirectories and recreating directory entries.
+   --
+   --  A member's declared uncompressed size bounds what is written for it: a
+   --  streamed chunk that would take its output past that size is refused
+   --  with Invalid_Checksum before it is written.
+   --
+   --  Cancel is polled before each member and, while a streamed member is
+   --  written, before each chunk of its compressed input is read and after
+   --  each chunk of output is written. When it answers True extraction stops
+   --  with Cancelled; members and partial output already written stay.
    --
    --  Members whose method is neither Stored nor Deflate are not streamed.
    --  Rather than giving up on the whole archive, such a member is rebuilt as a
@@ -46,6 +56,7 @@ package Zlib.ZIP_Streaming_Extraction is
    --  @param Password archive password, or "" when no member is encrypted
    --  @param Extract_Image decodes one entry of a supplied archive image, used
    --  for members this package does not stream
+   --  @param Cancel answers True when the caller wants extraction to stop
    --  @param Handled False when the caller must fall back to whole-image
    --  extraction
    --  @param Status Ok on success, otherwise a deterministic failure code
