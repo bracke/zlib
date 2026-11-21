@@ -3923,6 +3923,16 @@ package body Zlib is
          Status          => Status);
    end XZ_LZMA2_File;
 
+   --  Best-effort removal of an output file Write_File created but could not
+   --  finish; the write's own failure is what the caller is told.
+   procedure Discard_Partial_File (Path : String) is
+   begin
+      Zlib.Native_Files.Delete_File (Path);
+   exception
+      when others =>
+         null;
+   end Discard_Partial_File;
+
    procedure Write_File
      (Path : String; Data : Byte_Array; Status : out Status_Code)
    is
@@ -3954,12 +3964,16 @@ package body Zlib is
       when Storage_Error =>
          if SIO.Is_Open (File) then
             SIO.Close (File);
+            Discard_Partial_File (Path);
          end if;
 
          Status := Insufficient_Memory;
       when others =>
+         --  A file this call created and could not finish is removed, so a
+         --  failed write leaves nothing half written behind.
          if SIO.Is_Open (File) then
             SIO.Close (File);
+            Discard_Partial_File (Path);
          end if;
 
          Status := Output_File_Error;
@@ -5925,8 +5939,14 @@ package body Zlib is
 
       Pos := CD_First;
       for I in 1 .. CD_Count loop
-         exit when Pos + 45 > Archive_Image'Last
-           or else ZIP_U32_At (Archive_Image, Pos) /= 16#0201_4B50#;
+         --  A record that does not fit is a damaged directory, which is not
+         --  the same answer as a member it does not hold.
+         if Pos + 45 > Archive_Image'Last
+           or else ZIP_U32_At (Archive_Image, Pos) /= 16#0201_4B50#
+         then
+            Status := Invalid_Header;
+            return Empty;
+         end if;
          declare
             Flags    : constant Interfaces.Unsigned_16 :=
               ZIP_U16_At (Archive_Image, Pos + 8);
@@ -5948,8 +5968,12 @@ package body Zlib is
               ZIP_U32_At (Archive_Image, Pos + 42);
             Name_First : constant Natural := Pos + 46;
          begin
-            exit when Name_First + Name_Len + Extra_Len + Cmt_Len - 1 >
-              Archive_Image'Last;
+            if Name_First + Name_Len + Extra_Len + Cmt_Len - 1 >
+              Archive_Image'Last
+            then
+               Status := Invalid_Header;
+               return Empty;
+            end if;
 
             if ZIP_Name_Equals
               (Archive_Image, Name_First, Name_Len, Entry_Name)

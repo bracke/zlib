@@ -1,5 +1,5 @@
 dependency:project_tools=0.1.0=c3258f263e87dfd5141ce0af8cbac0d79d64065ab3a692080c1503486f82c789
-dependency:zlib=0.1.0=cfe25f976ea9a02c3db3d9c0009fe4636bf70cbb3d235595867b8a75cffe69fe
+dependency:zlib=0.1.0=74c33e24ad2b2074cdbc7ab3f706b1aff4fded337889a366196a851057e4ceb9
 external:LIBRARY_TYPE=default
 external:ZLIB_TOOLS_LIBRARY_TYPE=default
 profile:zlib_tools=DEVELOPMENT

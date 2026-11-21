@@ -347,6 +347,19 @@ package body Zlib.ZIP_Streaming_Extraction is
    --  The cancel callback of an extraction no caller can cancel.
    function Never_Cancel return Boolean is (False);
 
+   --  Remove a member's output file that extraction created and then failed
+   --  to complete. Best effort: a file that cannot be removed is left, and
+   --  the member's own failure is what the caller is told.
+   procedure Discard_Output (Path : String) is
+   begin
+      if Zlib.Native_Files.Exists (Path) then
+         Zlib.Native_Files.Delete_File (Path);
+      end if;
+   exception
+      when others =>
+         null;
+   end Discard_Output;
+
    --  The member's declared size bounds what is written: a chunk that would
    --  take the output past Unc_Size is refused (Invalid_Checksum, as the
    --  in-memory reader reports a size mismatch) before it is written, so a
@@ -377,6 +390,7 @@ package body Zlib.ZIP_Streaming_Extraction is
       Opened     : Boolean := False;
       Filter     : Zlib.Filter_Type;
       Inflating  : Boolean := False;
+      Created    : Boolean := False;
 
       --  Whether Count more bytes would take the output past the declared
       --  size. Written so that it cannot overflow.
@@ -411,6 +425,7 @@ package body Zlib.ZIP_Streaming_Extraction is
 
       Zlib.Native_Files.Create (Output, SIO.Out_File, Target_Path, Form => "shared=no");
       Opened := True;
+      Created := True;
 
       if Method = Method_Deflate then
          Zlib.Inflate_Init (Filter, Zlib.Raw_Deflate);
@@ -565,6 +580,13 @@ package body Zlib.ZIP_Streaming_Extraction is
          end if;
       end if;
 
+      --  A member that failed is not left half written: what is on disk is
+      --  either the whole member or nothing. A cancelled one is kept, as
+      --  documented for Cancel.
+      if Created and then Status /= Ok and then Status /= Cancelled then
+         Discard_Output (Target_Path);
+      end if;
+
    exception
       when Storage_Error =>
          if Inflating then
@@ -572,6 +594,9 @@ package body Zlib.ZIP_Streaming_Extraction is
          end if;
          if Opened then
             SIO.Close (Output);
+         end if;
+         if Created then
+            Discard_Output (Target_Path);
          end if;
          Status := Insufficient_Memory;
 
@@ -581,6 +606,9 @@ package body Zlib.ZIP_Streaming_Extraction is
          end if;
          if Opened then
             SIO.Close (Output);
+         end if;
+         if Created then
+            Discard_Output (Target_Path);
          end if;
          --  Streaming inflate signals invalid or truncated data by exception;
          --  this is a status-returning API, so map it rather than propagate.
@@ -703,10 +731,20 @@ package body Zlib.ZIP_Streaming_Extraction is
                   Target := Target + 1;
                end loop;
                Zlib.Native_Files.Create (Output, SIO.Out_File, Target_Path, Form => "shared=no");
-               if Raw'Length > 0 then
-                  SIO.Write (Output, Raw);
-               end if;
-               SIO.Close (Output);
+               begin
+                  if Raw'Length > 0 then
+                     SIO.Write (Output, Raw);
+                  end if;
+                  SIO.Close (Output);
+               exception
+                  when others =>
+                     --  A write that fails leaves nothing half written.
+                     if SIO.Is_Open (Output) then
+                        SIO.Close (Output);
+                     end if;
+                     Discard_Output (Target_Path);
+                     raise;
+               end;
             end;
          end;
       end;
@@ -770,6 +808,10 @@ package body Zlib.ZIP_Streaming_Extraction is
          Central : Byte_Array (0 .. Natural (CD_Size) - 1);
          Read_Ok : Boolean;
          Pos     : Natural := 0;
+         --  Set when a record does not fit the directory the end record
+         --  declares: the directory is damaged, and stopping there quietly
+         --  would extract a prefix of the archive and call it complete.
+         Broken  : Boolean := False;
       begin
          Read_At (File, CD_Offset, Central, Read_Ok);
          if not Read_Ok then
@@ -782,8 +824,12 @@ package body Zlib.ZIP_Streaming_Extraction is
          Pos := 0;
 
          for I in 1 .. CD_Count loop
-            exit when Pos + 45 > Central'Last;
-            exit when U32_At (Central, Pos) /= Central_Signature;
+            if Pos + 45 > Central'Last
+              or else U32_At (Central, Pos) /= Central_Signature
+            then
+               Broken := True;
+               exit;
+            end if;
             declare
                Flags     : constant Interfaces.Unsigned_16 := U16_At (Central, Pos + 8);
                Method    : constant Interfaces.Unsigned_16 := U16_At (Central, Pos + 10);
@@ -798,7 +844,10 @@ package body Zlib.ZIP_Streaming_Extraction is
                Comp, Unc, Local_Offset : Interfaces.Unsigned_64;
                Name       : US.Unbounded_String;
             begin
-               exit when Name_First + Name_Len + Extra_Len + Cmt_Len - 1 > Central'Last;
+               if Name_First + Name_Len + Extra_Len + Cmt_Len - 1 > Central'Last then
+                  Broken := True;
+                  exit;
+               end if;
 
                if Cancel.all then
                   Status := Cancelled;
@@ -875,6 +924,10 @@ package body Zlib.ZIP_Streaming_Extraction is
                Pos := Name_First + Name_Len + Extra_Len + Cmt_Len;
             end;
          end loop;
+
+         if Broken then
+            Status := Invalid_Header;
+         end if;
       end;
 
       SIO.Close (File);
@@ -945,6 +998,7 @@ package body Zlib.ZIP_Streaming_Extraction is
          Read_Ok : Boolean;
          Pos     : Natural := 0;
          Matched : Boolean := False;
+         Broken  : Boolean := False;
       begin
          Read_At (File, CD_Offset, Central, Read_Ok);
          if not Read_Ok then
@@ -953,8 +1007,12 @@ package body Zlib.ZIP_Streaming_Extraction is
          end if;
 
          for I in 1 .. CD_Count loop
-            exit when Pos + 45 > Central'Last;
-            exit when U32_At (Central, Pos) /= Central_Signature;
+            if Pos + 45 > Central'Last
+              or else U32_At (Central, Pos) /= Central_Signature
+            then
+               Broken := True;
+               exit;
+            end if;
             declare
                Flags     : constant Interfaces.Unsigned_16 := U16_At (Central, Pos + 8);
                Method    : constant Interfaces.Unsigned_16 := U16_At (Central, Pos + 10);
@@ -969,7 +1027,10 @@ package body Zlib.ZIP_Streaming_Extraction is
                Comp, Unc, Local_Offset : Interfaces.Unsigned_64;
                Name       : US.Unbounded_String;
             begin
-               exit when Name_First + Name_Len + Extra_Len + Cmt_Len - 1 > Central'Last;
+               if Name_First + Name_Len + Extra_Len + Cmt_Len - 1 > Central'Last then
+                  Broken := True;
+                  exit;
+               end if;
 
                for K in Name_First .. Name_First + Name_Len - 1 loop
                   US.Append (Name, Character'Val (Natural (Central (K))));
@@ -1023,10 +1084,16 @@ package body Zlib.ZIP_Streaming_Extraction is
 
          SIO.Close (File);
 
+         --  A directory that breaks off before the member is found is damaged,
+         --  which is not the same answer as a member it does not hold.
+         if Broken then
+            Handled := True;
+            Status := Invalid_Header;
+
          --  A ZIP this reader understood, whose directory simply has no such
          --  member, is a definite answer rather than a reason to re-read the
          --  archive whole.
-         if not Matched then
+         elsif not Matched then
             Handled := True;
             Status := Unsupported_Method;
          end if;
@@ -1078,6 +1145,7 @@ package body Zlib.ZIP_Streaming_Extraction is
          Read_Ok : Boolean;
          Pos     : Natural := 0;
          Found_N : Natural := 0;
+         Broken  : Boolean := False;
          Result  : Archive_Entry_Array (1 .. CD_Count) :=
            [others => (others => <>)];
       begin
@@ -1088,8 +1156,12 @@ package body Zlib.ZIP_Streaming_Extraction is
          end if;
 
          for I in 1 .. CD_Count loop
-            exit when Pos + 45 > Central'Last;
-            exit when U32_At (Central, Pos) /= Central_Signature;
+            if Pos + 45 > Central'Last
+              or else U32_At (Central, Pos) /= Central_Signature
+            then
+               Broken := True;
+               exit;
+            end if;
             declare
                Method    : constant Interfaces.Unsigned_16 := U16_At (Central, Pos + 10);
                CRC       : constant Interfaces.Unsigned_32 := U32_At (Central, Pos + 16);
@@ -1103,7 +1175,10 @@ package body Zlib.ZIP_Streaming_Extraction is
                Comp, Unc, Local_Offset : Interfaces.Unsigned_64;
                Name       : US.Unbounded_String;
             begin
-               exit when Name_First + Name_Len + Extra_Len + Cmt_Len - 1 > Central'Last;
+               if Name_First + Name_Len + Extra_Len + Cmt_Len - 1 > Central'Last then
+                  Broken := True;
+                  exit;
+               end if;
 
                for K in Name_First .. Name_First + Name_Len - 1 loop
                   US.Append (Name, Character'Val (Natural (Central (K))));
@@ -1131,6 +1206,11 @@ package body Zlib.ZIP_Streaming_Extraction is
          end loop;
 
          Handled := True;
+         if Broken then
+            --  A damaged directory is reported, not listed in part.
+            Status := Invalid_Header;
+            return None;
+         end if;
          Status := Ok;
          return Result (1 .. Found_N);
       end;

@@ -1108,9 +1108,8 @@ package body Zlib_Release_Contract_Tests is
          Zlib.Extract_Archive_File_To_Directory (Zip_Path, Root, "", Status);
          Assert (Status = Zlib.Invalid_Checksum,
                  Label & ": a member larger than declared is refused: " & Zlib.Status_Image (Status));
-         Assert (not Ada.Directories.Exists (Root & "/bomb.bin")
-                 or else Ada.Directories.Size (Root & "/bomb.bin") <= Declared,
-                 Label & ": no more than the declared size is written");
+         Assert (not Ada.Directories.Exists (Root & "/bomb.bin"),
+                 Label & ": the refused member leaves no partial file behind");
          Ada.Directories.Delete_File (Zip_Path);
       end Check;
    begin
@@ -1120,6 +1119,106 @@ package body Zlib_Release_Contract_Tests is
          Ada.Directories.Delete_Tree (Root);
       end if;
    end Test_Extraction_Bounded_By_Declared_Size;
+
+   --  A central directory that breaks off before the count its end record
+   --  declares is damaged: extraction, single-member extraction and listing
+   --  all report Invalid_Header rather than succeeding on the members before
+   --  the break, and a member after the break is not reported as absent.
+   procedure Test_Damaged_Central_Directory (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Root     : constant String := Temp_Root & "/zlib-release-contract-damaged-cd";
+      Sources  : constant String := Root & "-sources";
+      Out_Dir  : constant String := Root & "-out";
+      Zip_Path : constant String := Root & ".zip";
+      Data     : constant Zlib.Byte_Array := [Character'Pos ('x'), Character'Pos ('y')];
+      Status   : Zlib.Status_Code;
+
+      procedure Fresh_Output is
+      begin
+         if Ada.Directories.Exists (Out_Dir) then
+            Ada.Directories.Delete_Tree (Out_Dir);
+         end if;
+         Ada.Directories.Create_Path (Out_Dir);
+      end Fresh_Output;
+
+      --  Damage the second central record of Valid, by overrunning name
+      --  length or by a wrong signature, and check every reader on it.
+      procedure Check (Valid : Zlib.Byte_Array; Overrun : Boolean; Label : String) is
+         Image   : Zlib.Byte_Array := Valid;
+         First   : constant Natural := Find_ZIP_Signature (Image, 16#0201_4B50#, Image'First);
+         Second  : constant Natural := Find_ZIP_Signature (Image, 16#0201_4B50#, First + 46);
+      begin
+         Assert (First > 0 and then Second > First, Label & ": the archive has a second central record");
+         if Overrun then
+            Image (Second + 28) := 16#FF#;
+            Image (Second + 29) := 16#FF#;
+         else
+            Image (Second) := 0;
+         end if;
+         Write_File (Zip_Path, Image);
+
+         Fresh_Output;
+         Zlib.Extract_Archive_File_To_Directory (Zip_Path, Out_Dir, "", Status);
+         Assert (Status = Zlib.Invalid_Header,
+                 Label & ": streamed directory extraction reports the damage: " & Zlib.Status_Image (Status));
+         Assert (not Ada.Directories.Exists (Out_Dir & "/c.txt"), Label & ": nothing after the break is written");
+
+         Fresh_Output;
+         Zlib.Extract_Archive_To_Directory (Image, Out_Dir, "", Status);
+         Assert (Status = Zlib.Invalid_Header,
+                 Label & ": in-memory directory extraction reports the damage: " & Zlib.Status_Image (Status));
+
+         Zlib.Extract_Archive_File_Entry_To_File (Zip_Path, "a.txt", Out_Dir & "/one", "", Status);
+         Assert (Status = Zlib.Ok, Label & ": a member before the break still extracts: " & Zlib.Status_Image (Status));
+         Zlib.Extract_Archive_File_Entry_To_File (Zip_Path, "c.txt", Out_Dir & "/three", "", Status);
+         Assert (Status = Zlib.Invalid_Header,
+                 Label & ": a member after the break is not called absent: " & Zlib.Status_Image (Status));
+
+         declare
+            Plain : constant Zlib.Byte_Array := Zlib.Extract_ZIP (Image, "c.txt", Status);
+         begin
+            Assert (Status = Zlib.Invalid_Header and then Plain'Length = 0,
+                    Label & ": in-memory Extract_ZIP reports the damage: " & Zlib.Status_Image (Status));
+         end;
+
+         declare
+            Listed : constant Zlib.Archive_Entry_Array := Zlib.List_Archive_File_Entries (Zip_Path, "", Status);
+         begin
+            Assert (Status = Zlib.Invalid_Header and then Listed'Length = 0,
+                    Label & ": listing reports the damage: " & Zlib.Status_Image (Status));
+         end;
+      end Check;
+   begin
+      if Ada.Directories.Exists (Sources) then
+         Ada.Directories.Delete_Tree (Sources);
+      end if;
+      Ada.Directories.Create_Path (Sources);
+      Write_File (Sources & "/a.txt", Data);
+      Write_File (Sources & "/b.txt", Data);
+      Write_File (Sources & "/c.txt", Data);
+      Zlib.ZIP_Files
+        (Input_Paths => [US.To_Unbounded_String (Sources & "/a.txt"),
+                         US.To_Unbounded_String (Sources & "/b.txt"),
+                         US.To_Unbounded_String (Sources & "/c.txt")],
+         Output_Path => Zip_Path,
+         Entry_Names => [US.To_Unbounded_String ("a.txt"),
+                         US.To_Unbounded_String ("b.txt"),
+                         US.To_Unbounded_String ("c.txt")],
+         Mode        => Zlib.Stored,
+         Status      => Status);
+      Assert (Status = Zlib.Ok, "the three-member archive is written");
+
+      declare
+         Valid : constant Zlib.Byte_Array := Read_File (Zip_Path);
+      begin
+         Check (Valid, Overrun => True, Label => "name length overrun");
+         Check (Valid, Overrun => False, Label => "bad record signature");
+      end;
+
+      Ada.Directories.Delete_File (Zip_Path);
+      Ada.Directories.Delete_Tree (Sources);
+      Ada.Directories.Delete_Tree (Out_Dir);
+   end Test_Damaged_Central_Directory;
 
    --  A cancel callback stops extraction between members: answering True at
    --  once extracts nothing, answering True after the first member keeps it
@@ -1308,6 +1407,8 @@ package body Zlib_Release_Contract_Tests is
                                      "an extracted member's name is its path below the folder, and only there");
       Registration.Register_Routine (T, Test_Extraction_Bounded_By_Declared_Size'Access,
                                      "a member larger than it declares is refused before the excess is written");
+      Registration.Register_Routine (T, Test_Damaged_Central_Directory'Access,
+                                     "a central directory that breaks off early is reported, not half extracted");
       Registration.Register_Routine (T, Test_Extraction_Cancel'Access,
                                      "a cancel callback stops directory extraction between members");
    end Register_Tests;

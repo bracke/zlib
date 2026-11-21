@@ -10,15 +10,15 @@
 | Status | Meaning |
 | --- | --- |
 | `Ok` | Operation completed successfully. |
-| `Invalid_Header` | zlib header is malformed or fails wrapper validation. |
+| `Invalid_Header` | zlib header is malformed or fails wrapper validation; for a ZIP, a central-directory record does not fit the directory its end record declares (truncated, wrong signature, or name/extra/comment lengths running past it). |
 | `Unsupported_Method` | zlib/gzip compression method is not Deflate. |
 | `Unsupported_Preset_Dictionary` | zlib header requests a preset dictionary but no matching dictionary was supplied. |
-| `Invalid_Checksum` | Adler-32 validation failed for zlib input, or CRC32/ISIZE validation failed for gzip input. |
+| `Invalid_Checksum` | Adler-32 validation failed for zlib input, or CRC32/ISIZE validation failed for gzip input; or a ZIP member failed its CRC-32, decoded to more than its declared uncompressed size, or (decoded in memory) to any size other than the declared one. |
 | `Invalid_Block_Type` | Deflate block type is invalid or unsupported. |
 | `Invalid_Stored_Block` | Stored-block `LEN`/`NLEN` validation failed. |
 | `Invalid_Huffman_Code` | Huffman table or symbol decoding failed. |
 | `Invalid_Distance` | LZ77 distance is invalid for the current history window. |
-| `Unexpected_End_Of_Input` | Input ended before the complete wrapper, Deflate payload, or trailer was available. |
+| `Unexpected_End_Of_Input` | Input ended before the complete wrapper, Deflate payload, or trailer was available; for a streamed ZIP member, its data ended before the declared uncompressed size was produced, or its local header or data lies outside the archive. |
 | `Input_File_Error` | File input failed in a file helper. |
 | `Output_File_Error` | File output failed in a file helper. |
 | `Insufficient_Memory` | Not enough memory to hold an intermediate or final result. |
@@ -81,12 +81,36 @@ chunk is written, so a member that declares 1 KB and inflates to gigabytes (a
 zip bomb) cannot fill the destination volume. A member decoded in memory is
 checked against its declared size before anything is written.
 
+A streamed member whose data ends short of its declared size reports
+`Unexpected_End_Of_Input`; one whose CRC-32 does not match reports
+`Invalid_Checksum`. A member decoded in memory reports any size mismatch, short
+or long, as `Invalid_Checksum`.
+
+A member that fails -- any status other than `Ok` or `Cancelled` -- leaves no
+file behind: its partly written output is deleted before the status is
+returned, so what is on disk for a member is either all of it or nothing.
+Members extracted before it stay. The same holds for
+`Extract_Archive_File_Entry_To_File` on a ZIP member, and for any output that
+fails while being written.
+
+A ZIP central directory that breaks off before the member count its end record
+declares -- a record cut short, a record with the wrong signature, or a name,
+extra field or comment running past the directory -- is reported as
+`Invalid_Header` rather than taken as the end of the archive, so a damaged
+archive is never extracted in part and called complete. Members extracted
+before the break stay. Extracting one member reports `Invalid_Header` for a
+member the directory breaks off before reaching (`Unsupported_Method` is kept
+for a member a sound directory does not hold), and listing reports it instead
+of a partial list.
+
 The overload taking `Cancel : not null access function return Boolean` polls
 it once before each member and, while a streamed ZIP member is written, before
 each 64 KiB chunk of compressed input and after each chunk of output. When it
 answers True extraction stops with `Cancelled`; what was already written
 (including a partially written member) stays, so a caller that wants nothing
-left behind extracts into a staging folder and discards it.
+left behind extracts into a staging folder and discards it. Cancelling is the
+one stop that keeps a partial member: unlike a failure, it says nothing is
+wrong with what was written so far.
 
 A `.7z` is read from its signature header, its header, and the packed streams
 of the folders a request actually touches, so the archive itself is never read
