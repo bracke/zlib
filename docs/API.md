@@ -115,6 +115,14 @@ procedure ZIP_Files
    Mode        : Compression_Mode := Auto;
    Force_ZIP64 : Boolean := False;
    Status      : out Status_Code);
+procedure ZIP_Files
+  (Input_Paths     : Text_Array;
+   Output_Path     : String;
+   Entry_Names     : Text_Array;
+   Directory_Names : Text_Array;
+   Mode            : Compression_Mode := Auto;
+   Force_ZIP64     : Boolean := False;
+   Status          : out Status_Code);
 function Seven_Zip_Stored
   (Input      : Byte_Array;
    Entry_Name : String;
@@ -403,7 +411,12 @@ zlib-wrapped, and `GZip`/`GZip_File` remain gzip-wrapped.
 or Deflate entries. `ZIP_Files` emits deterministic multi-entry ZIP archives
 from parallel path/name arrays and can force ZIP64 local, central, and
 end-of-central-directory metadata through `Force_ZIP64`. Entry names are safe
-relative paths only.
+relative paths only. The overload with `Directory_Names` also writes one
+directory member per name after the files: a zero-length Stored entry named
+with a trailing `/`, its UTF-8 name flag set and the DOS directory attribute
+(`16#10#`) in its central record. Directory names are given without the `/`,
+must be distinct from each other and from the file entry names, and may stand
+alone (no files) for a directories-only archive.
 
 `Extract_Archive_File_Entry_To_File` writes one named member of an archive
 file to a path. For a ZIP only that member is read, streamed straight to the

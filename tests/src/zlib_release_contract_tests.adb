@@ -938,6 +938,76 @@ package body Zlib_Release_Contract_Tests is
                "ZIP_Files EOCD entry count");
          end;
 
+         --  Directory members: zero-length Stored entries after the files,
+         --  named with a trailing "/", UTF-8 flagged, DOS directory attribute.
+         declare
+            Dirs_Output_Path : constant String := "zlib-release-contract-zip-dirs.zip";
+            Directories : constant Zlib.Text_Array :=
+              [1 => US.To_Unbounded_String ("nested"),
+               2 => US.To_Unbounded_String ("empty/inner")];
+            List_Status : Zlib.Status_Code;
+         begin
+            Zlib.ZIP_Files
+              (Inputs, Dirs_Output_Path, Names, Directories, Zlib.Stored, False, Status);
+            Assert (Status = Zlib.Ok, "ZIP_Files with directories status");
+            declare
+               Archive : constant Zlib.Byte_Array := Read_File (Dirs_Output_Path);
+               Listed  : constant Zlib.Archive_Entry_Array := Zlib.List_ZIP_Entries (Archive, List_Status);
+               Central : Natural;
+               Third   : Natural;
+            begin
+               Assert (List_Status = Zlib.Ok and then Listed'Length = 4, "four members are listed");
+               Assert (US.To_String (Listed (Listed'First + 2).Name) = "nested/"
+                       and then Listed (Listed'First + 2).Is_Directory
+                       and then US.To_String (Listed (Listed'First + 3).Name) = "empty/inner/"
+                       and then Listed (Listed'First + 3).Is_Directory,
+                       "the directories follow the files, named with a trailing slash");
+               Assert (Listed (Listed'First + 3).Uncompressed_Size = 0
+                       and then Listed (Listed'First + 3).Compressed_Size = 0,
+                       "a directory member carries no payload");
+               Central := Find_ZIP_Signature (Archive, 16#0201_4B50#, Archive'First);
+               Third := Central;
+               for Skip in 1 .. 2 loop
+                  Third := Find_ZIP_Signature (Archive, 16#0201_4B50#, Third + 4);
+               end loop;
+               Assert (ZIP_U16_At (Archive, Central + 8) = 0, "a file's name carries no UTF-8 flag");
+               Assert (ZIP_U16_At (Archive, Third + 8) = 16#0800#, "a directory's name is flagged UTF-8");
+               Assert (ZIP_U32_At (Archive, Third + 38) = 16#10#, "a directory has the DOS directory attribute");
+            end;
+
+            --  Directories alone make an archive; a name shared by a file and
+            --  a directory, or an unsafe directory name, does not.
+            declare
+               No_Files : constant Zlib.Text_Array (1 .. 0) := [others => <>];
+            begin
+               Zlib.ZIP_Files (No_Files, Dirs_Output_Path, No_Files, Directories, Status => Status);
+               Assert (Status = Zlib.Ok, "a directories-only archive is written");
+               declare
+                  Listed : constant Zlib.Archive_Entry_Array :=
+                    Zlib.List_ZIP_Entries (Read_File (Dirs_Output_Path), List_Status);
+               begin
+                  Assert (List_Status = Zlib.Ok and then Listed'Length = 2, "both directories are listed");
+               end;
+               Zlib.ZIP_Files (No_Files, Dirs_Output_Path, No_Files, No_Files, Status => Status);
+               Assert (Status = Zlib.Unsupported_Method, "an archive with no members is refused");
+            end;
+            Zlib.ZIP_Files
+              (Inputs, Dirs_Output_Path, Names,
+               [1 => US.To_Unbounded_String ("first.bin")], Status => Status);
+            Assert (Status = Zlib.Unsupported_Method, "a directory may not share a file's name");
+            Zlib.ZIP_Files
+              (Inputs, Dirs_Output_Path, Names,
+               [1 => US.To_Unbounded_String ("../up")], Status => Status);
+            Assert (Status = Zlib.Unsupported_Method, "an unsafe directory name is refused");
+            Zlib.ZIP_Files
+              (Inputs, Dirs_Output_Path, Names,
+               [1 => US.To_Unbounded_String ("d"), 2 => US.To_Unbounded_String ("d")], Status => Status);
+            Assert (Status = Zlib.Unsupported_Method, "a repeated directory name is refused");
+            if Ada.Directories.Exists (Dirs_Output_Path) then
+               Ada.Directories.Delete_File (Dirs_Output_Path);
+            end if;
+         end;
+
          Zlib.ZIP_Files
            (Inputs, ZIP64_Output_Path, Names, Zlib.Dynamic, True, Status);
          Assert (Status = Zlib.Ok, "ZIP_Files forced ZIP64 status");

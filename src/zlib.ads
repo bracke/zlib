@@ -1110,6 +1110,30 @@ package Zlib is
    --  @param Force_ZIP64 force ZIP64 metadata emission
    --  @param Status set to Ok on success, otherwise a deterministic failure code
 
+   procedure ZIP_Files
+     (Input_Paths     : Text_Array;
+      Output_Path     : String;
+      Entry_Names     : Text_Array;
+      Directory_Names : Text_Array;
+      Mode            : Compression_Mode := Auto;
+      Force_ZIP64     : Boolean := False;
+      Status          : out Status_Code);
+   --  Encode several files and directories as one deterministic ZIP archive.
+   --  As the overload above, plus one member per Directory_Names element,
+   --  written after the files: a zero-length Stored member named with a
+   --  trailing "/" (give the name without it), the UTF-8 name flag (bit 11)
+   --  set, and the DOS directory attribute (16#10#) in its central record's
+   --  external attributes. Directory names must be safe relative ZIP paths,
+   --  distinct from each other and from every entry name. Input_Paths may be
+   --  empty when Directory_Names is not, giving a directories-only archive.
+   --  @param Input_Paths source files to archive
+   --  @param Output_Path path that receives the ZIP archive
+   --  @param Entry_Names safe relative ZIP entry names, parallel to Input_Paths
+   --  @param Directory_Names safe relative directory names, without the "/"
+   --  @param Mode Stored, Fixed, Dynamic, or Auto compression policy for files
+   --  @param Force_ZIP64 force ZIP64 metadata emission
+   --  @param Status set to Ok on success, otherwise a deterministic failure code
+
    ----------------------------------------------------------------------------
    --  Archive catalog and ZIP extraction
    ----------------------------------------------------------------------------

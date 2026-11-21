@@ -115,7 +115,8 @@ alr exec -- gnatdoc -P docs/public_docs.gpr --style gnat --generate public --bac
   `GZip_File_Members`
 - one-shot raw Deflate output through `Deflate_Raw` with `Compression_Mode`
 - ZIP output through `ZIP`, `ZIP_File`, and `ZIP_Files` for Stored and Deflate
-  entries, including explicit ZIP64 metadata from `ZIP_Files`
+  entries, including explicit ZIP64 metadata and directory members from
+  `ZIP_Files`
 - in-process BZip2, ZIP-LZMA, and Zstandard member-payload
   creation and unencrypted extraction for ZIP methods 12, 14, 20, and 93
   through the ZIP compatibility bridge

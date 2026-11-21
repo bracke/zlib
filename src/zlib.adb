@@ -7277,24 +7277,47 @@ package body Zlib is
       Append_U64_LE (Output, Local_Offset);
    end Append_ZIP64_Central_Extra;
 
-   procedure ZIP_Files
-     (Input_Paths : Text_Array;
-      Output_Path : String;
-      Entry_Names : Text_Array;
-      Mode        : Compression_Mode := Auto;
-      Force_ZIP64 : Boolean := False;
-      Status      : out Status_Code)
+   --  The ZIP writer behind both ZIP_Files: the files first, then the
+   --  directories, each as a zero-length stored member whose name ends in
+   --  "/" and whose central record carries the DOS directory attribute.
+   procedure Write_ZIP_Members
+     (Input_Paths     : Text_Array;
+      Output_Path     : String;
+      Entry_Names     : Text_Array;
+      Directory_Names : Text_Array;
+      Mode            : Compression_Mode;
+      Force_ZIP64     : Boolean;
+      Status          : out Status_Code)
    is
-      Count        : constant Natural := Input_Paths'Length;
+      File_Count   : constant Natural := Input_Paths'Length;
+      Count        : constant Natural := File_Count + Directory_Names'Length;
       Output       : Byte_Vectors.Vector;
       Read_Status  : Status_Code := Ok;
       Write_Status : Status_Code := Ok;
       Use_ZIP64    : constant Boolean := Force_ZIP64;
+      No_Bytes     : constant Byte_Array (1 .. 0) := [others => 0];
+
+      --  The stored name of member Offset (0-based, files first).
+      function Member_Name (Offset : Natural) return String is
+        (if Offset < File_Count
+         then US.To_String (Entry_Names (Entry_Names'First + Offset))
+         else US.To_String (Directory_Names (Directory_Names'First + Offset - File_Count)) & "/");
+
+      --  The name member Offset is checked and compared by: a directory's
+      --  without its "/", so a file and a directory cannot share one.
+      function Plain_Name (Offset : Natural) return String is
+        (if Offset < File_Count
+         then US.To_String (Entry_Names (Entry_Names'First + Offset))
+         else US.To_String (Directory_Names (Directory_Names'First + Offset - File_Count)));
+
+      --  General-purpose flags: a directory's name is marked UTF-8 (bit 11).
+      function Member_Flags (Offset : Natural) return Interfaces.Unsigned_16 is
+        (if Offset < File_Count then 0 else 16#0800#);
    begin
       Status := Unsupported_Method;
 
       if Count = 0
-        or else Entry_Names'Length /= Count
+        or else Entry_Names'Length /= File_Count
         or else (not Use_ZIP64 and then Count > Natural (Interfaces.Unsigned_16'Last))
       then
          return;
@@ -7302,20 +7325,17 @@ package body Zlib is
 
       for Offset in 0 .. Count - 1 loop
          declare
-            Entry_Name : constant String :=
-              US.To_String (Entry_Names (Entry_Names'First + Offset));
+            Entry_Name : constant String := Plain_Name (Offset);
          begin
             if not Safe_ZIP_Entry_Name (Entry_Name)
-              or else Entry_Name'Length > Natural (Interfaces.Unsigned_16'Last)
+              or else Member_Name (Offset)'Length > Natural (Interfaces.Unsigned_16'Last)
             then
                return;
             end if;
 
             if Offset > 0 then
                for Previous_Offset in 0 .. Offset - 1 loop
-                  if Entry_Name =
-                    US.To_String (Entry_Names (Entry_Names'First + Previous_Offset))
-                  then
+                  if Entry_Name = Plain_Name (Previous_Offset) then
                      return;
                   end if;
                end loop;
@@ -7328,12 +7348,16 @@ package body Zlib is
       begin
          for Offset in 0 .. Count - 1 loop
             declare
-               Input_Path : constant String :=
-                 US.To_String (Input_Paths (Input_Paths'First + Offset));
-               Entry_Name : constant String :=
-                 US.To_String (Entry_Names (Entry_Names'First + Offset));
-               Input_Data : constant Byte_Array :=
-                 Read_File (Input_Path, Read_Status);
+               Index        : constant Positive := Offset + 1;
+               Entry_Name   : constant String := Member_Name (Offset);
+               Name_Length  : constant Interfaces.Unsigned_16 :=
+                 Interfaces.Unsigned_16 (Entry_Name'Length);
+               Extra_Length : constant Interfaces.Unsigned_16 :=
+                 (if Use_ZIP64 then 20 else 0);
+               Input_Data   : constant Byte_Array :=
+                 (if Offset < File_Count
+                  then Read_File (US.To_String (Input_Paths (Input_Paths'First + Offset)), Read_Status)
+                  else No_Bytes);
             begin
                if Read_Status /= Ok then
                   Status := Read_Status;
@@ -7343,14 +7367,9 @@ package body Zlib is
                declare
                   Payload_Status : Status_Code := Ok;
                   Payload        : constant Byte_Array :=
-                    (if Mode = Stored
+                    (if Mode = Stored or else Offset >= File_Count
                      then Input_Data
                      else Deflate_Raw (Input_Data, Mode, Payload_Status));
-                  Index          : constant Positive := Offset + 1;
-                  Name_Length    : constant Interfaces.Unsigned_16 :=
-                    Interfaces.Unsigned_16 (Entry_Name'Length);
-                  Extra_Length   : constant Interfaces.Unsigned_16 :=
-                    (if Use_ZIP64 then 20 else 0);
                begin
                   if Payload_Status /= Ok then
                      Status := Payload_Status;
@@ -7358,15 +7377,15 @@ package body Zlib is
                   end if;
 
                   Infos (Index) :=
-                    (Method       => (if Mode = Stored then 0 else 8),
-                     CRC          => Compute_CRC32 (Input_Data),
+                    (Method       => (if Mode = Stored or else Offset >= File_Count then 0 else 8),
+                     CRC          => (if Offset < File_Count then Compute_CRC32 (Input_Data) else 0),
                      Compressed   => Interfaces.Unsigned_64 (Payload'Length),
                      Uncompressed => Interfaces.Unsigned_64 (Input_Data'Length),
                      Local_Offset => Interfaces.Unsigned_64 (Output.Length));
 
                   Append_U32_LE (Output, 16#0403_4B50#);
                   Append_U16_LE (Output, (if Use_ZIP64 then 45 else 20));
-                  Append_U16_LE (Output, 0);
+                  Append_U16_LE (Output, Member_Flags (Offset));
                   Append_U16_LE (Output, Infos (Index).Method);
                   Append_U16_LE (Output, 0);
                   Append_U16_LE (Output, 0);
@@ -7396,8 +7415,7 @@ package body Zlib is
             for Offset in 0 .. Count - 1 loop
                declare
                   Index        : constant Positive := Offset + 1;
-                  Entry_Name   : constant String :=
-                    US.To_String (Entry_Names (Entry_Names'First + Offset));
+                  Entry_Name   : constant String := Member_Name (Offset);
                   Name_Length  : constant Interfaces.Unsigned_16 :=
                     Interfaces.Unsigned_16 (Entry_Name'Length);
                   Extra_Length : constant Interfaces.Unsigned_16 :=
@@ -7406,7 +7424,7 @@ package body Zlib is
                   Append_U32_LE (Output, 16#0201_4B50#);
                   Append_U16_LE (Output, (if Use_ZIP64 then 45 else 20));
                   Append_U16_LE (Output, (if Use_ZIP64 then 45 else 20));
-                  Append_U16_LE (Output, 0);
+                  Append_U16_LE (Output, Member_Flags (Offset));
                   Append_U16_LE (Output, Infos (Index).Method);
                   Append_U16_LE (Output, 0);
                   Append_U16_LE (Output, 0);
@@ -7420,7 +7438,8 @@ package body Zlib is
                   Append_U16_LE (Output, 0);
                   Append_U16_LE (Output, 0);
                   Append_U16_LE (Output, 0);
-                  Append_U32_LE (Output, 0);
+                  --  External attributes: the DOS directory bit for a directory.
+                  Append_U32_LE (Output, (if Offset < File_Count then 0 else 16#10#));
                   Append_U32_LE
                     (Output, ZIP_U32_Field (Infos (Index).Local_Offset, Use_ZIP64));
                   Append_ASCII (Output, Entry_Name);
@@ -7480,6 +7499,37 @@ package body Zlib is
          Status := Insufficient_Memory;
       when others =>
          Status := Unsupported_Method;
+   end Write_ZIP_Members;
+
+   procedure ZIP_Files
+     (Input_Paths : Text_Array;
+      Output_Path : String;
+      Entry_Names : Text_Array;
+      Mode        : Compression_Mode := Auto;
+      Force_ZIP64 : Boolean := False;
+      Status      : out Status_Code)
+   is
+      No_Directories : constant Text_Array (1 .. 0) := [others => <>];
+   begin
+      if Input_Paths'Length = 0 then
+         Status := Unsupported_Method;
+         return;
+      end if;
+      Write_ZIP_Members
+        (Input_Paths, Output_Path, Entry_Names, No_Directories, Mode, Force_ZIP64, Status);
+   end ZIP_Files;
+
+   procedure ZIP_Files
+     (Input_Paths     : Text_Array;
+      Output_Path     : String;
+      Entry_Names     : Text_Array;
+      Directory_Names : Text_Array;
+      Mode            : Compression_Mode := Auto;
+      Force_ZIP64     : Boolean := False;
+      Status          : out Status_Code) is
+   begin
+      Write_ZIP_Members
+        (Input_Paths, Output_Path, Entry_Names, Directory_Names, Mode, Force_ZIP64, Status);
    end ZIP_Files;
 
    function Seven_Zip_U32_At

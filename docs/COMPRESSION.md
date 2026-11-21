@@ -249,7 +249,7 @@ Streaming `Header => Zlib_Header` produces zlib-wrapped output. Streaming
 There is no whole-stream optimal parser, advanced block splitter, in-process full
 LZMA/LZMA2/in-process stock-compatible PPMd codec stack, or new compression algorithms.
 ZIP output is available through `ZIP`, `ZIP_File`, and `ZIP_Files`; `ZIP_Files`
-can emit multi-entry archives and explicit ZIP64 metadata.
+can emit multi-entry archives, directory members and explicit ZIP64 metadata.
 Broader 7z creation and extraction is available only through native in-process
 APIs; unsupported requests fail closed without invoking a local `7z`
 executable. Streaming compression
