@@ -116,12 +116,21 @@ package body Zlib.Archive_Directory_Extraction is
 
                declare
                   Target : constant String := Destination_Dir & "/" & Rel;
+                  Folder : constant Boolean := E.Is_Directory or else Path (Path'Last) = '/';
                begin
-                  if E.Is_Directory or else Path (Path'Last) = '/' then
-                     Zlib.Native_Files.Create_Path (Target);
-                  else
+                  --  A folder that cannot be made is an output failure.
+                  begin
                      Zlib.Native_Files.Create_Path
-                       (Zlib.Native_Files.Containing_Directory (Target));
+                       (if Folder then Target else Zlib.Native_Files.Containing_Directory (Target));
+                  exception
+                     when Storage_Error =>
+                        raise;
+                     when others =>
+                        Status := Output_File_Error;
+                        return;
+                  end;
+
+                  if not Folder then
                      declare
                         Extract_Status : Status_Code := Ok;
                         Data           : constant Byte_Array :=

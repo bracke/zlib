@@ -78,6 +78,15 @@ package Zlib.Native_Files is
    --  empty file, replacing any that was there. Raises Name_Error or
    --  Use_Error when it cannot be created.
 
+   procedure Create_New
+     (File : in out Ada.Streams.Stream_IO.File_Type;
+      Name : String;
+      Form : String := "shared=no");
+   --  Create the file Name for writing (Out_File) only if nothing is there:
+   --  the check and the creation are one system call (O_CREAT | O_EXCL), so
+   --  an existing file is never opened, truncated or followed. Raises
+   --  Use_Error when something already is at Name or it cannot be created.
+
    procedure Create_Directory (Path : String);
    --  Create the directory Path, whose parent must exist. Raises Use_Error
    --  when it cannot be created (including when something is already there).
@@ -103,6 +112,15 @@ package Zlib.Native_Files is
    --  Give the file or directory Old_Path the name New_Path, which must not
    --  exist yet. Raises Name_Error when Old_Path is missing, Use_Error when
    --  the rename fails.
+
+   procedure Replace (Old_Path : String; New_Path : String);
+   --  Give the file Old_Path the name New_Path in one step, replacing the
+   --  file (or symbolic link, which is not followed) already at New_Path:
+   --  POSIX rename(2), Windows MoveFileExW with MOVEFILE_REPLACE_EXISTING.
+   --  Both paths should be in the same directory, so the step is atomic.
+   --  Raises Name_Error when Old_Path is missing, Use_Error when the rename
+   --  fails (New_Path a directory, not writable, ...); New_Path is then left
+   --  as it was.
 
    function Containing_Directory (Path : String) return String;
    --  The directory part of Path, as Ada.Directories.Containing_Directory

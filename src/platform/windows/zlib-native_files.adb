@@ -37,6 +37,15 @@ package body Zlib.Native_Files is
    Open_Existing              : constant DWord := 3;
    File_Flag_Backup_Semantics : constant DWord := 16#0200_0000#;
    Move_File_Copy_Allowed     : constant DWord := 16#0000_0002#;
+   Move_File_Replace_Existing : constant DWord := 16#0000_0001#;
+
+   O_Write_Only : constant Interfaces.C.int := 16#0001#;
+   O_Create     : constant Interfaces.C.int := 16#0100#;
+   O_Exclusive  : constant Interfaces.C.int := 16#0400#;
+   O_Binary     : constant Interfaces.C.int := 16#8000#;
+   S_Read_Write : constant Interfaces.C.int := 16#0180#;
+   --  The CRT's _O_WRONLY, _O_CREAT, _O_EXCL, _O_BINARY and
+   --  _S_IREAD | _S_IWRITE.
 
    Get_File_Ex_Info_Standard : constant Interfaces.C.int := 0;
 
@@ -143,6 +152,10 @@ package body Zlib.Native_Files is
 
    function W_Fopen (Name : System.Address; Mode : System.Address) return Interfaces.C_Streams.FILEs
      with Import, Convention => C, External_Name => "_wfopen";
+
+   function W_Open
+     (Name : System.Address; Flags : Interfaces.C.int; Mode : Interfaces.C.int) return Interfaces.C.int
+     with Import, Convention => C_Variadic_2, External_Name => "_wopen";
 
    procedure Ignore (Result : Win_Bool) is
       pragma Unreferenced (Result);
@@ -368,6 +381,45 @@ package body Zlib.Native_Files is
       Open_Stream (File, Mode, Name, Form, (if Mode = Ada.Streams.Stream_IO.In_File then "w+b" else "wb"));
    end Create;
 
+   procedure Create_New
+     (File : in out Ada.Streams.Stream_IO.File_Type;
+      Name : String;
+      Form : String := "shared=no")
+   is
+      Native : aliased constant Wide_String := Wide (Name);
+      C_Mode : aliased constant String := "wb" & ASCII.NUL;
+      FD     : Interfaces.C.int;
+      Stream : Interfaces.C_Streams.FILEs;
+   begin
+      if Ada.Streams.Stream_IO.Is_Open (File) then
+         raise Ada.IO_Exceptions.Status_Error with "file already open";
+      end if;
+
+      FD := W_Open (Native'Address, O_Write_Only + O_Create + O_Exclusive + O_Binary, S_Read_Write);
+      if FD < 0 then
+         raise Ada.IO_Exceptions.Use_Error with "cannot create " & Name;
+      end if;
+
+      Stream := Interfaces.C_Streams.fdopen (Interfaces.C_Streams.int (FD), C_Mode'Address);
+      if Stream = Interfaces.C_Streams.NULL_Stream then
+         GNAT.OS_Lib.Close (GNAT.OS_Lib.File_Descriptor (FD));
+         raise Ada.IO_Exceptions.Use_Error with "cannot open " & Name;
+      end if;
+
+      begin
+         Ada.Streams.Stream_IO.C_Streams.Open
+           (File     => File,
+            Mode     => Ada.Streams.Stream_IO.Out_File,
+            C_Stream => Stream,
+            Form     => Form,
+            Name     => (if Name'Length < 256 then Name else ""));
+      exception
+         when others =>
+            Ignore (Win_Bool (Interfaces.C_Streams.fclose (Stream)));
+            raise;
+      end;
+   end Create_New;
+
    procedure Create_Directory (Path : String) is
    begin
       if Path'Length = 0 then
@@ -485,6 +537,22 @@ package body Zlib.Native_Files is
          end if;
       end;
    end Rename;
+
+   procedure Replace (Old_Path : String; New_Path : String) is
+   begin
+      if Kind (Old_Path) = Missing then
+         raise Ada.IO_Exceptions.Name_Error with "no such file or directory: " & Old_Path;
+      end if;
+      declare
+         Old_Name : aliased constant Wide_String := Wide (Old_Path);
+         New_Name : aliased constant Wide_String := Wide (New_Path);
+      begin
+         --  MoveFileExW refuses to replace a directory, as rename(2) does.
+         if Move_File_Ex (Old_Name'Address, New_Name'Address, Move_File_Replace_Existing) = 0 then
+            raise Ada.IO_Exceptions.Use_Error with "cannot rename " & Old_Path & " to " & New_Path;
+         end if;
+      end;
+   end Replace;
 
    --  Path text read as text: GNAT's Ada.Directories versions refuse a long
    --  path before they look at it, which failed every extraction deep in a

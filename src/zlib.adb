@@ -39,6 +39,7 @@ with Zlib.Iso_Reader;
 with Zlib.Rar_Reader;
 with Zlib.Archive_Directory_Extraction;
 with Zlib.ZIP_Streaming_Extraction;
+with Zlib.Staged_Output;
 with Zlib.Seven_Zip_BCJ2_Writing;
 with Zlib.Seven_Zip_Codec_Packing;
 with Zlib.Seven_Zip_Codec_Writing;
@@ -3923,59 +3924,28 @@ package body Zlib is
          Status          => Status);
    end XZ_LZMA2_File;
 
-   --  Best-effort removal of an output file Write_File created but could not
-   --  finish; the write's own failure is what the caller is told.
-   procedure Discard_Partial_File (Path : String) is
-   begin
-      Zlib.Native_Files.Delete_File (Path);
-   exception
-      when others =>
-         null;
-   end Discard_Partial_File;
-
+   --  Write Data to Path through a temporary beside it that is renamed over
+   --  Path only once it is complete (Zlib.Staged_Output): a write that fails
+   --  -- at create, write, close (a full volume) or rename -- removes the
+   --  temporary and leaves whatever was at Path as it was. Data is written a
+   --  64 KiB chunk at a time, never copied whole.
    procedure Write_File
      (Path : String; Data : Byte_Array; Status : out Status_Code)
    is
-      File : SIO.File_Type;
+      Output : Zlib.Staged_Output.Staged_File;
    begin
-      Zlib.Native_Files.Create (File, SIO.Out_File, Path, Form => "shared=no");
-
-      if Data'Length > 0 then
-         declare
-            Buffer :
-              Ada.Streams.Stream_Element_Array
-                (1 .. Ada.Streams.Stream_Element_Offset (Data'Length));
-         begin
-            for I in Data'Range loop
-               Buffer
-                 (Ada.Streams.Stream_Element_Offset (I - Data'First + 1)) :=
-                 Ada.Streams.Stream_Element (Data (I));
-            end loop;
-
-            SIO.Write (File, Buffer);
-         end;
-      end if;
-
-      SIO.Close (File);
+      Zlib.Staged_Output.Create (Output, Path);
+      Zlib.Staged_Output.Write (Output, Data);
+      Zlib.Staged_Output.Commit (Output);
       Status := Ok;
 
    exception
       --  A memory limit is not a data, method or file error.
       when Storage_Error =>
-         if SIO.Is_Open (File) then
-            SIO.Close (File);
-            Discard_Partial_File (Path);
-         end if;
-
+         Zlib.Staged_Output.Discard (Output);
          Status := Insufficient_Memory;
       when others =>
-         --  A file this call created and could not finish is removed, so a
-         --  failed write leaves nothing half written behind.
-         if SIO.Is_Open (File) then
-            SIO.Close (File);
-            Discard_Partial_File (Path);
-         end if;
-
+         Zlib.Staged_Output.Discard (Output);
          Status := Output_File_Error;
    end Write_File;
 
@@ -4050,6 +4020,10 @@ package body Zlib is
       CD_First : out Natural;
       CD_Count : out Natural) return Boolean;
 
+   type ZIP_Entry_Lookup is (ZIP_Entry_Found, ZIP_Entry_Absent, ZIP_Entry_Damaged);
+   --  What a search of a ZIP's central directory for one member found: the
+   --  member, a sound directory without it, or a damaged directory.
+
    --  Find the central-directory record for Entry_Name.
    --
    --  Walks the archive's real central directory -- located through the EOCD
@@ -4066,28 +4040,36 @@ package body Zlib is
    --  @param Archive_Image The whole ZIP archive.
    --  @param Entry_Name The member name to look for, byte for byte.
    --  @param Record_Pos The index of the record's signature when found.
-   --  @return True when the record was found and lies wholly inside the image.
+   --  @return ZIP_Entry_Found when the record was found and lies wholly
+   --  inside the image; ZIP_Entry_Absent when the whole directory was walked
+   --  (or Entry_Name is empty) without meeting it; ZIP_Entry_Damaged when
+   --  there is no end record, or the directory breaks off -- a record cut
+   --  short, a wrong signature, a name, extra field or comment running past
+   --  the image -- before the member is met, as Extract_ZIP reports it.
    function ZIP_Find_Central_Entry
      (Archive_Image : Byte_Array;
       Entry_Name    : String;
-      Record_Pos    : out Natural) return Boolean
+      Record_Pos    : out Natural) return ZIP_Entry_Lookup
    is
       CD_First : Natural := 0;
       CD_Count : Natural := 0;
       Pos      : Natural;
    begin
       Record_Pos := Archive_Image'First;
-      if Entry_Name'Length = 0
-        or else not ZIP_Find_Central (Archive_Image, CD_First, CD_Count)
-      then
-         return False;
+      if Entry_Name'Length = 0 then
+         return ZIP_Entry_Absent;
+      elsif not ZIP_Find_Central (Archive_Image, CD_First, CD_Count) then
+         return ZIP_Entry_Damaged;
       end if;
 
       Pos := CD_First;
       for I in 1 .. CD_Count loop
-         exit when Pos < Archive_Image'First
+         if Pos < Archive_Image'First
            or else Pos > Archive_Image'Last - 45
-           or else ZIP_U32_At (Archive_Image, Pos) /= 16#0201_4B50#;
+           or else ZIP_U32_At (Archive_Image, Pos) /= 16#0201_4B50#
+         then
+            return ZIP_Entry_Damaged;
+         end if;
          declare
             Name_Len   : constant Natural :=
               Natural (ZIP_U16_At (Archive_Image, Pos + 28));
@@ -4098,24 +4080,29 @@ package body Zlib is
             Name_First : constant Natural := Pos + 46;
             Record_Len : constant Natural := 46 + Name_Len + Extra_Len + Cmt_Len;
          begin
-            exit when Record_Len - 1 > Archive_Image'Last - Pos;
+            if Record_Len - 1 > Archive_Image'Last - Pos then
+               return ZIP_Entry_Damaged;
+            end if;
 
             if ZIP_Name_Equals
               (Archive_Image, Name_First, Name_Len, Entry_Name)
             then
                Record_Pos := Pos;
-               return True;
+               return ZIP_Entry_Found;
             end if;
 
-            exit when Record_Len > Archive_Image'Last - Pos;
+            --  The record ends the image: only the last record may.
+            if Record_Len > Archive_Image'Last - Pos then
+               return (if I = CD_Count then ZIP_Entry_Absent else ZIP_Entry_Damaged);
+            end if;
             Pos := Pos + Record_Len;
          end;
       end loop;
 
-      return False;
+      return ZIP_Entry_Absent;
    exception
       when Constraint_Error =>
-         return False;
+         return ZIP_Entry_Damaged;
    end ZIP_Find_Central_Entry;
 
    --  Does this member carry the traditional-encryption flag?
@@ -4128,7 +4115,7 @@ package body Zlib is
    is
       Pos : Natural := Archive_Image'First;
    begin
-      return ZIP_Find_Central_Entry (Archive_Image, Entry_Name, Pos)
+      return ZIP_Find_Central_Entry (Archive_Image, Entry_Name, Pos) = ZIP_Entry_Found
         and then (ZIP_U16_At (Archive_Image, Pos + 8) and 1) /= 0;
    exception
       when others =>
@@ -4295,6 +4282,7 @@ package body Zlib is
    is
       Empty : constant Byte_Array (1 .. 0) := [others => 0];
       Pos   : Natural := Archive_Image'First;
+      Lookup : ZIP_Entry_Lookup;
       Found_BZip2_Name : Boolean := False;
    begin
       Status := Unsupported_Method;
@@ -4303,7 +4291,15 @@ package body Zlib is
          return Empty;
       end if;
 
-      if ZIP_Find_Central_Entry (Archive_Image, Entry_Name, Pos) then
+      Lookup := ZIP_Find_Central_Entry (Archive_Image, Entry_Name, Pos);
+      --  A damaged directory is a verdict on the archive, not a reason for
+      --  the caller to try its next method.
+      if Lookup = ZIP_Entry_Damaged then
+         Status := Invalid_Header;
+         return Empty;
+      end if;
+
+      if Lookup = ZIP_Entry_Found then
          declare
             Flags            : constant Interfaces.Unsigned_16 :=
               ZIP_U16_At (Archive_Image, Pos + 8);
@@ -4475,6 +4471,7 @@ package body Zlib is
    is
       Empty : constant Byte_Array (1 .. 0) := [others => 0];
       Pos   : Natural := Archive_Image'First;
+      Lookup : ZIP_Entry_Lookup;
       Found_Zstd_Name : Boolean := False;
    begin
       Status := Unsupported_Method;
@@ -4483,7 +4480,15 @@ package body Zlib is
          return Empty;
       end if;
 
-      if ZIP_Find_Central_Entry (Archive_Image, Entry_Name, Pos) then
+      Lookup := ZIP_Find_Central_Entry (Archive_Image, Entry_Name, Pos);
+      --  A damaged directory is a verdict on the archive, not a reason for
+      --  the caller to try its next method.
+      if Lookup = ZIP_Entry_Damaged then
+         Status := Invalid_Header;
+         return Empty;
+      end if;
+
+      if Lookup = ZIP_Entry_Found then
          declare
             Flags            : constant Interfaces.Unsigned_16 :=
               ZIP_U16_At (Archive_Image, Pos + 8);
@@ -4653,6 +4658,7 @@ package body Zlib is
    is
       Empty : constant Byte_Array (1 .. 0) := [others => 0];
       Pos   : Natural := Archive_Image'First;
+      Lookup : ZIP_Entry_Lookup;
       Found_PPMd_Name : Boolean := False;
    begin
       Status := Unsupported_Method;
@@ -4661,7 +4667,15 @@ package body Zlib is
          return Empty;
       end if;
 
-      if ZIP_Find_Central_Entry (Archive_Image, Entry_Name, Pos) then
+      Lookup := ZIP_Find_Central_Entry (Archive_Image, Entry_Name, Pos);
+      --  A damaged directory is a verdict on the archive, not a reason for
+      --  the caller to try its next method.
+      if Lookup = ZIP_Entry_Damaged then
+         Status := Invalid_Header;
+         return Empty;
+      end if;
+
+      if Lookup = ZIP_Entry_Found then
          declare
             Flags            : constant Interfaces.Unsigned_16 :=
               ZIP_U16_At (Archive_Image, Pos + 8);
@@ -4858,6 +4872,7 @@ package body Zlib is
    is
       Empty : constant Byte_Array (1 .. 0) := [others => 0];
       Pos   : Natural := Archive_Image'First;
+      Lookup : ZIP_Entry_Lookup;
       Found_LZMA_Name : Boolean := False;
    begin
       Status := Unsupported_Method;
@@ -4866,7 +4881,15 @@ package body Zlib is
          return Empty;
       end if;
 
-      if ZIP_Find_Central_Entry (Archive_Image, Entry_Name, Pos) then
+      Lookup := ZIP_Find_Central_Entry (Archive_Image, Entry_Name, Pos);
+      --  A damaged directory is a verdict on the archive, not a reason for
+      --  the caller to try its next method.
+      if Lookup = ZIP_Entry_Damaged then
+         Status := Invalid_Header;
+         return Empty;
+      end if;
+
+      if Lookup = ZIP_Entry_Found then
          declare
             Flags            : constant Interfaces.Unsigned_16 :=
               ZIP_U16_At (Archive_Image, Pos + 8);
@@ -5054,6 +5077,7 @@ package body Zlib is
    is
       Empty : constant Byte_Array (1 .. 0) := [others => 0];
       Pos   : Natural := Archive_Image'First;
+      Lookup : ZIP_Entry_Lookup;
    begin
       Status := Unsupported_Method;
 
@@ -5064,7 +5088,15 @@ package body Zlib is
          return Empty;
       end if;
 
-      if ZIP_Find_Central_Entry (Archive_Image, Entry_Name, Pos) then
+      Lookup := ZIP_Find_Central_Entry (Archive_Image, Entry_Name, Pos);
+      --  A damaged directory is a verdict on the archive, not a reason for
+      --  the caller to try its next method.
+      if Lookup = ZIP_Entry_Damaged then
+         Status := Invalid_Header;
+         return Empty;
+      end if;
+
+      if Lookup = ZIP_Entry_Found then
          declare
             Flags            : constant Interfaces.Unsigned_16 :=
               ZIP_U16_At (Archive_Image, Pos + 8);
@@ -5342,6 +5374,7 @@ package body Zlib is
    is
       Empty : constant Byte_Array (1 .. 0) := [others => 0];
       Pos   : Natural := Archive_Image'First;
+      Lookup : ZIP_Entry_Lookup;
    begin
       Status := Unsupported_Method;
 
@@ -5352,7 +5385,15 @@ package body Zlib is
          return Empty;
       end if;
 
-      if ZIP_Find_Central_Entry (Archive_Image, Entry_Name, Pos) then
+      Lookup := ZIP_Find_Central_Entry (Archive_Image, Entry_Name, Pos);
+      --  A damaged directory is a verdict on the archive, not a reason for
+      --  the caller to try its next method.
+      if Lookup = ZIP_Entry_Damaged then
+         Status := Invalid_Header;
+         return Empty;
+      end if;
+
+      if Lookup = ZIP_Entry_Found then
          declare
             Method          : constant Interfaces.Unsigned_16 :=
               ZIP_U16_At (Archive_Image, Pos + 10);
@@ -11017,13 +11058,23 @@ package body Zlib is
                   declare
                      Target : constant String :=
                        Destination_Dir & "/" & Rel;
+                     Folder : constant Boolean :=
+                       E.Is_Directory or else Path (Path'Last) = '/';
                   begin
-                     if E.Is_Directory or else Path (Path'Last) = '/' then
-                        Zlib.Native_Files.Create_Path (Target);
-                     else
+                     --  A folder that cannot be made is an output failure.
+                     begin
                         Zlib.Native_Files.Create_Path
-                          (Zlib.Native_Files.Containing_Directory (Target));
+                          (if Folder then Target
+                           else Zlib.Native_Files.Containing_Directory (Target));
+                     exception
+                        when Storage_Error =>
+                           raise;
+                        when others =>
+                           Status := Output_File_Error;
+                           return;
+                     end;
 
+                     if not Folder then
                         declare
                            Entry_Handled : Boolean := False;
                            Entry_Kind    : Seven_Zip_Entry_Kind :=

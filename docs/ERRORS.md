@@ -20,7 +20,7 @@
 | `Invalid_Distance` | LZ77 distance is invalid for the current history window. |
 | `Unexpected_End_Of_Input` | Input ended before the complete wrapper, Deflate payload, or trailer was available; for a streamed ZIP member, its data ended before the declared uncompressed size was produced, or its local header or data lies outside the archive. |
 | `Input_File_Error` | File input failed in a file helper. |
-| `Output_File_Error` | File output failed in a file helper. |
+| `Output_File_Error` | File output failed in a file helper: an output file (or the folder it goes in) could not be created, written, closed -- a full volume often shows only then -- or renamed over its target; also when the target is a directory or its directory is not writable. Never reported for a damaged archive. |
 | `Insufficient_Memory` | Not enough memory to hold an intermediate or final result. |
 | `Password_Required` | The archive or member is encrypted and no password was supplied. |
 | `Invalid_Password` | A password was supplied and the encrypted data did not decrypt under it. |
@@ -86,13 +86,6 @@ A streamed member whose data ends short of its declared size reports
 `Invalid_Checksum`. A member decoded in memory reports any size mismatch, short
 or long, as `Invalid_Checksum`.
 
-A member that fails -- any status other than `Ok` or `Cancelled` -- leaves no
-file behind: its partly written output is deleted before the status is
-returned, so what is on disk for a member is either all of it or nothing.
-Members extracted before it stay. The same holds for
-`Extract_Archive_File_Entry_To_File` on a ZIP member, and for any output that
-fails while being written.
-
 A ZIP central directory that breaks off before the member count its end record
 declares -- a record cut short, a record with the wrong signature, or a name,
 extra field or comment running past the directory -- is reported as
@@ -101,16 +94,19 @@ archive is never extracted in part and called complete. Members extracted
 before the break stay. Extracting one member reports `Invalid_Header` for a
 member the directory breaks off before reaching (`Unsupported_Method` is kept
 for a member a sound directory does not hold), and listing reports it instead
-of a partial list.
+of a partial list. The in-memory one-member readers agree: `Extract_ZIP` and
+`Extract_ZIP_External_Entry` (with or without a password, so also the password
+path of `Extract_Archive_File_Entry_To_File`) report `Invalid_Header` for an
+image with no end record or whose directory breaks off before the member.
 
 The overload taking `Cancel : not null access function return Boolean` polls
 it once before each member and, while a streamed ZIP member is written, before
 each 64 KiB chunk of compressed input and after each chunk of output. When it
-answers True extraction stops with `Cancelled`; what was already written
-(including a partially written member) stays, so a caller that wants nothing
-left behind extracts into a staging folder and discards it. Cancelling is the
-one stop that keeps a partial member: unlike a failure, it says nothing is
-wrong with what was written so far.
+answers True extraction stops with `Cancelled`. Members already extracted
+stay; the member being written when it answered is not kept -- its temporary
+is removed and its target left as it was, as for a failure -- so no partly
+written member is ever left. A caller that wants nothing left behind at all
+extracts into a staging folder and discards it.
 
 A `.7z` is read from its signature header, its header, and the packed streams
 of the folders a request actually touches, so the archive itself is never read
@@ -126,6 +122,45 @@ archive needs about a megabyte. For a solid archive -- also a `7z a` default --
 one folder holds everything, so the cost is the archive's whole decompressed
 content and no amount of streaming can reduce it. Callers who care should write
 archives with `-ms=off`.
+
+## Output files: written aside, renamed into place
+
+Every extracted member a file helper writes -- streamed ZIP members, ZIP
+members decoded in memory, 7z and every other format, the single output of
+`Extract_Archive_File_Entry_To_File` -- and every archive or compressed file
+the one-shot file helpers write is written to a temporary beside its target, named after it with
+`.zlib-partial-<n>` appended (`.zlib-partial-<n>` alone in the same directory
+when the target's name is too long to take the suffix). The temporary is
+created exclusively: a file already at that name is never opened, truncated or
+followed, and the next number is tried instead. Only once the output is
+complete -- for a member, once its size and CRC-32 check out -- is it closed
+and renamed over the target in one step (POSIX `rename`, Windows `MoveFileExW`
+with `MOVEFILE_REPLACE_EXISTING`), replacing the file that was there. A
+symbolic link at the target is replaced, not followed, and the new file has the
+default permissions of a new file rather than the old file's.
+
+So what is at a target after any call is either the complete new output or
+exactly what was there before:
+
+- A member that fails -- any status other than `Ok` -- writes nothing to its
+  target and removes its temporary before the status is returned. A file that
+  was already at the target, including the caller's `Output_Path` for
+  `Extract_Archive_File_Entry_To_File`, is left intact. Members extracted
+  before it stay.
+- A file system refusal is `Output_File_Error`, whichever step it hits:
+  creating the temporary (the directory is missing or not writable), writing
+  it, closing it (a final buffered write failing on a full volume), making a
+  member's folder, or renaming it over the target (a directory is there). It is
+  never reported as `Unexpected_End_Of_Input`, `Unsupported_Method` or another
+  archive fault; those keep meaning the archive or its data is at fault.
+- A cancelled member (below) is treated the same way: its temporary is removed
+  and its target left as it was.
+
+The only thing left behind is a temporary the process could not delete (or
+that a crash interrupted); it carries the `.zlib-partial-` mark so it can be
+recognised and removed. The `*_File_Streaming` helpers and
+`Compress_ZIP_External_File_To_File` write their output file directly, not
+through a temporary.
 
 ## Streaming exceptions
 

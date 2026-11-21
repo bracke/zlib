@@ -5,6 +5,7 @@ with Ada.Streams.Stream_IO;
 with Ada.Strings.Unbounded;
 with AUnit.Assertions; use AUnit.Assertions;
 with CryptoLib.Checksums;
+with GNAT.OS_Lib;
 with Interfaces;
 with Zlib;
 
@@ -1181,6 +1182,19 @@ package body Zlib_Release_Contract_Tests is
                     Label & ": in-memory Extract_ZIP reports the damage: " & Zlib.Status_Image (Status));
          end;
 
+         --  The external entry point, and with a password the decrypting
+         --  paths, find the member through the same directory walk.
+         for Password in Boolean loop
+            declare
+               Plain : constant Zlib.Byte_Array :=
+                 Zlib.Extract_ZIP_External_Entry (Image, "c.txt", (if Password then "secret" else ""), Status);
+            begin
+               Assert (Status = Zlib.Invalid_Header and then Plain'Length = 0,
+                       Label & ": Extract_ZIP_External_Entry (password " & Password'Image
+                       & ") reports the damage: " & Zlib.Status_Image (Status));
+            end;
+         end loop;
+
          declare
             Listed : constant Zlib.Archive_Entry_Array := Zlib.List_Archive_File_Entries (Zip_Path, "", Status);
          begin
@@ -1213,12 +1227,227 @@ package body Zlib_Release_Contract_Tests is
       begin
          Check (Valid, Overrun => True, Label => "name length overrun");
          Check (Valid, Overrun => False, Label => "bad record signature");
+
+         --  A sound directory without the member is still Unsupported_Method.
+         declare
+            Plain : constant Zlib.Byte_Array := Zlib.Extract_ZIP_External_Entry (Valid, "zz.txt", "", Status);
+         begin
+            Assert (Status = Zlib.Unsupported_Method and then Plain'Length = 0,
+                    "a member a sound directory lacks is Unsupported_Method: " & Zlib.Status_Image (Status));
+         end;
+
+         --  An image with no end record at all has no directory to trust.
+         declare
+            Cut   : constant Zlib.Byte_Array := Valid (Valid'First .. Valid'Last - 22);
+            Plain : constant Zlib.Byte_Array := Zlib.Extract_ZIP_External_Entry (Cut, "a.txt", "secret", Status);
+         begin
+            Assert (Status = Zlib.Invalid_Header and then Plain'Length = 0,
+                    "an image without its end record is Invalid_Header: " & Zlib.Status_Image (Status));
+         end;
       end;
 
       Ada.Directories.Delete_File (Zip_Path);
       Ada.Directories.Delete_Tree (Sources);
       Ada.Directories.Delete_Tree (Out_Dir);
    end Test_Damaged_Central_Directory;
+
+   --  Whether any temporary output is left in Dir (recursively).
+   function Has_Partial (Dir : String) return Boolean is
+      Search : Ada.Directories.Search_Type;
+      Item   : Ada.Directories.Directory_Entry_Type;
+      Found  : Boolean := False;
+      Mark   : constant String := ".zlib-partial-";
+   begin
+      Ada.Directories.Start_Search (Search, Dir, "");
+      while Ada.Directories.More_Entries (Search) loop
+         Ada.Directories.Get_Next_Entry (Search, Item);
+         declare
+            Name : constant String := Ada.Directories.Simple_Name (Item);
+         begin
+            if Name not in "." | ".." then
+               if (for some I in Name'First .. Name'Last - Mark'Length + 1 =>
+                     Name (I .. I + Mark'Length - 1) = Mark)
+               then
+                  Found := True;
+               elsif Ada.Directories.Kind (Item) = Ada.Directories.Directory
+                 and then Has_Partial (Ada.Directories.Full_Name (Item))
+               then
+                  Found := True;
+               end if;
+            end if;
+         end;
+      end loop;
+      Ada.Directories.End_Search (Search);
+      return Found;
+   end Has_Partial;
+
+   function Bytes (Text : String) return Zlib.Byte_Array is
+     ([for C of Text => Zlib.Byte (Character'Pos (C))]);
+
+   --  Output goes to a temporary beside its target and is renamed over it
+   --  only when complete: a successful extraction replaces a file already
+   --  there, while a failure -- of the data, of the file system, or a cancel
+   --  -- reports its own status, leaves the old file intact and leaves no
+   --  temporary behind. A file system refusal is Output_File_Error.
+   procedure Test_Output_Files_Staged (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Root     : constant String := Temp_Root & "/zlib-release-contract-staged";
+      Sources  : constant String := Root & "-sources";
+      Out_Dir  : constant String := Root & "-out";
+      Zip_Path : constant String := Root & ".zip";
+      Bad_Path : constant String := Root & "-bad.zip";
+      Big_Path : constant String := Root & "-big.zip";
+      Sz_Path  : constant String := Root & ".7z";
+      Old      : constant Zlib.Byte_Array := Bytes ("old contents");
+      Fresh    : constant Zlib.Byte_Array := Bytes ("fresh contents");
+      Status   : Zlib.Status_Code;
+      Polls    : Natural := 0;
+
+      procedure Fresh_Output is
+      begin
+         if Ada.Directories.Exists (Out_Dir) then
+            GNAT.OS_Lib.Set_Writable (Out_Dir);
+            Ada.Directories.Delete_Tree (Out_Dir);
+         end if;
+         Ada.Directories.Create_Path (Out_Dir);
+      end Fresh_Output;
+
+      --  Stops a streamed member after its first 64 KiB chunk: poll 1 is
+      --  before the member, poll 2 before its first chunk, poll 3 before its
+      --  second.
+      function Cancel_Mid_Member return Boolean is
+      begin
+         Polls := Polls + 1;
+         return Polls >= 3;
+      end Cancel_Mid_Member;
+
+      --  Whether Dir really refuses a new file (it does not for root, or on
+      --  Windows, where a read-only folder still takes files).
+      function Refuses_New_Files (Dir : String) return Boolean is
+         Probe : constant String := Dir & "/probe";
+         File  : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Ada.Streams.Stream_IO.Create (File, Ada.Streams.Stream_IO.Out_File, Probe);
+         Ada.Streams.Stream_IO.Close (File);
+         Ada.Directories.Delete_File (Probe);
+         return False;
+      exception
+         when others =>
+            return True;
+      end Refuses_New_Files;
+   begin
+      Delete_If_Exists (Sources);
+      Ada.Directories.Create_Path (Sources);
+      Write_File (Sources & "/a.txt", Fresh);
+      Zlib.ZIP_Files
+        (Input_Paths => [US.To_Unbounded_String (Sources & "/a.txt")],
+         Output_Path => Zip_Path,
+         Entry_Names => [US.To_Unbounded_String ("a.txt")],
+         Mode        => Zlib.Dynamic,
+         Status      => Status);
+      Assert (Status = Zlib.Ok, "the archive is written");
+      Zlib.Seven_Zip_Stored_File (Sources & "/a.txt", Sz_Path, "a.txt", Status);
+      Assert (Status = Zlib.Ok, "the 7z is written: " & Zlib.Status_Image (Status));
+
+      --  Success replaces what was there, streamed, one-member and 7z alike.
+      Fresh_Output;
+      Write_File (Out_Dir & "/a.txt", Old);
+      Zlib.Extract_Archive_File_To_Directory (Zip_Path, Out_Dir, "", Status);
+      Assert (Status = Zlib.Ok, "extraction over an existing file: " & Zlib.Status_Image (Status));
+      Assert (Read_File (Out_Dir & "/a.txt") = Fresh, "the existing file is replaced");
+      Write_File (Out_Dir & "/one", Old);
+      Zlib.Extract_Archive_File_Entry_To_File (Zip_Path, "a.txt", Out_Dir & "/one", "", Status);
+      Assert (Status = Zlib.Ok and then Read_File (Out_Dir & "/one") = Fresh,
+              "one member over an existing Output_Path replaces it: " & Zlib.Status_Image (Status));
+      Write_File (Out_Dir & "/seven", Old);
+      Zlib.Extract_Archive_File_Entry_To_File (Sz_Path, "a.txt", Out_Dir & "/seven", "", Status);
+      Assert (Status = Zlib.Ok and then Read_File (Out_Dir & "/seven") = Fresh,
+              "a 7z member over an existing Output_Path replaces it: " & Zlib.Status_Image (Status));
+      Assert (not Has_Partial (Out_Dir), "a success leaves no temporary");
+
+      --  A member whose data fails leaves the old file and no temporary.
+      declare
+         Image : Zlib.Byte_Array := Read_File (Zip_Path);
+      begin
+         Declare_Uncompressed_Size (Image, 3);
+         Write_File (Bad_Path, Image);
+      end;
+      Fresh_Output;
+      Write_File (Out_Dir & "/a.txt", Old);
+      Zlib.Extract_Archive_File_To_Directory (Bad_Path, Out_Dir, "", Status);
+      Assert (Status = Zlib.Invalid_Checksum, "the bad member fails: " & Zlib.Status_Image (Status));
+      Assert (Read_File (Out_Dir & "/a.txt") = Old, "the file already at the target is left intact");
+      Write_File (Out_Dir & "/one", Old);
+      Zlib.Extract_Archive_File_Entry_To_File (Bad_Path, "a.txt", Out_Dir & "/one", "", Status);
+      Assert (Status = Zlib.Invalid_Checksum and then Read_File (Out_Dir & "/one") = Old,
+              "a failed member leaves the caller's Output_Path intact: " & Zlib.Status_Image (Status));
+      Assert (not Has_Partial (Out_Dir), "a failing member leaves no temporary behind");
+
+      --  A target that is a directory is an output failure, not an archive
+      --  fault, on the streamed and the in-memory (7z) paths alike.
+      Fresh_Output;
+      Ada.Directories.Create_Path (Out_Dir & "/a.txt");
+      Zlib.Extract_Archive_File_Entry_To_File (Zip_Path, "a.txt", Out_Dir & "/a.txt", "", Status);
+      Assert (Status = Zlib.Output_File_Error,
+              "a ZIP member onto a directory is Output_File_Error: " & Zlib.Status_Image (Status));
+      Zlib.Extract_Archive_File_To_Directory (Zip_Path, Out_Dir, "", Status);
+      Assert (Status = Zlib.Output_File_Error,
+              "directory extraction onto a directory is Output_File_Error: " & Zlib.Status_Image (Status));
+      Zlib.Extract_Archive_File_Entry_To_File (Sz_Path, "a.txt", Out_Dir & "/a.txt", "", Status);
+      Assert (Status = Zlib.Output_File_Error,
+              "a 7z member onto a directory is Output_File_Error: " & Zlib.Status_Image (Status));
+      Assert (Ada.Directories.Kind (Out_Dir & "/a.txt") = Ada.Directories.Directory, "the directory stays");
+      Assert (not Has_Partial (Out_Dir), "an output failure leaves no temporary behind");
+
+      --  A destination that takes no new file: Output_File_Error, and the
+      --  file already there is left intact.
+      Fresh_Output;
+      Write_File (Out_Dir & "/a.txt", Old);
+      GNAT.OS_Lib.Set_Non_Writable (Out_Dir);
+      if Refuses_New_Files (Out_Dir) then
+         Zlib.Extract_Archive_File_To_Directory (Zip_Path, Out_Dir, "", Status);
+         Assert (Status = Zlib.Output_File_Error,
+                 "an unwritable destination is Output_File_Error: " & Zlib.Status_Image (Status));
+         Zlib.Extract_Archive_File_Entry_To_File (Zip_Path, "a.txt", Out_Dir & "/a.txt", "", Status);
+         Assert (Status = Zlib.Output_File_Error,
+                 "one member into an unwritable folder is Output_File_Error: " & Zlib.Status_Image (Status));
+         Zlib.Extract_Archive_File_Entry_To_File (Sz_Path, "a.txt", Out_Dir & "/a.txt", "", Status);
+         Assert (Status = Zlib.Output_File_Error,
+                 "a 7z member into an unwritable folder is Output_File_Error: " & Zlib.Status_Image (Status));
+         Assert (Read_File (Out_Dir & "/a.txt") = Old, "the pre-existing target is left intact");
+      end if;
+      GNAT.OS_Lib.Set_Writable (Out_Dir);
+      Assert (not Has_Partial (Out_Dir), "nothing temporary is left in the unwritable folder");
+
+      --  A cancel in the middle of a streamed member keeps neither the
+      --  partial member nor its temporary, and leaves the old file.
+      declare
+         Large : constant Zlib.Byte_Array (1 .. 200_000) := [for I in 1 .. 200_000 => Zlib.Byte (I mod 251)];
+      begin
+         Write_File (Sources & "/big.bin", Large);
+         Zlib.ZIP_Files
+           (Input_Paths => [US.To_Unbounded_String (Sources & "/big.bin")],
+            Output_Path => Big_Path,
+            Entry_Names => [US.To_Unbounded_String ("big.bin")],
+            Mode        => Zlib.Stored,
+            Status      => Status);
+         Assert (Status = Zlib.Ok, "the large archive is written");
+      end;
+      Fresh_Output;
+      Write_File (Out_Dir & "/big.bin", Old);
+      Zlib.Extract_Archive_File_To_Directory (Big_Path, Out_Dir, "", Cancel_Mid_Member'Access, Status);
+      Assert (Status = Zlib.Cancelled, "cancelled inside the member: " & Zlib.Status_Image (Status));
+      Assert (Polls = 3, "cancelled at the poll before the second chunk");
+      Assert (Read_File (Out_Dir & "/big.bin") = Old, "a cancelled member leaves the old file");
+      Assert (not Has_Partial (Out_Dir), "a cancelled member leaves no temporary");
+
+      Delete_If_Exists (Out_Dir);
+      Delete_If_Exists (Sources);
+      Delete_If_Exists (Zip_Path);
+      Delete_If_Exists (Bad_Path);
+      Delete_If_Exists (Big_Path);
+      Delete_If_Exists (Sz_Path);
+   end Test_Output_Files_Staged;
 
    --  A cancel callback stops extraction between members: answering True at
    --  once extracts nothing, answering True after the first member keeps it
@@ -1411,5 +1640,7 @@ package body Zlib_Release_Contract_Tests is
                                      "a central directory that breaks off early is reported, not half extracted");
       Registration.Register_Routine (T, Test_Extraction_Cancel'Access,
                                      "a cancel callback stops directory extraction between members");
+      Registration.Register_Routine (T, Test_Output_Files_Staged'Access,
+                                     "output is renamed into place only when complete; failures keep the old file");
    end Register_Tests;
 end Zlib_Release_Contract_Tests;

@@ -1204,10 +1204,17 @@ package Zlib is
    --  is reported as Invalid_Checksum. Password is used for 7z and for encrypted ZIP
    --  members; pass "" when not needed.
    --
-   --  A ZIP member that fails leaves no partly written Output_Path. A ZIP whose
-   --  central directory breaks off before reaching Entry_Name is
-   --  Invalid_Header; Unsupported_Method means a sound directory has no such
-   --  member.
+   --  The member is written to a temporary beside Output_Path
+   --  (Output_Path & ".zlib-partial-<n>", created exclusively) and renamed
+   --  over Output_Path only once complete and verified, replacing any file
+   --  there. A call that fails leaves no partly written output and no
+   --  temporary, and a file already at Output_Path is left intact. A file
+   --  system refusal -- the temporary cannot be created, written or closed, or
+   --  cannot be renamed over Output_Path (a directory, an unwritable folder) --
+   --  is Output_File_Error, never an archive fault. A ZIP whose central
+   --  directory breaks off before reaching Entry_Name (with or without a
+   --  password) is Invalid_Header; Unsupported_Method means a sound directory
+   --  has no such member.
    --  @param Archive_Path path to a .zip or .7z file
    --  @param Entry_Name archive entry name to extract
    --  @param Output_Path file that receives the decoded member
@@ -1305,11 +1312,16 @@ package Zlib is
    --  data ends short of its declared size is Unexpected_End_Of_Input, and
    --  one whose CRC-32 does not match is Invalid_Checksum.
    --
-   --  A member that fails (any Status but Ok or Cancelled) leaves no file
-   --  behind: its partly written output is deleted, and members extracted
-   --  before it stay. A ZIP central directory that breaks off before the
-   --  member count its end record declares is Invalid_Header, never Ok over
-   --  the members before the break.
+   --  Each member is written to a temporary beside its target (the target's
+   --  name & ".zlib-partial-<n>", created exclusively) and renamed over the
+   --  target only once complete and verified, replacing any file there. A
+   --  member that fails (any Status but Ok) leaves neither a partly written
+   --  file nor its temporary, and a file that was already at its target is
+   --  left intact; members extracted before it stay. A file system refusal
+   --  (a member or its folder cannot be created, written, closed or renamed
+   --  into place) is Output_File_Error. A ZIP central directory that breaks
+   --  off before the member count its end record declares is Invalid_Header,
+   --  never Ok over the members before the break.
    --
    --  This form cannot be cancelled; the overload below takes a Cancel
    --  callback.
@@ -1338,11 +1350,11 @@ package Zlib is
    --  cheap, such as reading an atomic flag.
    --
    --  When Cancel answers True extraction stops and Status is Cancelled.
-   --  Members already written stay below Destination_Dir, and the member
-   --  being streamed is left partially written; a caller that wants nothing
-   --  on cancel extracts into a staging folder and discards it. Cancelling is
-   --  the only stop that keeps a partial member: a member that fails is
-   --  deleted, as for the overload above.
+   --  Members already written stay below Destination_Dir; the member being
+   --  streamed is not kept -- its temporary is removed and its target left as
+   --  it was, as for a member that fails -- so no partly written member is
+   --  left. A caller that wants nothing on cancel extracts into a staging
+   --  folder and discards it.
    --  @param Archive_Path path to a .zip or .7z file
    --  @param Destination_Dir directory to extract into
    --  @param Password archive password, or "" if not encrypted
@@ -1800,6 +1812,10 @@ package Zlib is
    --  0x9901 extra field selects the key strength and real compression method,
    --  the payload is authenticated with its truncated HMAC-SHA1, and a wrong
    --  password or corrupt body fails closed (Invalid_Password / Invalid_Checksum).
+   --  An image with no end-of-central-directory record, or whose central
+   --  directory breaks off before Entry_Name is reached, is Invalid_Header;
+   --  Unsupported_Method is kept for a member a sound directory does not hold
+   --  or a method no path decodes.
    --  @param Archive_Image complete logical ZIP archive image
    --  @param Entry_Name archive entry path to extract
    --  @param Password optional ZIP password for encrypted entries

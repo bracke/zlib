@@ -1,7 +1,9 @@
 with Ada.Containers.Vectors;
 with Ada.IO_Exceptions;
+with Ada.Streams.Stream_IO.C_Streams;
 with GNAT.OS_Lib;
 with Interfaces.C;
+with Interfaces.C_Streams;
 with System;
 
 --  POSIX hosts (Linux, macOS, the BSDs): the Ada and GNAT libraries reach the
@@ -73,6 +75,49 @@ package body Zlib.Native_Files is
       Ada.Streams.Stream_IO.Create (File, Mode, Name, Form);
    end Create;
 
+   procedure Create_New
+     (File : in out Ada.Streams.Stream_IO.File_Type;
+      Name : String;
+      Form : String := "shared=no")
+   is
+      use type GNAT.OS_Lib.File_Descriptor;
+      use type Interfaces.C_Streams.FILEs;
+      C_Mode : aliased constant String := "wb" & ASCII.NUL;
+      FD     : GNAT.OS_Lib.File_Descriptor;
+      Stream : Interfaces.C_Streams.FILEs;
+   begin
+      if Ada.Streams.Stream_IO.Is_Open (File) then
+         raise Ada.IO_Exceptions.Status_Error with "file already open";
+      end if;
+
+      --  GNAT's open_new is open(2) with O_WRONLY | O_CREAT | O_EXCL.
+      FD := GNAT.OS_Lib.Create_New_File (Name, GNAT.OS_Lib.Binary);
+      if FD = GNAT.OS_Lib.Invalid_FD then
+         raise Ada.IO_Exceptions.Use_Error with "cannot create " & Name;
+      end if;
+
+      Stream := Interfaces.C_Streams.fdopen (Interfaces.C_Streams.int (FD), C_Mode'Address);
+      if Stream = Interfaces.C_Streams.NULL_Stream then
+         GNAT.OS_Lib.Close (FD);
+         raise Ada.IO_Exceptions.Use_Error with "cannot open " & Name;
+      end if;
+
+      begin
+         Ada.Streams.Stream_IO.C_Streams.Open
+           (File     => File,
+            Mode     => Ada.Streams.Stream_IO.Out_File,
+            C_Stream => Stream,
+            Form     => Form,
+            Name     => Name);
+      exception
+         when others =>
+            if Interfaces.C_Streams.fclose (Stream) /= 0 then
+               null;
+            end if;
+            raise;
+      end;
+   end Create_New;
+
    procedure Create_Directory (Path : String) is
    begin
       Ada.Directories.Create_Directory (Path);
@@ -102,6 +147,21 @@ package body Zlib.Native_Files is
    begin
       Ada.Directories.Rename (Old_Path, New_Path);
    end Rename;
+
+   procedure Replace (Old_Path : String; New_Path : String) is
+      use type Interfaces.C.int;
+      function C_Rename (Old_Name : System.Address; New_Name : System.Address) return Interfaces.C.int
+        with Import => True, Convention => C, External_Name => "rename";
+      Old_Name : aliased constant String := Old_Path & ASCII.NUL;
+      New_Name : aliased constant String := New_Path & ASCII.NUL;
+   begin
+      if Kind (Old_Path) = Missing then
+         raise Ada.IO_Exceptions.Name_Error with "no such file or directory: " & Old_Path;
+      end if;
+      if C_Rename (Old_Name'Address, New_Name'Address) /= 0 then
+         raise Ada.IO_Exceptions.Use_Error with "cannot rename " & Old_Path & " to " & New_Path;
+      end if;
+   end Replace;
 
    function Containing_Directory (Path : String) return String is
      (Ada.Directories.Containing_Directory (Path));

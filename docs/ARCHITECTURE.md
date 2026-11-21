@@ -193,10 +193,20 @@ spec is shared; `zlib.gpr` selects the body per host from
 
 ```text
 src/platform/windows/zlib-native_files.adb  wide Win32/CRT calls (_wfopen + Stream_IO.C_Streams,
-                                            CreateDirectoryW, GetFileAttributesExW, DeleteFileW,
-                                            FindFirstFileW, MoveFileExW) on the \\?\ long form
-src/platform/posix/zlib-native_files.adb    the Ada and GNAT libraries, unchanged
+                                            _wopen O_EXCL, CreateDirectoryW, GetFileAttributesExW,
+                                            DeleteFileW, FindFirstFileW, MoveFileExW) on the \\?\
+                                            long form
+src/platform/posix/zlib-native_files.adb    the Ada and GNAT libraries, plus open O_EXCL and rename(2)
 ```
+
+Output files are never written in place. `Zlib.Staged_Output` creates a
+temporary beside the target exclusively (`Native_Files.Create_New`), writes it,
+and only once it is complete renames it over the target in one step
+(`Native_Files.Replace`: `rename(2)`, `MoveFileExW` with
+`MOVEFILE_REPLACE_EXISTING`); a failure or a cancel removes only the
+temporary. Every extracted member and every one-shot output file goes through
+it (`Write_File` in the root body, and the streamed ZIP members of
+`Zlib.ZIP_Streaming_Extraction`). See `docs/ERRORS.md`.
 
 `Zlib.Windows_Paths` holds the pure long-form rules (UTF-8 to UTF-16, `\\?\`
 or `\\?\UNC\` for absolute paths of 248 or more characters, `/` read as `\`,

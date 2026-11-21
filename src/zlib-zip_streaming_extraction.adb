@@ -3,6 +3,7 @@ with Ada.Strings.Unbounded;
 with CryptoLib.Checksums;
 with Interfaces;
 with Zlib.Native_Files;
+with Zlib.Staged_Output;
 
 package body Zlib.ZIP_Streaming_Extraction is
 
@@ -347,27 +348,20 @@ package body Zlib.ZIP_Streaming_Extraction is
    --  The cancel callback of an extraction no caller can cancel.
    function Never_Cancel return Boolean is (False);
 
-   --  Remove a member's output file that extraction created and then failed
-   --  to complete. Best effort: a file that cannot be removed is left, and
-   --  the member's own failure is what the caller is told.
-   procedure Discard_Output (Path : String) is
-   begin
-      if Zlib.Native_Files.Exists (Path) then
-         Zlib.Native_Files.Delete_File (Path);
-      end if;
-   exception
-      when others =>
-         null;
-   end Discard_Output;
-
    --  The member's declared size bounds what is written: a chunk that would
    --  take the output past Unc_Size is refused (Invalid_Checksum, as the
    --  in-memory reader reports a size mismatch) before it is written, so a
    --  member that inflates far beyond what it declares cannot fill the
    --  destination volume. Cancel is polled before each chunk of compressed
    --  input is read and after each chunk of output is written; when it
-   --  answers True the member stops with Cancelled and its partial output is
-   --  left on disk.
+   --  answers True the member stops with Cancelled.
+   --
+   --  The member is written to a temporary beside Target_Path and renamed
+   --  over it only once its size and CRC-32 check out (Zlib.Staged_Output),
+   --  so a member that fails or is cancelled leaves no file of its own and
+   --  whatever was at Target_Path before is left as it was. A file system
+   --  refusal -- the output cannot be created, written, closed or renamed --
+   --  is Output_File_Error; a decoder failure is Unexpected_End_Of_Input.
    procedure Extract_Member
      (File        : in out SIO.File_Type;
       File_Size   : Interfaces.Unsigned_64;
@@ -386,11 +380,9 @@ package body Zlib.ZIP_Streaming_Extraction is
       Remaining  : Interfaces.Unsigned_64;
       Produced   : Interfaces.Unsigned_64 := 0;
       CRC        : CryptoLib.Checksums.CRC32_State;
-      Output     : SIO.File_Type;
-      Opened     : Boolean := False;
+      Output     : Zlib.Staged_Output.Staged_File;
       Filter     : Zlib.Filter_Type;
       Inflating  : Boolean := False;
-      Created    : Boolean := False;
 
       --  Whether Count more bytes would take the output past the declared
       --  size. Written so that it cannot overflow.
@@ -423,9 +415,7 @@ package body Zlib.ZIP_Streaming_Extraction is
          return;
       end if;
 
-      Zlib.Native_Files.Create (Output, SIO.Out_File, Target_Path, Form => "shared=no");
-      Opened := True;
-      Created := True;
+      Zlib.Staged_Output.Create (Output, Target_Path);
 
       if Method = Method_Deflate then
          Zlib.Inflate_Init (Filter, Zlib.Raw_Deflate);
@@ -470,7 +460,7 @@ package body Zlib.ZIP_Streaming_Extraction is
                      Out_Bytes (Target) := Ada.Streams.Stream_Element (B);
                      Target := Target + 1;
                   end loop;
-                  SIO.Write (Output, Out_Bytes);
+                  Zlib.Staged_Output.Write (Output, Out_Bytes);
                   Produced := Produced + Interfaces.Unsigned_64 (Want);
                end;
             else
@@ -513,7 +503,7 @@ package body Zlib.ZIP_Streaming_Extraction is
                               CryptoLib.Checksums.CRC32_Update
                                 (CRC, Out_Stream (I));
                            end loop;
-                           SIO.Write
+                           Zlib.Staged_Output.Write
                              (Output, Out_Stream (Out_Stream'First .. Out_Last));
                            Produced := Produced
                              + Interfaces.Unsigned_64 (Out_Last - Out_Stream'First + 1);
@@ -553,7 +543,7 @@ package body Zlib.ZIP_Streaming_Extraction is
                for I in Out_Stream'First .. Out_Last loop
                   CryptoLib.Checksums.CRC32_Update (CRC, Out_Stream (I));
                end loop;
-               SIO.Write (Output, Out_Stream (Out_Stream'First .. Out_Last));
+               Zlib.Staged_Output.Write (Output, Out_Stream (Out_Stream'First .. Out_Last));
                Produced := Produced
                  + Interfaces.Unsigned_64 (Out_Last - Out_Stream'First + 1);
                if Cancel.all then
@@ -569,9 +559,6 @@ package body Zlib.ZIP_Streaming_Extraction is
          Inflating := False;
       end if;
 
-      SIO.Close (Output);
-      Opened := False;
-
       if Status = Ok then
          if Produced /= Unc_Size then
             Status := Unexpected_End_Of_Input;
@@ -580,38 +567,38 @@ package body Zlib.ZIP_Streaming_Extraction is
          end if;
       end if;
 
-      --  A member that failed is not left half written: what is on disk is
-      --  either the whole member or nothing. A cancelled one is kept, as
-      --  documented for Cancel.
-      if Created and then Status /= Ok and then Status /= Cancelled then
-         Discard_Output (Target_Path);
+      --  What is on disk at Target_Path is either the whole member or what
+      --  was there before: a member that failed or was cancelled only ever
+      --  wrote its temporary, which goes.
+      if Status = Ok then
+         Zlib.Staged_Output.Commit (Output);
+      else
+         Zlib.Staged_Output.Discard (Output);
       end if;
 
    exception
+      when Zlib.Staged_Output.Output_Failed =>
+         if Inflating then
+            Zlib.Close (Filter, Ignore_Error => True);
+         end if;
+         Zlib.Staged_Output.Discard (Output);
+         Status := Output_File_Error;
+
       when Storage_Error =>
          if Inflating then
             Zlib.Close (Filter, Ignore_Error => True);
          end if;
-         if Opened then
-            SIO.Close (Output);
-         end if;
-         if Created then
-            Discard_Output (Target_Path);
-         end if;
+         Zlib.Staged_Output.Discard (Output);
          Status := Insufficient_Memory;
 
       when others =>
          if Inflating then
             Zlib.Close (Filter, Ignore_Error => True);
          end if;
-         if Opened then
-            SIO.Close (Output);
-         end if;
-         if Created then
-            Discard_Output (Target_Path);
-         end if;
-         --  Streaming inflate signals invalid or truncated data by exception;
-         --  this is a status-returning API, so map it rather than propagate.
+         Zlib.Staged_Output.Discard (Output);
+         --  Streaming inflate signals invalid or truncated data by exception
+         --  (every output failure is Output_Failed, above); this is a
+         --  status-returning API, so map it rather than propagate.
          Status := Unexpected_End_Of_Input;
    end Extract_Member;
 
@@ -720,35 +707,22 @@ package body Zlib.ZIP_Streaming_Extraction is
                return;
             end if;
 
+            --  Written straight from Decoded, a chunk at a time, through a
+            --  temporary renamed over Target_Path once complete: a write
+            --  that fails leaves nothing half written and whatever was at
+            --  Target_Path as it was.
             declare
-               Output : SIO.File_Type;
-               Raw    : Ada.Streams.Stream_Element_Array
-                 (1 .. Ada.Streams.Stream_Element_Offset (Decoded'Length));
-               Target : Ada.Streams.Stream_Element_Offset := Raw'First;
+               Output : Zlib.Staged_Output.Staged_File;
             begin
-               for B of Decoded loop
-                  Raw (Target) := Ada.Streams.Stream_Element (B);
-                  Target := Target + 1;
-               end loop;
-               Zlib.Native_Files.Create (Output, SIO.Out_File, Target_Path, Form => "shared=no");
-               begin
-                  if Raw'Length > 0 then
-                     SIO.Write (Output, Raw);
-                  end if;
-                  SIO.Close (Output);
-               exception
-                  when others =>
-                     --  A write that fails leaves nothing half written.
-                     if SIO.Is_Open (Output) then
-                        SIO.Close (Output);
-                     end if;
-                     Discard_Output (Target_Path);
-                     raise;
-               end;
+               Zlib.Staged_Output.Create (Output, Target_Path);
+               Zlib.Staged_Output.Write (Output, Decoded);
+               Zlib.Staged_Output.Commit (Output);
             end;
          end;
       end;
    exception
+      when Zlib.Staged_Output.Output_Failed =>
+         Status := Output_File_Error;
       when Storage_Error =>
          Status := Insufficient_Memory;
       when others =>
@@ -878,13 +852,25 @@ package body Zlib.ZIP_Streaming_Extraction is
                   end if;
 
                   declare
-                     Target : constant String := Destination_Dir & "/" & Rel;
+                     Target    : constant String := Destination_Dir & "/" & Rel;
+                     Folder_Ok : Boolean := True;
                   begin
-                     if Is_Directory then
-                        Zlib.Native_Files.Create_Path (Target);
-                     else
+                     --  A folder that cannot be made is an output failure.
+                     begin
                         Zlib.Native_Files.Create_Path
-                          (Zlib.Native_Files.Containing_Directory (Target));
+                          (if Is_Directory then Target
+                           else Zlib.Native_Files.Containing_Directory (Target));
+                     exception
+                        when Storage_Error =>
+                           raise;
+                        when others =>
+                           Folder_Ok := False;
+                     end;
+
+                     if not Folder_Ok then
+                        Status := Output_File_Error;
+                        exit;
+                     elsif not Is_Directory then
                         if (Flags and 1) = 0
                           and then (Method = Method_Stored
                                     or else Method = Method_Deflate)
