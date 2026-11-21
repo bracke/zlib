@@ -49,7 +49,7 @@ that the environment supports.
   `Header => Default`, and streaming `Inflate_Init` with `Header => Default`
   auto-detect zlib, gzip, or raw Deflate input; concrete wrapper modes remain
   strict.
-- Do not add ZIP container support to this crate.
+- ZIP container support is limited to the reader and the ZIP_Files writer; do not grow it into a general archive manager.
 - Do not introduce dependencies on system zlib, Python-generated fixtures, Git,
   `version`, or `HttpClient`.
 
