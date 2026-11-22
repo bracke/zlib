@@ -128,6 +128,7 @@ The expected suite categories are:
 - `zlib_wrapper_mode_conformance_tests`
 - `zlib_zip_aes_tests`
 - `zlib_zip_external_codec_tests`
+- `zlib_zip_entry_count_tests`
 
 `tests/src/tests.adb` loads `All_Suites`, which loads `Zlib_Suite`.
 `tests/src/zlib_suite.adb` must register every test package, including `zlib_raw_cross_wrapper_conformance_tests` and `zlib_raw_release_tests`.

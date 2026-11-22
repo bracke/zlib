@@ -4,6 +4,7 @@ with CryptoLib.Checksums;
 with Interfaces;
 with Zlib.Native_Files;
 with Zlib.Staged_Output;
+with Zlib.ZIP_End_Records;
 
 package body Zlib.ZIP_Streaming_Extraction is
 
@@ -14,57 +15,30 @@ package body Zlib.ZIP_Streaming_Extraction is
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
 
-   --  A ZIP end-of-central-directory record is 22 bytes plus a comment of at
-   --  most 65535 bytes, and a ZIP64 locator adds 20 bytes ahead of it.
-   Tail_Window : constant := 22 + 65_535 + 20;
-
    Chunk_Size  : constant := 64 * 1024;
 
    Central_Signature : constant Interfaces.Unsigned_32 := 16#0201_4B50#;
    Local_Signature   : constant Interfaces.Unsigned_32 := 16#0403_4B50#;
-   EOCD_Signature    : constant Interfaces.Unsigned_32 := 16#0605_4B50#;
-   Locator_Signature : constant Interfaces.Unsigned_32 := 16#0706_4B50#;
-   Z64_EOCD_Signature : constant Interfaces.Unsigned_32 := 16#0606_4B50#;
 
    Method_Stored  : constant Interfaces.Unsigned_16 := 0;
    Method_Deflate : constant Interfaces.Unsigned_16 := 8;
 
    ---------------------------------------------------------------------------
-   --  Little-endian field readers over an in-memory window. These mirror the
-   --  root body's ZIP_U*_At helpers, which are not visible to a child package.
+   --  Little-endian field readers over an in-memory window, shared with
+   --  Zlib.ZIP_End_Records.
    ---------------------------------------------------------------------------
 
    function U16_At
      (Data : Byte_Array; Pos : Natural) return Interfaces.Unsigned_16
-   is
-   begin
-      return Interfaces.Unsigned_16 (Data (Pos))
-        or Interfaces.Shift_Left (Interfaces.Unsigned_16 (Data (Pos + 1)), 8);
-   end U16_At;
+      renames Zlib.ZIP_End_Records.U16_At;
 
    function U32_At
      (Data : Byte_Array; Pos : Natural) return Interfaces.Unsigned_32
-   is
-      Result : Interfaces.Unsigned_32 := 0;
-   begin
-      for Offset in reverse 0 .. 3 loop
-         Result := Interfaces.Shift_Left (Result, 8)
-           or Interfaces.Unsigned_32 (Data (Pos + Offset));
-      end loop;
-      return Result;
-   end U32_At;
+      renames Zlib.ZIP_End_Records.U32_At;
 
    function U64_At
      (Data : Byte_Array; Pos : Natural) return Interfaces.Unsigned_64
-   is
-      Result : Interfaces.Unsigned_64 := 0;
-   begin
-      for Offset in reverse 0 .. 7 loop
-         Result := Interfaces.Shift_Left (Result, 8)
-           or Interfaces.Unsigned_64 (Data (Pos + Offset));
-      end loop;
-      return Result;
-   end U64_At;
+      renames Zlib.ZIP_End_Records.U64_At;
 
    ---------------------------------------------------------------------------
    --  Little-endian field writers, for rebuilding one member as its own image.
@@ -177,43 +151,17 @@ package body Zlib.ZIP_Streaming_Extraction is
       Offset : Interfaces.Unsigned_64;
       Into   : out Byte_Array;
       Ok     : out Boolean)
-   is
-      Buffer : Ada.Streams.Stream_Element_Array
-        (1 .. Ada.Streams.Stream_Element_Offset (Into'Length));
-      Last   : Ada.Streams.Stream_Element_Offset;
-   begin
-      Into := [others => 0];
-      Ok := False;
-
-      if Into'Length = 0 then
-         Ok := True;
-         return;
-      end if;
-
-      SIO.Set_Index (File, SIO.Positive_Count (Offset + 1));
-      SIO.Read (File, Buffer, Last);
-      if Last /= Buffer'Last then
-         return;
-      end if;
-
-      declare
-         Target : Natural := Into'First;
-      begin
-         for I in Buffer'Range loop
-            Into (Target) := Byte (Buffer (I));
-            Target := Target + 1;
-         end loop;
-      end;
-      Ok := True;
-   end Read_At;
+      renames Zlib.ZIP_End_Records.Read_At;
 
    ---------------------------------------------------------------------------
    --  Central directory location.
    ---------------------------------------------------------------------------
 
-   --  Scan the tail window backwards for the EOCD record and follow the ZIP64
-   --  locator when the 32-bit fields are escaped. Offsets returned are
-   --  absolute byte offsets into the archive file.
+   --  Where the central directory is, as Zlib.ZIP_End_Records finds it.
+   --  Offsets are absolute byte offsets into the archive file. A record moved
+   --  by a stub in front, or stating more members than Natural holds, is not
+   --  one this reader can walk, and a directory reaching past the file's end
+   --  is not found either.
    procedure Find_Central_Directory
      (File      : in out SIO.File_Type;
       File_Size : Interfaces.Unsigned_64;
@@ -222,69 +170,17 @@ package body Zlib.ZIP_Streaming_Extraction is
       CD_Count  : out Natural;
       Found     : out Boolean)
    is
-      Window_Length : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64'Min (File_Size, Tail_Window);
-      Window_Start  : constant Interfaces.Unsigned_64 :=
-        File_Size - Window_Length;
-      Window        : Byte_Array (0 .. Natural (Window_Length) - 1);
-      Read_Ok       : Boolean;
+      Located : Zlib.ZIP_End_Records.End_Record;
    begin
-      CD_Offset := 0;
-      CD_Size := 0;
-      CD_Count := 0;
-      Found := False;
-
-      if File_Size < 22 then
-         return;
-      end if;
-
-      Read_At (File, Window_Start, Window, Read_Ok);
-      if not Read_Ok then
-         return;
-      end if;
-
-      for P in reverse Window'First .. Window'Last - 21 loop
-         if U32_At (Window, P) = EOCD_Signature then
-            declare
-               Count16 : constant Interfaces.Unsigned_16 := U16_At (Window, P + 10);
-               Size32  : constant Interfaces.Unsigned_32 := U32_At (Window, P + 12);
-               Off32   : constant Interfaces.Unsigned_32 := U32_At (Window, P + 16);
-            begin
-               if (Count16 = 16#FFFF#
-                   or else Off32 = 16#FFFF_FFFF#
-                   or else Size32 = 16#FFFF_FFFF#)
-                 and then P - 20 >= Window'First
-                 and then U32_At (Window, P - 20) = Locator_Signature
-               then
-                  declare
-                     Z64_Offset : constant Interfaces.Unsigned_64 :=
-                       U64_At (Window, P - 20 + 8);
-                     Header     : Byte_Array (0 .. 55);
-                     Header_Ok  : Boolean;
-                  begin
-                     if Z64_Offset + 56 <= File_Size then
-                        Read_At (File, Z64_Offset, Header, Header_Ok);
-                        if Header_Ok
-                          and then U32_At (Header, 0) = Z64_EOCD_Signature
-                        then
-                           CD_Count := Natural (U64_At (Header, 32));
-                           CD_Size := U64_At (Header, 40);
-                           CD_Offset := U64_At (Header, 48);
-                           Found := CD_Offset + CD_Size <= File_Size;
-                           return;
-                        end if;
-                     end if;
-                  end;
-               end if;
-
-               CD_Count := Natural (Count16);
-               CD_Size := Interfaces.Unsigned_64 (Size32);
-               CD_Offset := Interfaces.Unsigned_64 (Off32);
-               Found := CD_Offset + CD_Size <= File_Size;
-               return;
-            end;
-         end if;
-      end loop;
+      Zlib.ZIP_End_Records.Locate (File, File_Size, Located);
+      CD_Offset := Located.CD_Offset;
+      CD_Size := Located.CD_Size;
+      CD_Count := Located.Count;
+      Found := Located.Found
+        and then not Located.Shifted
+        and then not Located.Capped
+        and then Located.CD_Offset <= File_Size
+        and then Located.CD_Size <= File_Size - Located.CD_Offset;
    end Find_Central_Directory;
 
    ---------------------------------------------------------------------------

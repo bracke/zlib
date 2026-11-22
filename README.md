@@ -482,7 +482,8 @@ Verified native PPMd
 `Seven_Zip_PPMd_File`, and `Seven_Zip_PPMd_Files` without calling a local
 `7z` executable. ZIP output is available through `ZIP`,
 `ZIP_File`, and `ZIP_Files`; `ZIP_Files` can emit multi-entry ZIP archives and
-explicit ZIP64 metadata. Convenience wrapper-discriminating inflate is available
+explicit ZIP64 metadata. `Count_ZIP_File_Entries` reads a ZIP file's stated
+member count from its end record alone. Convenience wrapper-discriminating inflate is available
 through `Inflate_Auto`, and multi-member gzip output is available through
 `GZip_Members` and `GZip_File_Members`. Gzip input accepts concatenated members
 by default; strict single-member input is available through APIs that take

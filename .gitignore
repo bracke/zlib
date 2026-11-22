@@ -22,3 +22,4 @@
 /*.ali
 /debug_bcj2_*
 /dump_7z_*
+tests/zip-entry-count-work/

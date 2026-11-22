@@ -90,6 +90,7 @@ with Zlib_ZIP_AES_Tests;
 with Zlib_Seven_Zip_Filter_Tests;
 with Zlib_Seven_Zip_LZMA_Interop_Tests;
 with Zlib_ZIP_External_Codec_Tests;
+with Zlib_ZIP_Entry_Count_Tests;
 with Zlib_Long_Path_Tests;
 with AUnit.Test_Cases;
 
@@ -201,6 +202,7 @@ package body Zlib_Suite is
       Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_Seven_Zip_Filter_Tests.Test_Case));
       Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_Seven_Zip_LZMA_Interop_Tests.Test_Case));
       Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_ZIP_External_Codec_Tests.Test_Case));
+      Result.Add_Test (AUnit.Test_Cases.Test_Case_Access'(new Zlib_ZIP_Entry_Count_Tests.Test_Case));
       return Result;
    end Suite;
 

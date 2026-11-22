@@ -440,6 +440,16 @@ header, its next header, and the packed stream of an encoded header. Either way
 the cost is proportional to the number of members rather than to the archive
 size. A ZIP needing a password still reads the whole image.
 
+`Count_ZIP_File_Entries` gives the member count a ZIP file states in its end of
+central directory record (the ZIP64 record when present), reading only the
+file's tail, so the cost does not grow with the archive. The last end record
+whose comment fits the file and whose central directory lies before it is the
+archive's own, so a stored inner archive's record or a chance `PK 5 6` in member
+data is passed over; a ZIP64 record moved by a self-extracting stub is found
+right before its locator. A count above `Natural'Last` saturates and sets
+`Capped`. No end record is `Invalid_Header`; a path that is not an ordinary
+file is `Input_File_Error`.
+
 `Seven_Zip_Stored` emits a native `.7z` archive image containing one file stored
 with the 7z Copy coder, or a header-only directory entry when metadata marks a
 directory. It writes the 7z signature header, packed stream, main-stream

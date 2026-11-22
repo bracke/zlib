@@ -39,6 +39,7 @@ with Zlib.Iso_Reader;
 with Zlib.Rar_Reader;
 with Zlib.Archive_Directory_Extraction;
 with Zlib.ZIP_Streaming_Extraction;
+with Zlib.ZIP_End_Records;
 with Zlib.Staged_Output;
 with Zlib.Seven_Zip_BCJ2_Writing;
 with Zlib.Seven_Zip_Codec_Packing;
@@ -10941,6 +10942,48 @@ package body Zlib is
          Status := Unsupported_Method;
          return None;
    end List_Archive_File_Entries;
+
+   procedure Count_ZIP_File_Entries
+     (Archive_Path : String;
+      Count        : out Natural;
+      Capped       : out Boolean;
+      Status       : out Status_Code)
+   is
+      use type Zlib.Native_Files.File_Kind;
+      File    : Ada.Streams.Stream_IO.File_Type;
+      Located : Zlib.ZIP_End_Records.End_Record;
+   begin
+      Count := 0;
+      Capped := False;
+      --  Only an ordinary file: opening a pipe or a device would wait for
+      --  a writer rather than fail.
+      if Zlib.Native_Files.Kind (Archive_Path) /= Zlib.Native_Files.Ordinary_File then
+         Status := Input_File_Error;
+         return;
+      end if;
+      Zlib.Native_Files.Open (File, In_File, Archive_Path, Form => "shared=no");
+      begin
+         Zlib.ZIP_End_Records.Locate
+           (File, Interfaces.Unsigned_64 (Size (File)), Located);
+      exception
+         when others =>
+            Close (File);
+            raise;
+      end;
+      Close (File);
+      if Located.Found then
+         Count := Located.Count;
+         Capped := Located.Capped;
+         Status := Ok;
+      else
+         Status := Invalid_Header;
+      end if;
+   exception
+      when others =>
+         Count := 0;
+         Capped := False;
+         Status := Input_File_Error;
+   end Count_ZIP_File_Entries;
 
    --  The cancel callback of an extraction its caller cannot cancel.
    function Never_Cancel return Boolean is (False);

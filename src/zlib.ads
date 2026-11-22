@@ -1264,6 +1264,29 @@ package Zlib is
    --  @param Status Ok on success, otherwise a deterministic failure code
    --  @return one Archive_Entry per member when Status is Ok
 
+   procedure Count_ZIP_File_Entries
+     (Archive_Path : String;
+      Count        : out Natural;
+      Capped       : out Boolean;
+      Status       : out Status_Code);
+   --  The number of members a ZIP archive file states, read from its end of
+   --  central directory record (the ZIP64 record when the archive has one)
+   --  in the file's last 64 KiB or so. The central directory is not walked,
+   --  so the cost does not grow with the archive or its member count.
+   --
+   --  The last end record whose comment fits the file and whose central
+   --  directory lies before it is the archive's: a "PK 5 6" in a comment or
+   --  in member data, or a stored inner archive's record, is passed over. A
+   --  ZIP64 record moved by data in front of the archive (a self-extracting
+   --  stub) is found right before its locator. A count above Natural'Last is
+   --  saturated and reported through Capped.
+   --  @param Archive_Path path to the ZIP file (.zip, .docx, .jar, ...)
+   --  @param Count the stated member count when Status is Ok, otherwise 0
+   --  @param Capped True when the stated count did not fit Natural
+   --  @param Status Ok when an end record was found; Invalid_Header when there
+   --    is none (truncated, or not a ZIP); Input_File_Error when Archive_Path
+   --    is not an ordinary file or cannot be read
+
    function Entry_Path_Name (Name : String) return String;
    --  An archive member's name as the relative path it is extracted to:
    --  '\' read as the separator when the name holds no '/' -- as Windows

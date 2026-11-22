@@ -75,6 +75,7 @@ remain wrapper-strict.
 | inspect supported 7z entry metadata | `Extract_Seven_Zip_Metadata` |
 | catalogue an archive already in memory | `List_Archive_Entries` |
 | catalogue an archive file without holding it | `List_Archive_File_Entries` |
+| count a ZIP file's members from its end record | `Count_ZIP_File_Entries (Path, Count, Capped, Status)` |
 | extract one member of an archive file | `Extract_Archive_File_Entry_To_File` |
 | extract an archive file below a folder, cancellably | `Extract_Archive_File_To_Directory (Path, Dir, Password, Cancel, Status)` |
 | file helper 7z output/extraction | `Seven_Zip_*_File`, `Extract_Seven_Zip_*_File`; dirs are header-only |
